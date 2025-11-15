@@ -46,7 +46,7 @@ struct WelcomeView: View {
             Text("zMD")
                 .font(.system(size: 32, weight: .bold))
 
-            Text("Simple Markdown Viewer")
+            Text("Zach's Simple Markdown Viewer")
                 .font(.system(size: 16))
                 .foregroundColor(.secondary)
 
