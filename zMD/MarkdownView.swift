@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MarkdownView: View {
     let content: String
+    var baseURL: URL? = nil
 
     var body: some View {
         GeometryReader { geometry in
@@ -91,6 +92,15 @@ struct MarkdownView: View {
                     elements.append(MarkdownElement(content: .list(items: listItems)))
                     listItems = []
                 }
+            } else if let imageMatch = line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) {
+                // Image: ![alt](path)
+                let matchedString = String(line[imageMatch])
+                if let altRange = matchedString.range(of: #"\[([^\]]*)\]"#, options: .regularExpression),
+                   let pathRange = matchedString.range(of: #"\(([^\)]+)\)"#, options: .regularExpression) {
+                    let alt = String(matchedString[altRange]).dropFirst().dropLast()
+                    let path = String(matchedString[pathRange]).dropFirst().dropLast()
+                    elements.append(MarkdownElement(content: .image(alt: String(alt), path: String(path), baseURL: baseURL)))
+                }
             } else {
                 // Regular paragraph
                 elements.append(MarkdownElement(content: .paragraph(line)))
@@ -121,6 +131,7 @@ struct MarkdownElement: Identifiable {
         case list(items: [String])
         case codeBlock(code: String)
         case table(rows: [[String]])
+        case image(alt: String, path: String, baseURL: URL?)
     }
 
     @ViewBuilder
@@ -213,6 +224,10 @@ struct MarkdownElement: Identifiable {
         case .table(let rows):
             TableView(rows: rows)
                 .padding(.vertical, 12)
+
+        case .image(let alt, let path, let baseURL):
+            ImageView(alt: alt, path: path, baseURL: baseURL)
+                .padding(.vertical, 12)
         }
     }
 
@@ -274,6 +289,78 @@ struct TableView: View {
             return try AttributedString(markdown: text)
         } catch {
             return AttributedString(text)
+        }
+    }
+}
+
+struct ImageView: View {
+    let alt: String
+    let path: String
+    let baseURL: URL?
+
+    private var imageURL: URL? {
+        // Try as absolute path first
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        }
+
+        // Try as absolute file path
+        let absolutePath = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: absolutePath.path) {
+            return absolutePath
+        }
+
+        // Try relative to markdown file
+        if let base = baseURL?.deletingLastPathComponent() {
+            let relativePath = base.appendingPathComponent(path)
+            if FileManager.default.fileExists(atPath: relativePath.path) {
+                return relativePath
+            }
+        }
+
+        return nil
+    }
+
+    var body: some View {
+        if let url = imageURL {
+            if url.isFileURL {
+                // Local file
+                if let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 800)
+                        .cornerRadius(4)
+                } else {
+                    Text("⚠️ Could not load image: \(alt)")
+                        .foregroundColor(.secondary)
+                        .padding()
+                }
+            } else {
+                // Remote URL
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        ProgressView()
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 800)
+                            .cornerRadius(4)
+                    case .failure:
+                        Text("⚠️ Failed to load image: \(alt)")
+                            .foregroundColor(.secondary)
+                            .padding()
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+            }
+        } else {
+            Text("⚠️ Image not found: \(path)")
+                .foregroundColor(.secondary)
+                .padding()
         }
     }
 }

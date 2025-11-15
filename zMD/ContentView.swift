@@ -21,7 +21,7 @@ struct ContentView: View {
                             OutlineView(content: document.content, selectedHeadingId: $selectedHeadingId)
                             Divider()
                         }
-                        MarkdownView(content: document.content)
+                        MarkdownView(content: document.content, baseURL: document.url)
                     }
                 } else {
                     EmptyDocumentView()
