@@ -2,7 +2,7 @@
 
 A lightweight macOS markdown viewer with multi-tab support and professional export capabilities.
 
-![zMD Screenshot](img/screenshot1.png)
+![zMD Screenshot](https://raw.githubusercontent.com/umzcio/zMD/master/img/screenshot1.png)
 
 ---
 
