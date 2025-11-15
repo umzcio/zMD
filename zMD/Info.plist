@@ -24,6 +24,10 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>CFBundleHelpBookFolder</key>
+	<string>zMD.help</string>
+	<key>CFBundleHelpBookName</key>
+	<string>com.zmd.app.help</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

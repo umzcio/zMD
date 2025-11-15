@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C007183B47884CF6A423E3DE /* HelpView.swift */; };
+		FBBB2A5A91A84CA490270FE9 /* zMD.help in Resources */ = {isa = PBXBuildFile; fileRef = B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */; };
+		2208643A1E114A2C9A4C7331 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = 74BFD9DFBCBC4E8593B2C133 /* Resources */; };
 		8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3F07EF007F429AB9E72113 /* SettingsManager.swift */; };
 		9F0CF7C93C0F452694B0B0CC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98515A5CFBA7411D8B33B552 /* SettingsView.swift */; };
 		A10000001 /* zMDApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000 /* zMDApp.swift */; };
@@ -20,6 +23,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C007183B47884CF6A423E3DE /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
+		B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = zMD.help; sourceTree = "<group>"; };
 		7B3F07EF007F429AB9E72113 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		98515A5CFBA7411D8B33B552 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A10000000 /* zMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = zMDApp.swift; sourceTree = "<group>"; };
@@ -58,6 +63,7 @@
 			children = (
 				A10000000 /* zMDApp.swift */,
 				A10000002 /* ContentView.swift */,
+				C007183B47884CF6A423E3DE /* HelpView.swift */,
 				A10000004 /* DocumentManager.swift */,
 				A10000006 /* MarkdownView.swift */,
 				A10000008 /* TabBar.swift */,
@@ -67,14 +73,16 @@
 				A1000000C /* zMD.entitlements */,
 			
 				7B3F07EF007F429AB9E72113 /* SettingsManager.swift */,
-				98515A5CFBA7411D8B33B552 /* SettingsView.swift */,);
+				98515A5CFBA7411D8B33B552 /* SettingsView.swift */,
+				74BFD9DFBCBC4E8593B2C133 /* Resources */,
+				B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */,);
 			path = zMD;
 			sourceTree = "<group>";
 		};
 		A5555555 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A1111111 /* zMD.app */,
+A1111111 /* zMD.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -138,7 +146,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000B /* Assets.xcassets in Resources */,
-			);
+			
+				2208643A1E114A2C9A4C7331 /* Resources in Resources */,
+				FBBB2A5A91A84CA490270FE9 /* zMD.help in Resources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
@@ -148,6 +158,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */,
 				A10000001 /* zMDApp.swift in Sources */,
 				A10000003 /* ContentView.swift in Sources */,
 				A10000005 /* DocumentManager.swift in Sources */,

@@ -5,6 +5,7 @@ struct zMDApp: App {
     @StateObject private var documentManager = DocumentManager.shared
     @StateObject private var settings = SettingsManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @State private var showingHelp = false
 
     init() {
         // DocumentManager.shared is now available immediately for file opening at launch
@@ -24,6 +25,10 @@ struct zMDApp: App {
                             window.delegate = delegate
                         }
                     }
+                }
+                .sheet(isPresented: $showingHelp) {
+                    HelpView()
+                        .preferredColorScheme(settings.colorScheme)
                 }
         }
         .commands {
@@ -172,6 +177,14 @@ struct zMDApp: App {
             // Enable standard Edit menu commands
             CommandGroup(after: .textEditing) {
                 // This ensures standard copy/paste/select all commands work
+            }
+
+            // Help menu
+            CommandGroup(replacing: .help) {
+                Button("zMD Help") {
+                    showingHelp = true
+                }
+                .keyboardShortcut("?", modifiers: .command)
             }
         }
 

@@ -1,0 +1,157 @@
+import SwiftUI
+import WebKit
+
+struct HelpView: View {
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("zMD Help")
+                    .font(.system(size: 20, weight: .semibold))
+                Spacer()
+                Button("") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .opacity(0)
+                    .frame(width: 0, height: 0)
+            }
+            .padding()
+
+            Divider()
+
+            // Help content
+            HelpWebView()
+        }
+        .frame(width: 800, height: 600)
+    }
+}
+
+struct HelpWebView: NSViewRepresentable {
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.loadHTMLString(helpHTML, baseURL: nil)
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {}
+
+    private var helpHTML: String {
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+                    line-height: 1.6;
+                    color: #1d1d1f;
+                    padding: 30px 40px;
+                    max-width: 700px;
+                }
+                h1 { font-size: 32px; font-weight: 700; margin-bottom: 30px; border-bottom: 1px solid #d2d2d7; padding-bottom: 15px; }
+                h2 { font-size: 24px; font-weight: 600; margin-top: 30px; margin-bottom: 12px; }
+                h3 { font-size: 18px; font-weight: 600; margin-top: 20px; margin-bottom: 10px; }
+                p { margin-bottom: 12px; font-size: 14px; }
+                ul { margin-left: 20px; margin-bottom: 12px; }
+                li { margin-bottom: 6px; font-size: 14px; }
+                code { background-color: #f5f5f7; padding: 2px 6px; border-radius: 3px; font-family: "SF Mono", Monaco, monospace; font-size: 13px; }
+                kbd { display: inline-block; background-color: #f5f5f7; border: 1px solid #d2d2d7; border-radius: 3px; padding: 2px 6px; font-size: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+                table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
+                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #d2d2d7; }
+                th { font-weight: 600; background-color: #f5f5f7; }
+                strong { font-weight: 600; }
+            </style>
+        </head>
+        <body>
+            <h1>zMD Help</h1>
+
+            <h2>Getting Started</h2>
+            <p>zMD is a lightweight macOS markdown viewer for clean reading and professional document export.</p>
+
+            <h2>Opening Files</h2>
+            <ul>
+                <li>Press <kbd>⌘O</kbd> to open files</li>
+                <li>Drag and drop <code>.md</code> files onto the app</li>
+                <li>Double-click markdown files in Finder</li>
+                <li>Access recent files from <strong>File → Open Recent</strong></li>
+            </ul>
+
+            <h2>Working with Tabs</h2>
+            <ul>
+                <li><kbd>⌘O</kbd> - Open new files in tabs</li>
+                <li><kbd>⌘W</kbd> - Close current tab</li>
+                <li><kbd>⌃Tab</kbd> - Next tab</li>
+                <li><kbd>⌃⇧Tab</kbd> - Previous tab</li>
+            </ul>
+
+            <h2>Customizing Appearance</h2>
+            <p>Press <kbd>⌘,</kbd> to open Settings.</p>
+            <h3>Theme Selection</h3>
+            <ul>
+                <li><strong>System</strong> - Follows macOS appearance</li>
+                <li><strong>Light</strong> - Always light mode</li>
+                <li><strong>Dark</strong> - Always dark mode</li>
+            </ul>
+            <h3>Font Styles</h3>
+            <ul>
+                <li><strong>System</strong> - San Francisco font</li>
+                <li><strong>Serif</strong> - Charter font for reading</li>
+                <li><strong>Monospace</strong> - Monospaced font</li>
+            </ul>
+
+            <h2>Exporting Documents</h2>
+            <p>Export via <strong>File → Export</strong>:</p>
+            <ul>
+                <li><strong>PDF</strong> - Formatted with pagination</li>
+                <li><strong>HTML</strong> - With or without styles</li>
+                <li><strong>Word (.docx)</strong> - Microsoft Word format</li>
+            </ul>
+
+            <h2>File Management</h2>
+            <ul>
+                <li><strong>Open File Location</strong> - Reveal in Finder</li>
+                <li><strong>Duplicate</strong> (<kbd>⌘⇧S</kbd>) - Copy file</li>
+                <li><strong>Rename</strong> - Rename document</li>
+                <li><strong>Move To</strong> - Move to another folder</li>
+            </ul>
+
+            <h2>Keyboard Shortcuts</h2>
+            <table>
+                <tr><th>Shortcut</th><th>Action</th></tr>
+                <tr><td><kbd>⌘O</kbd></td><td>Open files</td></tr>
+                <tr><td><kbd>⌘W</kbd></td><td>Close tab</td></tr>
+                <tr><td><kbd>⌘,</kbd></td><td>Settings</td></tr>
+                <tr><td><kbd>⌘?</kbd></td><td>Help</td></tr>
+                <tr><td><kbd>⌘Q</kbd></td><td>Quit</td></tr>
+                <tr><td><kbd>⌘⇧S</kbd></td><td>Duplicate</td></tr>
+                <tr><td><kbd>⌃Tab</kbd></td><td>Next tab</td></tr>
+                <tr><td><kbd>⌃⇧Tab</kbd></td><td>Previous tab</td></tr>
+                <tr><td><kbd>ESC</kbd></td><td>Close Settings/Help</td></tr>
+            </table>
+
+            <h2>Supported Markdown</h2>
+            <ul>
+                <li>Headings (H1-H4)</li>
+                <li>Bold, italic, inline code</li>
+                <li>Bullet and numbered lists</li>
+                <li>Task lists with checkboxes</li>
+                <li>Code blocks</li>
+                <li>Tables</li>
+                <li>Images (local and remote)</li>
+                <li>Horizontal rules</li>
+            </ul>
+
+            <h2>Tips</h2>
+            <ul>
+                <li>Settings are automatically saved</li>
+                <li>Use <kbd>⌘W</kbd> to close tabs - app stays open</li>
+                <li>Export formats preserve formatting</li>
+                <li>Recent files persist between launches</li>
+            </ul>
+        </body>
+        </html>
+        """
+    }
+}
