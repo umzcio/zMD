@@ -2,6 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 class DocumentManager: ObservableObject {
+    static let shared = DocumentManager()
+
     @Published var openDocuments: [MarkdownDocument] = []
     @Published var selectedDocumentId: UUID?
     @Published var recentFileURLs: [URL] = []

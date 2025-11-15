@@ -2,11 +2,11 @@ import SwiftUI
 
 @main
 struct zMDApp: App {
-    @StateObject private var documentManager = DocumentManager()
+    @StateObject private var documentManager = DocumentManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     init() {
-        // Pass the document manager to the app delegate
+        // DocumentManager.shared is now available immediately for file opening at launch
     }
 
     var body: some Scene {
@@ -179,6 +179,42 @@ struct zMDApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Register for Apple Events to handle file opening
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEOpenDocuments)
+        )
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        // Handle files opened from Finder using shared DocumentManager
+        let documentManager = DocumentManager.shared
+
+        for url in urls {
+            if url.pathExtension == "md" || url.pathExtension == "markdown" {
+                documentManager.loadDocument(from: url)
+            }
+        }
+    }
+
+    @objc func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        let documentManager = DocumentManager.shared
+
+        if let urlList = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)) {
+            for i in 1...urlList.numberOfItems {
+                if let urlString = urlList.atIndex(i)?.stringValue,
+                   let url = URL(string: urlString) {
+                    if url.pathExtension == "md" || url.pathExtension == "markdown" {
+                        documentManager.loadDocument(from: url)
+                    }
+                }
+            }
+        }
     }
 }
 
