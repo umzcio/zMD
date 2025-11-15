@@ -3,13 +3,14 @@ import SwiftUI
 struct MarkdownView: View {
     let content: String
     var baseURL: URL? = nil
+    @ObservedObject var settings = SettingsManager.shared
 
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(parseMarkdown(content), id: \.id) { element in
-                        element.view
+                        element.view(fontStyle: settings.fontStyle)
                     }
                 }
                 .padding(.vertical, 40)
@@ -135,12 +136,12 @@ struct MarkdownElement: Identifiable {
     }
 
     @ViewBuilder
-    var view: some View {
+    func view(fontStyle: SettingsManager.FontStyle) -> some View {
         switch content {
         case .heading1(let text):
             VStack(alignment: .leading, spacing: 0) {
                 Text(formatInlineMarkdown(text))
-                    .font(.system(size: 32, weight: .semibold))
+                    .font(fontStyle.font(size: 32).weight(.semibold))
                     .padding(.bottom, 12)
                     .padding(.top, 24)
             }
@@ -148,26 +149,26 @@ struct MarkdownElement: Identifiable {
         case .heading2(let text):
             VStack(alignment: .leading, spacing: 0) {
                 Text(formatInlineMarkdown(text))
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(fontStyle.font(size: 24).weight(.semibold))
                     .padding(.bottom, 8)
                     .padding(.top, 20)
             }
 
         case .heading3(let text):
             Text(formatInlineMarkdown(text))
-                .font(.system(size: 20, weight: .semibold))
+                .font(fontStyle.font(size: 20).weight(.semibold))
                 .padding(.bottom, 8)
                 .padding(.top, 16)
 
         case .heading4(let text):
             Text(formatInlineMarkdown(text))
-                .font(.system(size: 18, weight: .semibold))
+                .font(fontStyle.font(size: 18).weight(.semibold))
                 .padding(.bottom, 6)
                 .padding(.top, 12)
 
         case .paragraph(let text):
             Text(formatInlineMarkdown(text))
-                .font(.system(size: 16))
+                .font(fontStyle.font(size: 16))
                 .lineSpacing(6)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 4)
@@ -179,29 +180,29 @@ struct MarkdownElement: Identifiable {
                         // Check for checkbox syntax
                         if item.hasPrefix("[ ] ") {
                             Image(systemName: "square")
-                                .font(.system(size: 16))
+                                .font(fontStyle.font(size: 16))
                                 .foregroundColor(.secondary)
                                 .frame(width: 16)
                             Text(formatInlineMarkdown(String(item.dropFirst(4))))
-                                .font(.system(size: 16))
+                                .font(fontStyle.font(size: 16))
                                 .lineSpacing(6)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else if item.hasPrefix("[x] ") || item.hasPrefix("[X] ") {
                             Image(systemName: "checkmark.square.fill")
-                                .font(.system(size: 16))
+                                .font(fontStyle.font(size: 16))
                                 .foregroundColor(.accentColor)
                                 .frame(width: 16)
                             Text(formatInlineMarkdown(String(item.dropFirst(4))))
-                                .font(.system(size: 16))
+                                .font(fontStyle.font(size: 16))
                                 .lineSpacing(6)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else {
                             Text("•")
-                                .font(.system(size: 16, weight: .bold))
+                                .font(fontStyle.font(size: 16).weight(.bold))
                                 .foregroundColor(.secondary)
                                 .frame(width: 8)
                             Text(formatInlineMarkdown(item))
-                                .font(.system(size: 16))
+                                .font(fontStyle.font(size: 16))
                                 .lineSpacing(6)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -222,7 +223,7 @@ struct MarkdownElement: Identifiable {
             .padding(.vertical, 8)
 
         case .table(let rows):
-            TableView(rows: rows)
+            TableView(rows: rows, fontStyle: fontStyle)
                 .padding(.vertical, 12)
 
         case .image(let alt, let path, let baseURL):
@@ -263,6 +264,7 @@ struct MarkdownElement: Identifiable {
 
 struct TableView: View {
     let rows: [[String]]
+    let fontStyle: SettingsManager.FontStyle
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -271,7 +273,7 @@ struct TableView: View {
                     GridRow {
                         ForEach(Array(row.enumerated()), id: \.offset) { colIndex, cell in
                             Text(formatInlineMarkdown(cell))
-                                .font(.system(size: 15, weight: rowIndex == 0 ? .medium : .regular))
+                                .font(fontStyle.font(size: 15).weight(rowIndex == 0 ? .medium : .regular))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
                                 .frame(maxWidth: .infinity, alignment: .leading)

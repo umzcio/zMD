@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct zMDApp: App {
     @StateObject private var documentManager = DocumentManager.shared
+    @StateObject private var settings = SettingsManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     init() {
@@ -13,6 +14,7 @@ struct zMDApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(documentManager)
+                .preferredColorScheme(settings.colorScheme)
                 .onAppear {
                     // Set up window delegate after window is created
                     DispatchQueue.main.async {
@@ -171,6 +173,11 @@ struct zMDApp: App {
             CommandGroup(after: .textEditing) {
                 // This ensures standard copy/paste/select all commands work
             }
+        }
+
+        Settings {
+            SettingsView()
+                .preferredColorScheme(settings.colorScheme)
         }
     }
 }
