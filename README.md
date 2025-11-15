@@ -11,6 +11,7 @@ A lightweight macOS markdown viewer with multi-tab support and professional expo
 - **Clean Markdown Rendering** - Support for headings, tables, code blocks, lists, images, and inline formatting
 - **Multi-Tab Interface** - Open and manage multiple markdown files simultaneously
 - **Hierarchical Outline** - Navigate document structure with collapsible heading tree
+- **Customizable Appearance** - Choose between Light/Dark themes and three font styles (System, Serif, Monospace)
 - **Professional Exports** - Export to PDF, HTML, or Word (.docx) with proper formatting
 - **File Management** - Open Recent, Duplicate, Rename, Move To, and Reveal in Finder
 - **Native macOS** - Built with SwiftUI, supports Dark Mode, sandboxed for security
@@ -41,6 +42,11 @@ Press `⌘R` in Xcode to build and run.
 - `⌃Tab` / `⌃⇧Tab` - Switch between tabs
 - Click outline sidebar to toggle document structure
 
+### Customization
+Press `⌘,` to open Settings where you can:
+- **Theme** - Choose System, Light, or Dark mode
+- **Font Style** - Select between System, Serif, or Monospace fonts
+
 ### Exporting
 Choose **File → Export** to save as:
 - **PDF** - Formatted document with pagination
@@ -53,10 +59,12 @@ Choose **File → Export** to save as:
 |----------|--------|
 | `⌘O` | Open file(s) |
 | `⌘W` | Close tab |
+| `⌘,` | Open Settings |
 | `⌘Q` | Quit app |
 | `⌘⇧S` | Duplicate file |
 | `⌃Tab` | Next tab |
 | `⌃⇧Tab` | Previous tab |
+| `ESC` | Close Settings |
 
 ## Why zMD?
 
