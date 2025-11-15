@@ -1,94 +1,65 @@
-# zMD - Simple Markdown Viewer
+# zMD
 
-A lightweight macOS application for viewing markdown files with tab support, inspired by Typora.
+A lightweight macOS markdown viewer with multi-tab support and professional export capabilities.
+
+---
 
 ## Features
 
-### ✅ Implemented
-- **Clean, Typora-style markdown rendering**
-  - Headings (H1-H6) with proper hierarchy
-  - Bold, italic, inline code
-  - Code blocks with syntax preservation
-  - Tables with proper alignment
-  - Lists (ordered, unordered, checkboxes)
-  - Horizontal rules, blockquotes, links
+- **Clean Markdown Rendering** - Typora-inspired view with support for headings, tables, code blocks, lists, and inline formatting
+- **Multi-Tab Interface** - Open and manage multiple markdown files simultaneously
+- **Hierarchical Outline** - Navigate document structure with collapsible heading tree
+- **Professional Exports** - Export to PDF, HTML, or Word (.docx) with proper formatting
+- **File Management** - Open Recent, Duplicate, Rename, Move To, and Reveal in Finder
+- **Native macOS** - Built with SwiftUI, supports Dark Mode, sandboxed for security
 
-- **Tab Management**
-  - Multiple files open simultaneously
-  - Tab bar with close buttons
-  - Right-click context menu (Close Tab, Close Other Tabs)
-  - Drag to reorder tabs support
+## Installation
 
-- **Outline Sidebar**
-  - Hierarchical document outline
-  - Click headings to navigate (in progress)
-  - Toggle with sidebar button
+### Building from Source
 
-- **Keyboard Shortcuts**
-  - `⌘O` - Open markdown file(s)
-  - `⌘W` - Close current tab
-  - `⌃Tab` - Next tab
-  - `⌃⇧Tab` - Previous tab
-
-- **Native macOS Integration**
-  - SwiftUI interface
-  - Dark/Light mode support
-  - App sandbox for security
-  - Custom app icon
-
-### ⚠️ In Progress
-- Text selection and copy (Cmd+A, drag-to-select)
-- Scroll to heading from outline
-- More keyboard shortcuts
-
-## Building & Running
-
-See [BUILD.md](BUILD.md) for detailed build instructions.
-
-**Quick start:**
 ```bash
+git clone https://github.com/yourusername/zMD.git
+cd zMD
 open zMD.xcodeproj
-# Then press ⌘R in Xcode to run
 ```
+
+Press `⌘R` in Xcode to build and run.
+
+**Requirements:** macOS 13.0+, Xcode 15.0+
 
 ## Usage
 
-1. **Open Files**: Press `⌘O` or click the `+` button
-2. **Switch Tabs**: Click tabs or use `⌃Tab` / `⌃⇧Tab`
-3. **Close Tabs**: Click X button, press `⌘W`, or right-click → Close Tab
-4. **Toggle Outline**: Click the sidebar icon in top right
-5. **View Markdown**: All standard markdown syntax is supported
+### Opening Files
+- Press `⌘O` to open markdown files
+- Drag and drop files onto the app icon
+- Recent files available in File menu
 
-## Requirements
+### Navigation
+- `⌘W` - Close current tab
+- `⌃Tab` / `⌃⇧Tab` - Switch between tabs
+- Click outline sidebar to toggle document structure
 
-- macOS 13.0 or later
-- Xcode 15.0 or later (for building)
+### Exporting
+Choose **File → Export** to save as:
+- **PDF** - Formatted document with pagination
+- **HTML** - With or without embedded styles
+- **Word (.docx)** - Microsoft Word compatible format
 
-## Project Structure
+## Keyboard Shortcuts
 
-```
-zMD/
-├── zMD.xcodeproj/              # Xcode project file
-├── BUILD.md                    # Build instructions
-└── zMD/
-    ├── zMDApp.swift            # App entry point & commands
-    ├── ContentView.swift       # Main view layout
-    ├── DocumentManager.swift   # Document state management
-    ├── MarkdownView.swift      # Markdown parsing & rendering
-    ├── TabBar.swift            # Tab interface
-    ├── OutlineView.swift       # Outline sidebar
-    ├── Assets.xcassets/        # App assets & icon
-    └── zMD.entitlements        # App permissions
-```
+| Shortcut | Action |
+|----------|--------|
+| `⌘O` | Open file(s) |
+| `⌘W` | Close tab |
+| `⌘Q` | Quit app |
+| `⌘⇧S` | Duplicate file |
+| `⌃Tab` | Next tab |
+| `⌃⇧Tab` | Previous tab |
 
 ## Why zMD?
 
-Built as a free, simple alternative to expensive markdown viewers. No subscriptions, no bloat - just clean markdown viewing with the features you need.
-
-## Contributing
-
-Feel free to fork, modify, and improve! This is a personal project but contributions are welcome.
+A free, focused markdown viewer without subscriptions or unnecessary features. Just clean rendering, tabs, and the export formats you need.
 
 ## License
 
-Free to use and modify as needed.
+Free to use and modify.

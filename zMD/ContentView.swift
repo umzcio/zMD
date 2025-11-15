@@ -61,7 +61,6 @@ struct WelcomeView: View {
                 .padding(.vertical, 10)
             }
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut("o", modifiers: .command)
 
             Text("or press ⌘O")
                 .font(.system(size: 12))
