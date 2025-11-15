@@ -8,7 +8,7 @@ A lightweight macOS markdown viewer with multi-tab support and professional expo
 
 ## Features
 
-- **Clean Markdown Rendering** - Typora-inspired view with support for headings, tables, code blocks, lists, and inline formatting
+- **Clean Markdown Rendering** - Support for headings, tables, code blocks, lists, images, and inline formatting
 - **Multi-Tab Interface** - Open and manage multiple markdown files simultaneously
 - **Hierarchical Outline** - Navigate document structure with collapsible heading tree
 - **Professional Exports** - Export to PDF, HTML, or Word (.docx) with proper formatting
