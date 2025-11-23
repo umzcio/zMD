@@ -8,6 +8,12 @@ class DocumentManager: ObservableObject {
     @Published var selectedDocumentId: UUID?
     @Published var recentFileURLs: [URL] = []
 
+    // Search state
+    @Published var isSearching: Bool = false
+    @Published var searchText: String = ""
+    @Published var currentMatchIndex: Int = 0
+    @Published var searchMatches: [SearchMatch] = []
+
     private let maxRecentFiles = 10
     private let recentFilesKey = "RecentMarkdownFiles"
 
@@ -96,6 +102,11 @@ class DocumentManager: ObservableObject {
 
     func closeDocument(_ document: MarkdownDocument) {
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
+            // Clear search state if closing the document being searched
+            if document.id == selectedDocumentId && isSearching {
+                endSearch()
+            }
+
             openDocuments.remove(at: index)
 
             // Select another document if available
@@ -108,6 +119,11 @@ class DocumentManager: ObservableObject {
     }
 
     func closeOtherDocuments(except document: MarkdownDocument) {
+        // Clear search when closing multiple tabs
+        if isSearching {
+            endSearch()
+        }
+
         openDocuments.removeAll(where: { $0.id != document.id })
         selectedDocumentId = document.id
     }
@@ -232,5 +248,75 @@ struct MarkdownDocument: Identifiable {
 
     var name: String {
         url.lastPathComponent
+    }
+}
+
+struct SearchMatch: Identifiable {
+    let id = UUID()
+    let range: Range<String.Index>
+    let lineNumber: Int
+}
+
+extension DocumentManager {
+    func startSearch() {
+        isSearching = true
+        searchText = ""
+        searchMatches = []
+        currentMatchIndex = 0
+    }
+
+    func endSearch() {
+        isSearching = false
+        searchText = ""
+        searchMatches = []
+        currentMatchIndex = 0
+    }
+
+    func performSearch() {
+        guard let selectedId = selectedDocumentId,
+              let document = openDocuments.first(where: { $0.id == selectedId }),
+              !searchText.isEmpty else {
+            searchMatches = []
+            currentMatchIndex = 0
+            return
+        }
+
+        let content = document.content
+        var matches: [SearchMatch] = []
+        var searchStartIndex = content.startIndex
+        var lineNumber = 1
+        var currentLineStart = content.startIndex
+
+        while searchStartIndex < content.endIndex {
+            if let range = content.range(of: searchText, options: .caseInsensitive, range: searchStartIndex..<content.endIndex) {
+                // Calculate line number
+                while currentLineStart < range.lowerBound {
+                    if content[currentLineStart] == "\n" {
+                        lineNumber += 1
+                    }
+                    currentLineStart = content.index(after: currentLineStart)
+                }
+
+                matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+                searchStartIndex = range.upperBound
+            } else {
+                break
+            }
+        }
+
+        searchMatches = matches
+        if !matches.isEmpty && currentMatchIndex >= matches.count {
+            currentMatchIndex = 0
+        }
+    }
+
+    func nextMatch() {
+        guard !searchMatches.isEmpty else { return }
+        currentMatchIndex = (currentMatchIndex + 1) % searchMatches.count
+    }
+
+    func previousMatch() {
+        guard !searchMatches.isEmpty else { return }
+        currentMatchIndex = (currentMatchIndex - 1 + searchMatches.count) % searchMatches.count
     }
 }

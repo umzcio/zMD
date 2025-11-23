@@ -17,6 +17,7 @@
 		A10000005 /* DocumentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000004 /* DocumentManager.swift */; };
 		A10000007 /* MarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000006 /* MarkdownView.swift */; };
 		A10000009 /* TabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000008 /* TabBar.swift */; };
+		A10000011 /* SearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000012 /* SearchBar.swift */; };
 		A1000000B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000A /* Assets.xcassets */; };
 		A1000000D /* OutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000E /* OutlineView.swift */; };
 		A1000000F /* ExportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000010 /* ExportManager.swift */; };
@@ -32,6 +33,7 @@
 		A10000004 /* DocumentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentManager.swift; sourceTree = "<group>"; };
 		A10000006 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
 		A10000008 /* TabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBar.swift; sourceTree = "<group>"; };
+		A10000012 /* SearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchBar.swift; sourceTree = "<group>"; };
 		A1000000A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1000000C /* zMD.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = zMD.entitlements; sourceTree = "<group>"; };
 		A1000000E /* OutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineView.swift; sourceTree = "<group>"; };
@@ -67,6 +69,7 @@
 				A10000004 /* DocumentManager.swift */,
 				A10000006 /* MarkdownView.swift */,
 				A10000008 /* TabBar.swift */,
+				A10000012 /* SearchBar.swift */,
 				A1000000E /* OutlineView.swift */,
 				A10000010 /* ExportManager.swift */,
 				A1000000A /* Assets.xcassets */,
@@ -164,6 +167,7 @@ A1111111 /* zMD.app */,
 				A10000005 /* DocumentManager.swift in Sources */,
 				A10000007 /* MarkdownView.swift in Sources */,
 				A10000009 /* TabBar.swift in Sources */,
+				A10000011 /* SearchBar.swift in Sources */,
 				A1000000D /* OutlineView.swift in Sources */,
 				A1000000F /* ExportManager.swift in Sources */,
 			

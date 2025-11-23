@@ -3,24 +3,82 @@ import SwiftUI
 struct MarkdownView: View {
     let content: String
     var baseURL: URL? = nil
-    @ObservedObject var settings = SettingsManager.shared
+    @StateObject private var settings = SettingsManager.shared
+    @EnvironmentObject var documentManager: DocumentManager
+
+    // Memoize parsed elements to avoid re-parsing on every render
+    private var parsedElements: [MarkdownElement] {
+        parseMarkdown(content)
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(parseMarkdown(content), id: \.id) { element in
-                        element.view(fontStyle: settings.fontStyle)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(parsedElements, id: \.id) { element in
+                            element.view(
+                                fontStyle: settings.fontStyle,
+                                searchText: documentManager.isSearching ? documentManager.searchText : "",
+                                currentMatchIndex: documentManager.currentMatchIndex,
+                                searchMatches: documentManager.searchMatches,
+                                fullContent: content
+                            )
+                            .id(element.id)
+                        }
+                    }
+                    .padding(.vertical, 40)
+                    .padding(.horizontal, 60)
+                    .frame(maxWidth: 900)
+                    .frame(minWidth: geometry.size.width)
+                }
+                .background(Color(NSColor.textBackgroundColor))
+                .onChange(of: documentManager.currentMatchIndex) { _ in
+                    scrollToCurrentMatch(scrollProxy: scrollProxy)
+                }
+                .onChange(of: documentManager.searchMatches.count) { _ in
+                    if !documentManager.searchMatches.isEmpty {
+                        scrollToCurrentMatch(scrollProxy: scrollProxy)
                     }
                 }
-                .padding(.vertical, 40)
-                .padding(.horizontal, 60)
-                .frame(maxWidth: 900)
-                .frame(minWidth: geometry.size.width)
             }
-            .background(Color(NSColor.textBackgroundColor))
         }
         .textSelection(.enabled)
+    }
+
+    private func scrollToCurrentMatch(scrollProxy: ScrollViewProxy) {
+        guard documentManager.isSearching,
+              !documentManager.searchMatches.isEmpty,
+              documentManager.currentMatchIndex < documentManager.searchMatches.count else {
+            return
+        }
+
+        let currentMatch = documentManager.searchMatches[documentManager.currentMatchIndex]
+
+        // Find which element contains this match
+        if let elementId = findElementContainingMatch(currentMatch) {
+            withAnimation {
+                scrollProxy.scrollTo(elementId, anchor: .center)
+            }
+        }
+    }
+
+    private func findElementContainingMatch(_ match: SearchMatch) -> UUID? {
+        let matchPosition = content.distance(from: content.startIndex, to: match.range.lowerBound)
+        var currentPosition = 0
+
+        for element in parsedElements {
+            let elementText = element.textContent
+            let elementLength = elementText.count
+
+            if currentPosition <= matchPosition && matchPosition < currentPosition + elementLength {
+                return element.id
+            }
+
+            currentPosition += elementLength + 1 // +1 for newline
+        }
+
+        return nil
     }
 
     func parseMarkdown(_ markdown: String) -> [MarkdownElement] {
@@ -135,12 +193,27 @@ struct MarkdownElement: Identifiable {
         case image(alt: String, path: String, baseURL: URL?)
     }
 
+    var textContent: String {
+        switch content {
+        case .heading1(let text), .heading2(let text), .heading3(let text), .heading4(let text), .paragraph(let text):
+            return text
+        case .list(let items):
+            return items.joined(separator: "\n")
+        case .codeBlock(let code):
+            return code
+        case .table(let rows):
+            return rows.flatMap { $0 }.joined(separator: " ")
+        case .image(let alt, _, _):
+            return alt
+        }
+    }
+
     @ViewBuilder
-    func view(fontStyle: SettingsManager.FontStyle) -> some View {
+    func view(fontStyle: SettingsManager.FontStyle, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fullContent: String) -> some View {
         switch content {
         case .heading1(let text):
             VStack(alignment: .leading, spacing: 0) {
-                Text(formatInlineMarkdown(text))
+                Text(formatInlineMarkdown(text, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: text, fullContent: fullContent))
                     .font(fontStyle.font(size: 32).weight(.semibold))
                     .padding(.bottom, 12)
                     .padding(.top, 24)
@@ -148,26 +221,26 @@ struct MarkdownElement: Identifiable {
 
         case .heading2(let text):
             VStack(alignment: .leading, spacing: 0) {
-                Text(formatInlineMarkdown(text))
+                Text(formatInlineMarkdown(text, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: text, fullContent: fullContent))
                     .font(fontStyle.font(size: 24).weight(.semibold))
                     .padding(.bottom, 8)
                     .padding(.top, 20)
             }
 
         case .heading3(let text):
-            Text(formatInlineMarkdown(text))
+            Text(formatInlineMarkdown(text, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: text, fullContent: fullContent))
                 .font(fontStyle.font(size: 20).weight(.semibold))
                 .padding(.bottom, 8)
                 .padding(.top, 16)
 
         case .heading4(let text):
-            Text(formatInlineMarkdown(text))
+            Text(formatInlineMarkdown(text, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: text, fullContent: fullContent))
                 .font(fontStyle.font(size: 18).weight(.semibold))
                 .padding(.bottom, 6)
                 .padding(.top, 12)
 
         case .paragraph(let text):
-            Text(formatInlineMarkdown(text))
+            Text(formatInlineMarkdown(text, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: text, fullContent: fullContent))
                 .font(fontStyle.font(size: 16))
                 .lineSpacing(6)
                 .fixedSize(horizontal: false, vertical: true)
@@ -183,7 +256,7 @@ struct MarkdownElement: Identifiable {
                                 .font(fontStyle.font(size: 16))
                                 .foregroundColor(.secondary)
                                 .frame(width: 16)
-                            Text(formatInlineMarkdown(String(item.dropFirst(4))))
+                            Text(formatInlineMarkdown(String(item.dropFirst(4)), searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: String(item.dropFirst(4)), fullContent: fullContent))
                                 .font(fontStyle.font(size: 16))
                                 .lineSpacing(6)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -192,7 +265,7 @@ struct MarkdownElement: Identifiable {
                                 .font(fontStyle.font(size: 16))
                                 .foregroundColor(.accentColor)
                                 .frame(width: 16)
-                            Text(formatInlineMarkdown(String(item.dropFirst(4))))
+                            Text(formatInlineMarkdown(String(item.dropFirst(4)), searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: String(item.dropFirst(4)), fullContent: fullContent))
                                 .font(fontStyle.font(size: 16))
                                 .lineSpacing(6)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -201,7 +274,7 @@ struct MarkdownElement: Identifiable {
                                 .font(fontStyle.font(size: 16).weight(.bold))
                                 .foregroundColor(.secondary)
                                 .frame(width: 8)
-                            Text(formatInlineMarkdown(item))
+                            Text(formatInlineMarkdown(item, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: item, fullContent: fullContent))
                                 .font(fontStyle.font(size: 16))
                                 .lineSpacing(6)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -232,32 +305,55 @@ struct MarkdownElement: Identifiable {
         }
     }
 
-    func formatInlineMarkdown(_ text: String) -> AttributedString {
-        var result = text
-
-        // Handle bold **text**
-        while let boldRange = result.range(of: #"\*\*[^\*]+\*\*"#, options: .regularExpression) {
-            let boldText = result[boldRange].dropFirst(2).dropLast(2)
-            result.replaceSubrange(boldRange, with: String(boldText))
-        }
-
-        // Handle italic *text*
-        while let italicRange = result.range(of: #"\*[^\*]+\*"#, options: .regularExpression) {
-            let italicText = result[italicRange].dropFirst().dropLast()
-            result.replaceSubrange(italicRange, with: String(italicText))
-        }
-
-        // Handle inline code `text`
-        while let codeRange = result.range(of: #"`[^`]+`"#, options: .regularExpression) {
-            let codeText = result[codeRange].dropFirst().dropLast()
-            result.replaceSubrange(codeRange, with: String(codeText))
-        }
-
+    func formatInlineMarkdown(_ text: String, searchText: String = "", currentMatchIndex: Int = 0, searchMatches: [SearchMatch] = [], originalText: String = "", fullContent: String = "") -> AttributedString {
         // Try to create AttributedString with markdown support
+        var attributed: AttributedString
         do {
-            return try AttributedString(markdown: text)
+            attributed = try AttributedString(markdown: text)
         } catch {
-            return AttributedString(text)
+            attributed = AttributedString(text)
+        }
+
+        // Only apply search highlighting if we have valid search state
+        // Skip if: no search text, no matches, or text doesn't contain search term
+        if !searchText.isEmpty && !searchMatches.isEmpty && text.localizedCaseInsensitiveContains(searchText) {
+            applySearchHighlighting(to: &attributed, searchText: searchText, currentMatchIndex: currentMatchIndex, searchMatches: searchMatches, originalText: originalText, fullContent: fullContent)
+        }
+
+        return attributed
+    }
+
+    func applySearchHighlighting(to attributed: inout AttributedString, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], originalText: String, fullContent: String) {
+        let text = String(attributed.characters)
+        var searchStartIndex = text.startIndex
+
+        // Find position of originalText in fullContent to offset match indices
+        guard let originalRange = fullContent.range(of: originalText, options: .caseInsensitive) else {
+            return
+        }
+
+        let offsetInContent = fullContent.distance(from: fullContent.startIndex, to: originalRange.lowerBound)
+
+        while searchStartIndex < text.endIndex {
+            if let range = text.range(of: searchText, options: .caseInsensitive, range: searchStartIndex..<text.endIndex) {
+                // Calculate the position of this match in the full content
+                let matchPositionInText = text.distance(from: text.startIndex, to: range.lowerBound)
+                let matchPositionInContent = offsetInContent + matchPositionInText
+
+                // Check if this is the current match
+                let isCurrent = searchMatches.indices.contains(currentMatchIndex) &&
+                    fullContent.distance(from: fullContent.startIndex, to: searchMatches[currentMatchIndex].range.lowerBound) == matchPositionInContent
+
+                // Convert String range to AttributedString range
+                if let attrRange = Range(range, in: attributed) {
+                    attributed[attrRange].backgroundColor = isCurrent ? .yellow : Color.yellow.opacity(0.4)
+                    attributed[attrRange].foregroundColor = .black
+                }
+
+                searchStartIndex = range.upperBound
+            } else {
+                break
+            }
         }
     }
 }

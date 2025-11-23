@@ -176,7 +176,25 @@ struct zMDApp: App {
 
             // Enable standard Edit menu commands
             CommandGroup(after: .textEditing) {
-                // This ensures standard copy/paste/select all commands work
+                Divider()
+
+                Button("Find...") {
+                    documentManager.startSearch()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(documentManager.openDocuments.isEmpty)
+
+                Button("Find Next") {
+                    documentManager.nextMatch()
+                }
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(documentManager.searchMatches.isEmpty)
+
+                Button("Find Previous") {
+                    documentManager.previousMatch()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(documentManager.searchMatches.isEmpty)
             }
 
             // Help menu

@@ -13,6 +13,38 @@ struct ContentView: View {
 
                 Divider()
 
+                // Search bar
+                if documentManager.isSearching {
+                    SearchBar(
+                        searchText: $documentManager.searchText,
+                        isSearching: $documentManager.isSearching,
+                        currentMatch: documentManager.currentMatchIndex + 1,
+                        totalMatches: documentManager.searchMatches.count,
+                        onSearch: {
+                            documentManager.performSearch()
+                        },
+                        onNext: {
+                            documentManager.nextMatch()
+                        },
+                        onPrevious: {
+                            documentManager.previousMatch()
+                        },
+                        onClose: {
+                            documentManager.endSearch()
+                        }
+                    )
+                    .padding(8)
+                    .task(id: documentManager.searchText) {
+                        // Debounce search - wait for user to stop typing
+                        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                        if !Task.isCancelled {
+                            documentManager.performSearch()
+                        }
+                    }
+
+                    Divider()
+                }
+
                 // Content area with optional outline
                 if let selectedId = documentManager.selectedDocumentId,
                    let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {

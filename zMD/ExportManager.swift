@@ -652,36 +652,52 @@ class ExportManager {
     }
 
     private func createRunsForFormattedText(_ text: String) -> String {
-        // Simple inline formatting support
+        // Parse inline markdown formatting (bold, italic, code)
         var result = ""
-        var currentText = text
+        var remaining = text
 
-        // Handle bold **text**
-        let boldPattern = #"\*\*([^\*]+)\*\*"#
-        if let regex = try? NSRegularExpression(pattern: boldPattern) {
-            let matches = regex.matches(in: currentText, range: NSRange(currentText.startIndex..., in: currentText))
-            if matches.isEmpty {
-                result += createSimpleRun(text: currentText)
-            } else {
-                var lastEnd = currentText.startIndex
-                for match in matches {
-                    if let range = Range(match.range, in: currentText),
-                       let contentRange = Range(match.range(at: 1), in: currentText) {
-                        // Add text before match
-                        if lastEnd < range.lowerBound {
-                            result += createSimpleRun(text: String(currentText[lastEnd..<range.lowerBound]))
-                        }
-                        // Add bold text
-                        result += createBoldRun(text: String(currentText[contentRange]))
-                        lastEnd = range.upperBound
-                    }
-                }
-                // Add remaining text
-                if lastEnd < currentText.endIndex {
-                    result += createSimpleRun(text: String(currentText[lastEnd...]))
-                }
-                return result
+        // Pattern matches: **bold**, *italic*, or `code`
+        // We need to handle them in order of appearance
+        let combinedPattern = #"(\*\*([^\*]+)\*\*)|(\*([^\*]+)\*)|(`([^`]+)`)"#
+
+        guard let regex = try? NSRegularExpression(pattern: combinedPattern) else {
+            return createSimpleRun(text: text)
+        }
+
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+
+        if matches.isEmpty {
+            return createSimpleRun(text: text)
+        }
+
+        var lastEnd = text.startIndex
+
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+
+            // Add text before this match
+            if lastEnd < range.lowerBound {
+                result += createSimpleRun(text: String(text[lastEnd..<range.lowerBound]))
             }
+
+            // Determine match type and add formatted run
+            if let boldContentRange = Range(match.range(at: 2), in: text) {
+                // Bold **text**
+                result += createBoldRun(text: String(text[boldContentRange]))
+            } else if let italicContentRange = Range(match.range(at: 4), in: text) {
+                // Italic *text*
+                result += createItalicRun(text: String(text[italicContentRange]))
+            } else if let codeContentRange = Range(match.range(at: 6), in: text) {
+                // Code `text`
+                result += createCodeRun(text: String(text[codeContentRange]))
+            }
+
+            lastEnd = range.upperBound
+        }
+
+        // Add remaining text
+        if lastEnd < text.endIndex {
+            result += createSimpleRun(text: String(text[lastEnd...]))
         }
 
         return result
@@ -701,6 +717,29 @@ class ExportManager {
             <w:r>
                 <w:rPr>
                     <w:b/>
+                </w:rPr>
+                <w:t>\(xmlEscape(text))</w:t>
+            </w:r>
+        """
+    }
+
+    private func createItalicRun(text: String) -> String {
+        return """
+            <w:r>
+                <w:rPr>
+                    <w:i/>
+                </w:rPr>
+                <w:t>\(xmlEscape(text))</w:t>
+            </w:r>
+        """
+    }
+
+    private func createCodeRun(text: String) -> String {
+        return """
+            <w:r>
+                <w:rPr>
+                    <w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/>
+                    <w:shd w:val="clear" w:color="auto" w:fill="F5F5F5"/>
                 </w:rPr>
                 <w:t>\(xmlEscape(text))</w:t>
             </w:r>
