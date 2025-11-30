@@ -193,7 +193,15 @@ class ExportManager {
         }
     }
 
+    // Property to track hyperlinks during document generation
+    private var hyperlinkRelationships: [(id: String, url: String)] = []
+    private var nextHyperlinkId = 3 // Start at 3 since rId1 and rId2 are taken
+
     private func createCustomDOCX(content: String, outputURL: URL) throws {
+        // Reset hyperlink tracking for new document
+        hyperlinkRelationships = []
+        nextHyperlinkId = 3
+
         // Create temporary directory for DOCX structure
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -237,12 +245,24 @@ class ExportManager {
         """
         try mainRels.write(to: relsDir.appendingPathComponent(".rels"), atomically: true, encoding: .utf8)
 
-        // Create word/_rels/document.xml.rels
-        let documentRels = """
+        // Create word/_rels/document.xml.rels with hyperlink relationships
+        var documentRels = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
             <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
             <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+        """
+
+        // Add hyperlink relationships
+        for hyperlink in hyperlinkRelationships {
+            documentRels += """
+
+                <Relationship Id="\(hyperlink.id)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="\(xmlEscape(hyperlink.url))" TargetMode="External"/>
+            """
+        }
+
+        documentRels += """
+
         </Relationships>
         """
         try documentRels.write(to: wordRelsDir.appendingPathComponent("document.xml.rels"), atomically: true, encoding: .utf8)
@@ -429,7 +449,7 @@ class ExportManager {
     private func generateDocumentXML(markdown: String) -> String {
         var xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
             <w:body>
         """
 
@@ -512,12 +532,21 @@ class ExportManager {
                             xml += "</w:tcBorders>"
                             xml += "</w:tcPr>"
                             xml += "<w:p>"
-                            xml += "<w:r>"
+
+                            // For header row, make text bold AND process inline formatting
                             if isFirstRow {
-                                xml += "<w:rPr><w:b/></w:rPr>"
+                                // Process inline formatting but wrap in bold
+                                let formattedRuns = createRunsForFormattedText(cell)
+                                // Add bold to all runs in the cell
+                                xml += formattedRuns.replacingOccurrences(of: "<w:rPr>", with: "<w:rPr><w:b/>")
+                                    .replacingOccurrences(of: "<w:r>", with: "<w:r><w:rPr><w:b/></w:rPr>")
+                                    // Clean up double rPr tags
+                                    .replacingOccurrences(of: "<w:rPr><w:b/><w:rPr>", with: "<w:rPr>")
+                            } else {
+                                // Regular cell - just process inline formatting
+                                xml += createRunsForFormattedText(cell)
                             }
-                            xml += "<w:t>\(xmlEscape(cell))</w:t>"
-                            xml += "</w:r>"
+
                             xml += "</w:p>"
                             xml += "</w:tc>"
                         }
@@ -652,13 +681,13 @@ class ExportManager {
     }
 
     private func createRunsForFormattedText(_ text: String) -> String {
-        // Parse inline markdown formatting (bold, italic, code)
+        // Parse inline markdown formatting (bold, italic, code, links)
         var result = ""
         var remaining = text
 
-        // Pattern matches: **bold**, *italic*, or `code`
+        // Pattern matches: [text](url), **bold**, *italic*, or `code`
         // We need to handle them in order of appearance
-        let combinedPattern = #"(\*\*([^\*]+)\*\*)|(\*([^\*]+)\*)|(`([^`]+)`)"#
+        let combinedPattern = #"(\[([^\]]+)\]\(([^\)]+)\))|(\*\*([^\*]+)\*\*)|(\*([^\*]+)\*)|(`([^`]+)`)"#
 
         guard let regex = try? NSRegularExpression(pattern: combinedPattern) else {
             return createSimpleRun(text: text)
@@ -681,13 +710,17 @@ class ExportManager {
             }
 
             // Determine match type and add formatted run
-            if let boldContentRange = Range(match.range(at: 2), in: text) {
+            if let linkTextRange = Range(match.range(at: 2), in: text),
+               let linkURLRange = Range(match.range(at: 3), in: text) {
+                // Link [text](url)
+                result += createLinkRun(text: String(text[linkTextRange]), url: String(text[linkURLRange]))
+            } else if let boldContentRange = Range(match.range(at: 5), in: text) {
                 // Bold **text**
                 result += createBoldRun(text: String(text[boldContentRange]))
-            } else if let italicContentRange = Range(match.range(at: 4), in: text) {
+            } else if let italicContentRange = Range(match.range(at: 7), in: text) {
                 // Italic *text*
                 result += createItalicRun(text: String(text[italicContentRange]))
-            } else if let codeContentRange = Range(match.range(at: 6), in: text) {
+            } else if let codeContentRange = Range(match.range(at: 9), in: text) {
                 // Code `text`
                 result += createCodeRun(text: String(text[codeContentRange]))
             }
@@ -743,6 +776,27 @@ class ExportManager {
                 </w:rPr>
                 <w:t>\(xmlEscape(text))</w:t>
             </w:r>
+        """
+    }
+
+    private func createLinkRun(text: String, url: String) -> String {
+        // Generate unique relationship ID for this hyperlink
+        let rId = "rId\(nextHyperlinkId)"
+        nextHyperlinkId += 1
+
+        // Track this hyperlink for the relationships file
+        hyperlinkRelationships.append((id: rId, url: url))
+
+        return """
+            <w:hyperlink r:id="\(rId)" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                <w:r>
+                    <w:rPr>
+                        <w:color w:val="0563C1"/>
+                        <w:u w:val="single"/>
+                    </w:rPr>
+                    <w:t>\(xmlEscape(text))</w:t>
+                </w:r>
+            </w:hyperlink>
         """
     }
 
