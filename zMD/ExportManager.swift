@@ -276,7 +276,7 @@ class ExportManager {
                 <w:lvl w:ilvl="0">
                     <w:start w:val="1"/>
                     <w:numFmt w:val="bullet"/>
-                    <w:lvlText w:val="•"/>
+                    <w:lvlText w:val="\u{F0B7}"/>
                     <w:lvlJc w:val="left"/>
                     <w:pPr>
                         <w:ind w:left="720" w:hanging="360"/>
