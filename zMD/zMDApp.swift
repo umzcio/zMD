@@ -46,6 +46,11 @@ struct zMDApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
+                Button("Quick Open...") {
+                    NotificationCenter.default.post(name: .showQuickOpen, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+
                 Menu("Open Recent") {
                     if documentManager.recentFileURLs.isEmpty {
                         Text("No Recent Files")
@@ -100,6 +105,17 @@ struct zMDApp: App {
                         documentManager.moveDocument(document: document)
                     }
                 }
+                .disabled(documentManager.openDocuments.isEmpty)
+            }
+
+            CommandGroup(replacing: .printItem) {
+                Button("Print...") {
+                    if let selectedId = documentManager.selectedDocumentId,
+                       let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
+                        PrintManager.shared.print(content: document.content, fileName: document.name)
+                    }
+                }
+                .keyboardShortcut("p", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
             }
 

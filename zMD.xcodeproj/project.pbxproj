@@ -12,6 +12,13 @@
 		2208643A1E114A2C9A4C7331 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = 74BFD9DFBCBC4E8593B2C133 /* Resources */; };
 		8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3F07EF007F429AB9E72113 /* SettingsManager.swift */; };
 		9F0CF7C93C0F452694B0B0CC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98515A5CFBA7411D8B33B552 /* SettingsView.swift */; };
+		F1A2B3C4D5E6F7081 /* AlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7080 /* AlertManager.swift */; };
+		F1A2B3C4D5E6F7083 /* FileWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7082 /* FileWatcher.swift */; };
+		F1A2B3C4D5E6F7085 /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7084 /* MarkdownParser.swift */; };
+		F1A2B3C4D5E6F7087 /* MarkdownTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */; };
+		F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */; };
+		F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F708A /* QuickOpenView.swift */; };
+		F1A2B3C4D5E6F708D /* PrintManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F708C /* PrintManager.swift */; };
 		A10000001 /* zMDApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000 /* zMDApp.swift */; };
 		A10000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000002 /* ContentView.swift */; };
 		A10000005 /* DocumentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000004 /* DocumentManager.swift */; };
@@ -28,6 +35,13 @@
 		B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = zMD.help; sourceTree = "<group>"; };
 		7B3F07EF007F429AB9E72113 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		98515A5CFBA7411D8B33B552 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F7080 /* AlertManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F7082 /* FileWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcher.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F7084 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTextView.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F708A /* QuickOpenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickOpenView.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F708C /* PrintManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintManager.swift; sourceTree = "<group>"; };
 		A10000000 /* zMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = zMDApp.swift; sourceTree = "<group>"; };
 		A10000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A10000004 /* DocumentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentManager.swift; sourceTree = "<group>"; };
@@ -72,9 +86,16 @@
 				A10000012 /* SearchBar.swift */,
 				A1000000E /* OutlineView.swift */,
 				A10000010 /* ExportManager.swift */,
+				F1A2B3C4D5E6F7080 /* AlertManager.swift */,
+				F1A2B3C4D5E6F7082 /* FileWatcher.swift */,
+				F1A2B3C4D5E6F7084 /* MarkdownParser.swift */,
+				F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */,
+				F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */,
+				F1A2B3C4D5E6F708A /* QuickOpenView.swift */,
+				F1A2B3C4D5E6F708C /* PrintManager.swift */,
 				A1000000A /* Assets.xcassets */,
 				A1000000C /* zMD.entitlements */,
-			
+
 				7B3F07EF007F429AB9E72113 /* SettingsManager.swift */,
 				98515A5CFBA7411D8B33B552 /* SettingsView.swift */,
 				74BFD9DFBCBC4E8593B2C133 /* Resources */,
@@ -170,7 +191,14 @@ A1111111 /* zMD.app */,
 				A10000011 /* SearchBar.swift in Sources */,
 				A1000000D /* OutlineView.swift in Sources */,
 				A1000000F /* ExportManager.swift in Sources */,
-			
+				F1A2B3C4D5E6F7081 /* AlertManager.swift in Sources */,
+				F1A2B3C4D5E6F7083 /* FileWatcher.swift in Sources */,
+				F1A2B3C4D5E6F7085 /* MarkdownParser.swift in Sources */,
+				F1A2B3C4D5E6F7087 /* MarkdownTextView.swift in Sources */,
+				F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */,
+				F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */,
+				F1A2B3C4D5E6F708D /* PrintManager.swift in Sources */,
+
 				8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */,
 				9F0CF7C93C0F452694B0B0CC /* SettingsView.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;

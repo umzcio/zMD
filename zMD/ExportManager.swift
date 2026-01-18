@@ -3,6 +3,8 @@ import AppKit
 
 class ExportManager {
     static let shared = ExportManager()
+    private let parser = MarkdownParser.shared
+    private let alertManager = AlertManager.shared
 
     private init() {}
 
@@ -19,9 +21,10 @@ class ExportManager {
             DispatchQueue.main.async {
                 do {
                     // Create PDF using NSAttributedString (sandbox-friendly)
-                    let html = self.markdownToHTML(content)
+                    let html = self.parser.toHTML(content, includeStyles: true)
 
                     guard let htmlData = html.data(using: .utf8) else {
+                        self.alertManager.showExportError("PDF", reason: "Failed to encode HTML content")
                         return
                     }
 
@@ -32,6 +35,7 @@ class ExportManager {
                     ]
 
                     guard let attributedString = NSAttributedString(html: htmlData, options: options, documentAttributes: nil) else {
+                        self.alertManager.showExportError("PDF", reason: "Failed to create styled content")
                         return
                     }
 
@@ -54,10 +58,16 @@ class ExportManager {
                     )
 
                     let pdfData = NSMutableData()
-                    guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else { return }
+                    guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else {
+                        self.alertManager.showExportError("PDF", reason: "Failed to create PDF data consumer")
+                        return
+                    }
 
                     var mediaBox = pageRect
-                    guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return }
+                    guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+                        self.alertManager.showExportError("PDF", reason: "Failed to create PDF context")
+                        return
+                    }
 
                     let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
                     NSGraphicsContext.current = nsContext
@@ -105,7 +115,7 @@ class ExportManager {
 
                     try pdfData.write(to: url)
                 } catch {
-                    // Silent failure
+                    self.alertManager.showExportError("PDF", error: error)
                 }
             }
         }
@@ -121,12 +131,12 @@ class ExportManager {
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
 
-            let html = includeStyles ? self.markdownToHTML(content) : self.markdownToHTMLWithoutStyles(content)
+            let html = self.parser.toHTML(content, includeStyles: includeStyles)
 
             do {
                 try html.write(to: url, atomically: true, encoding: .utf8)
             } catch {
-                // Silent failure
+                self.alertManager.showExportError("HTML", error: error)
             }
         }
     }
@@ -143,9 +153,10 @@ class ExportManager {
 
             DispatchQueue.main.async {
                 // Convert markdown to HTML first, then to attributed string, then to RTF
-                let html = self.markdownToHTML(content)
+                let html = self.parser.toHTML(content, includeStyles: true)
 
                 guard let data = html.data(using: .utf8) else {
+                    self.alertManager.showExportError("RTF", reason: "Failed to encode HTML content")
                     return
                 }
 
@@ -157,6 +168,7 @@ class ExportManager {
                     ],
                     documentAttributes: nil
                 ) else {
+                    self.alertManager.showExportError("RTF", reason: "Failed to create styled content")
                     return
                 }
 
@@ -167,7 +179,7 @@ class ExportManager {
                     )
                     try rtfData.write(to: url)
                 } catch {
-                    // Silent failure
+                    self.alertManager.showExportError("RTF", error: error)
                 }
             }
         }
@@ -187,7 +199,7 @@ class ExportManager {
                 do {
                     try self.createCustomDOCX(content: content, outputURL: url)
                 } catch {
-                    // Silent failure
+                    self.alertManager.showExportError("DOCX", error: error)
                 }
             }
         }

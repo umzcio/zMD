@@ -3,8 +3,16 @@ import SwiftUI
 struct MarkdownView: View {
     let content: String
     var baseURL: URL? = nil
+    @Binding var scrollToHeadingId: String?
     @StateObject private var settings = SettingsManager.shared
     @EnvironmentObject var documentManager: DocumentManager
+
+    // Initialize with optional binding (default to no-op binding)
+    init(content: String, baseURL: URL? = nil, scrollToHeadingId: Binding<String?>? = nil) {
+        self.content = content
+        self.baseURL = baseURL
+        self._scrollToHeadingId = scrollToHeadingId ?? .constant(nil)
+    }
 
     // Memoize parsed elements to avoid re-parsing on every render
     private var parsedElements: [MarkdownElement] {
@@ -41,9 +49,30 @@ struct MarkdownView: View {
                         scrollToCurrentMatch(scrollProxy: scrollProxy)
                     }
                 }
+                .onChange(of: scrollToHeadingId) { headingId in
+                    if let headingId = headingId {
+                        scrollToHeading(id: headingId, scrollProxy: scrollProxy)
+                    }
+                }
             }
         }
         .textSelection(.enabled)
+    }
+
+    private func scrollToHeading(id: String, scrollProxy: ScrollViewProxy) {
+        // Find the element that matches this heading ID
+        for element in parsedElements {
+            if element.id == id {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    scrollProxy.scrollTo(element.id, anchor: .top)
+                }
+                // Clear the selection after scrolling
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    scrollToHeadingId = nil
+                }
+                break
+            }
+        }
     }
 
     private func scrollToCurrentMatch(scrollProxy: ScrollViewProxy) {
@@ -63,7 +92,7 @@ struct MarkdownView: View {
         }
     }
 
-    private func findElementContainingMatch(_ match: SearchMatch) -> UUID? {
+    private func findElementContainingMatch(_ match: SearchMatch) -> String? {
         let matchPosition = content.distance(from: content.startIndex, to: match.range.lowerBound)
         var currentPosition = 0
 
@@ -96,14 +125,15 @@ struct MarkdownView: View {
                 listItems = []
             }
 
-            if line.hasPrefix("# ") {
-                elements.append(MarkdownElement(content: .heading1(String(line.dropFirst(2)))))
-            } else if line.hasPrefix("## ") {
-                elements.append(MarkdownElement(content: .heading2(String(line.dropFirst(3)))))
+            // Headings use line index-based IDs to match OutlineView
+            if line.hasPrefix("#### ") {
+                elements.append(MarkdownElement(id: "heading-\(i)", content: .heading4(String(line.dropFirst(5)))))
             } else if line.hasPrefix("### ") {
-                elements.append(MarkdownElement(content: .heading3(String(line.dropFirst(4)))))
-            } else if line.hasPrefix("#### ") {
-                elements.append(MarkdownElement(content: .heading4(String(line.dropFirst(5)))))
+                elements.append(MarkdownElement(id: "heading-\(i)", content: .heading3(String(line.dropFirst(4)))))
+            } else if line.hasPrefix("## ") {
+                elements.append(MarkdownElement(id: "heading-\(i)", content: .heading2(String(line.dropFirst(3)))))
+            } else if line.hasPrefix("# ") {
+                elements.append(MarkdownElement(id: "heading-\(i)", content: .heading1(String(line.dropFirst(2)))))
             } else if line.hasPrefix("|") && line.hasSuffix("|") {
                 // Table detected
                 var tableRows: [[String]] = []
@@ -178,8 +208,20 @@ struct MarkdownView: View {
 }
 
 struct MarkdownElement: Identifiable {
-    let id = UUID()
+    let id: String
     let content: MarkdownContent
+
+    // Initialize with auto-generated UUID
+    init(content: MarkdownContent) {
+        self.id = UUID().uuidString
+        self.content = content
+    }
+
+    // Initialize with custom ID (used for headings to match OutlineView IDs)
+    init(id: String, content: MarkdownContent) {
+        self.id = id
+        self.content = content
+    }
 
     enum MarkdownContent {
         case heading1(String)

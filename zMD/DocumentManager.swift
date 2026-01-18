@@ -14,11 +14,21 @@ class DocumentManager: ObservableObject {
     @Published var currentMatchIndex: Int = 0
     @Published var searchMatches: [SearchMatch] = []
 
+    // File watching
+    private var fileWatchers: [UUID: FileWatcher] = [:]
+    private var ignoreAllFileChanges = false
+
+    // Reading position memory
+    private var scrollPositions: [String: CGFloat] = [:]
+    private let scrollPositionsKey = "DocumentScrollPositions"
+
     private let maxRecentFiles = 10
     private let recentFilesKey = "RecentMarkdownFiles"
+    private let alertManager = AlertManager.shared
 
     init() {
         loadRecentFiles()
+        loadScrollPositions()
     }
 
     func openFile() {
@@ -47,15 +57,96 @@ class DocumentManager: ObservableObject {
         }
 
         do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            let document = MarkdownDocument(url: url, content: content)
+            // Read file data first
+            let data = try Data(contentsOf: url)
+
+            // Try UTF-8 first (most common for markdown)
+            var content: String?
+
+            if let str = String(data: data, encoding: .utf8) {
+                content = str
+            }
+            // Then try Windows encodings (common for files from Windows)
+            else if let str = String(data: data, encoding: .windowsCP1252) {
+                content = str
+            }
+            // Then ISO Latin-1
+            else if let str = String(data: data, encoding: .isoLatin1) {
+                content = str
+            }
+            // Then Mac Roman
+            else if let str = String(data: data, encoding: .macOSRoman) {
+                content = str
+            }
+            // UTF-16 only if file starts with BOM
+            else if data.count >= 2 && (data[0] == 0xFF && data[1] == 0xFE || data[0] == 0xFE && data[1] == 0xFF) {
+                content = String(data: data, encoding: .utf16)
+            }
+            // Last resort: lossy UTF-8
+            else {
+                content = String(decoding: data, as: UTF8.self)
+            }
+
+            guard let fileContent = content else {
+                throw NSError(domain: "DocumentManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to decode file with any supported encoding"])
+            }
+
+            let document = MarkdownDocument(url: url, content: fileContent)
             openDocuments.append(document)
             selectedDocumentId = document.id
+
+            // Start file watching
+            startWatchingFile(for: document)
 
             // Add to recent files
             addToRecentFiles(url: url)
         } catch {
-            print("Error loading file: \(error)")
+            alertManager.showFileLoadError(url: url, error: error)
+        }
+    }
+
+    // MARK: - File Watching
+
+    private func startWatchingFile(for document: MarkdownDocument) {
+        let watcher = FileWatcher(url: document.url)
+        watcher.delegate = self
+        watcher.startWatching()
+        fileWatchers[document.id] = watcher
+    }
+
+    private func stopWatchingFile(for document: MarkdownDocument) {
+        fileWatchers[document.id]?.stopWatching()
+        fileWatchers.removeValue(forKey: document.id)
+    }
+
+    func reloadDocument(_ document: MarkdownDocument) {
+        guard let data = try? Data(contentsOf: document.url) else {
+            alertManager.showFileLoadError(url: document.url, error: NSError(domain: "DocumentManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to read file"]))
+            return
+        }
+
+        // Try encodings in order
+        var content: String?
+        if let str = String(data: data, encoding: .utf8) {
+            content = str
+        } else if let str = String(data: data, encoding: .windowsCP1252) {
+            content = str
+        } else if let str = String(data: data, encoding: .isoLatin1) {
+            content = str
+        } else {
+            content = String(decoding: data, as: UTF8.self)
+        }
+
+        guard let fileContent = content else {
+            alertManager.showFileLoadError(url: document.url, error: NSError(domain: "DocumentManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to decode file"]))
+            return
+        }
+
+        // Update the document in the array
+        if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
+            fileWatchers[document.id]?.ignoreNextChange = true
+            let newDocument = MarkdownDocument(id: document.id, url: document.url, content: fileContent)
+            openDocuments[index] = newDocument
         }
     }
 
@@ -100,12 +191,37 @@ class DocumentManager: ObservableObject {
         saveRecentFiles()
     }
 
+    // MARK: - Scroll Position Memory
+
+    private func loadScrollPositions() {
+        if let data = UserDefaults.standard.dictionary(forKey: scrollPositionsKey) as? [String: Double] {
+            scrollPositions = data.mapValues { CGFloat($0) }
+        }
+    }
+
+    private func saveScrollPositions() {
+        let data = scrollPositions.mapValues { Double($0) }
+        UserDefaults.standard.set(data, forKey: scrollPositionsKey)
+    }
+
+    func getScrollPosition(for url: URL) -> CGFloat {
+        return scrollPositions[url.path] ?? 0
+    }
+
+    func setScrollPosition(_ position: CGFloat, for url: URL) {
+        scrollPositions[url.path] = position
+        saveScrollPositions()
+    }
+
     func closeDocument(_ document: MarkdownDocument) {
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             // Clear search state if closing the document being searched
             if document.id == selectedDocumentId && isSearching {
                 endSearch()
             }
+
+            // Stop file watching
+            stopWatchingFile(for: document)
 
             openDocuments.remove(at: index)
 
@@ -122,6 +238,11 @@ class DocumentManager: ObservableObject {
         // Clear search when closing multiple tabs
         if isSearching {
             endSearch()
+        }
+
+        // Stop file watching for closed documents
+        for doc in openDocuments where doc.id != document.id {
+            stopWatchingFile(for: doc)
         }
 
         openDocuments.removeAll(where: { $0.id != document.id })
@@ -242,9 +363,21 @@ class DocumentManager: ObservableObject {
 }
 
 struct MarkdownDocument: Identifiable {
-    let id = UUID()
+    let id: UUID
     let url: URL
     let content: String
+
+    init(url: URL, content: String) {
+        self.id = UUID()
+        self.url = url
+        self.content = content
+    }
+
+    init(id: UUID, url: URL, content: String) {
+        self.id = id
+        self.url = url
+        self.content = content
+    }
 
     var name: String {
         url.lastPathComponent
@@ -318,5 +451,46 @@ extension DocumentManager {
     func previousMatch() {
         guard !searchMatches.isEmpty else { return }
         currentMatchIndex = (currentMatchIndex - 1 + searchMatches.count) % searchMatches.count
+    }
+}
+
+// MARK: - File Watcher Delegate
+
+extension DocumentManager: FileWatcherDelegate {
+    func fileWatcher(_ watcher: FileWatcher, fileDidChange url: URL) {
+        guard !ignoreAllFileChanges else { return }
+
+        // Find the document that corresponds to this URL
+        guard let document = openDocuments.first(where: { $0.url == url }) else { return }
+
+        // Ask user what to do
+        let action = alertManager.showFileChangedDialog(fileName: url.lastPathComponent)
+
+        switch action {
+        case .reload:
+            reloadDocument(document)
+        case .ignore:
+            // Do nothing, but update the watcher's timestamp
+            watcher.ignoreNextChange = true
+        case .ignoreAll:
+            ignoreAllFileChanges = true
+        }
+    }
+
+    func fileWatcher(_ watcher: FileWatcher, fileWasDeleted url: URL) {
+        // Find the document that corresponds to this URL
+        guard let document = openDocuments.first(where: { $0.url == url }) else { return }
+
+        // Show warning that file was deleted
+        let shouldClose = alertManager.showConfirmation(
+            title: "File Deleted",
+            message: "\"\(url.lastPathComponent)\" has been deleted. Do you want to close this tab?",
+            confirmButton: "Close Tab",
+            cancelButton: "Keep Open"
+        )
+
+        if shouldClose {
+            closeDocument(document)
+        }
     }
 }

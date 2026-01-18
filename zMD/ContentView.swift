@@ -4,6 +4,7 @@ struct ContentView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @State private var showOutline = false
     @State private var selectedHeadingId: String?
+    @State private var showQuickOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,7 +54,19 @@ struct ContentView: View {
                             OutlineView(content: document.content, selectedHeadingId: $selectedHeadingId)
                             Divider()
                         }
-                        MarkdownView(content: document.content, baseURL: document.url)
+                        MarkdownTextView(
+                            content: document.content,
+                            baseURL: document.url,
+                            scrollToHeadingId: $selectedHeadingId,
+                            searchText: documentManager.isSearching ? documentManager.searchText : "",
+                            currentMatchIndex: documentManager.currentMatchIndex,
+                            searchMatches: documentManager.searchMatches,
+                            fontStyle: SettingsManager.shared.fontStyle,
+                            initialScrollPosition: documentManager.getScrollPosition(for: document.url),
+                            onScrollPositionChanged: { position in
+                                documentManager.setScrollPosition(position, for: document.url)
+                            }
+                        )
                     }
                 } else {
                     EmptyDocumentView()
@@ -63,7 +76,19 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 600, minHeight: 400)
+        .overlay {
+            QuickOpenOverlay(isPresented: $showQuickOpen)
+                .environmentObject(documentManager)
+        }
+        .keyboardShortcut("o", modifiers: [.command, .shift])
+        .onReceive(NotificationCenter.default.publisher(for: .showQuickOpen)) { _ in
+            showQuickOpen = true
+        }
     }
+}
+
+extension Notification.Name {
+    static let showQuickOpen = Notification.Name("showQuickOpen")
 }
 
 struct WelcomeView: View {
