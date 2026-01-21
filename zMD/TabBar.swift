@@ -93,6 +93,12 @@ struct TabItem: View {
             documentManager.selectedDocumentId = document.id
         }
         .contextMenu {
+            Button("Refresh") {
+                documentManager.reloadDocument(document)
+            }
+
+            Divider()
+
             Button("Close Tab") {
                 documentManager.closeDocument(document)
             }
@@ -103,15 +109,9 @@ struct TabItem: View {
 
             Divider()
 
-            Button("Move Tab to New Window") {
-                // TODO: Implement move to new window
+            Button("Reveal in Finder") {
+                documentManager.revealInFinder(document: document)
             }
-            .disabled(true)
-
-            Button("Show All Tabs") {
-                // TODO: Implement show all tabs
-            }
-            .disabled(true)
         }
     }
 }

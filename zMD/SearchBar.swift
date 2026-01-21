@@ -24,7 +24,7 @@ struct SearchBar: View {
                 .focused($isSearchFieldFocused)
                 .frame(minWidth: 150)
                 .onSubmit {
-                    onSearch()
+                    onNext()
                 }
 
             // Match counter

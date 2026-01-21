@@ -19,11 +19,9 @@ struct ContentView: View {
                     SearchBar(
                         searchText: $documentManager.searchText,
                         isSearching: $documentManager.isSearching,
-                        currentMatch: documentManager.currentMatchIndex + 1,
-                        totalMatches: documentManager.searchMatches.count,
-                        onSearch: {
-                            documentManager.performSearch()
-                        },
+                        currentMatch: documentManager.renderedMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
+                        totalMatches: documentManager.renderedMatchCount,
+                        onSearch: { },
                         onNext: {
                             documentManager.nextMatch()
                         },
@@ -35,13 +33,6 @@ struct ContentView: View {
                         }
                     )
                     .padding(8)
-                    .task(id: documentManager.searchText) {
-                        // Debounce search - wait for user to stop typing
-                        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
-                        if !Task.isCancelled {
-                            documentManager.performSearch()
-                        }
-                    }
 
                     Divider()
                 }
@@ -65,6 +56,9 @@ struct ContentView: View {
                             initialScrollPosition: documentManager.getScrollPosition(for: document.url),
                             onScrollPositionChanged: { position in
                                 documentManager.setScrollPosition(position, for: document.url)
+                            },
+                            onMatchCountChanged: { count in
+                                documentManager.setRenderedMatchCount(count)
                             }
                         )
                     }

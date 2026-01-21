@@ -167,6 +167,21 @@ struct zMDApp: App {
                 }
             }
 
+            CommandGroup(replacing: .toolbar) {
+                Button("Refresh") {
+                    documentManager.refreshCurrentDocument()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(documentManager.openDocuments.isEmpty)
+
+                Divider()
+
+                Button("Resume File Watching") {
+                    documentManager.resumeFileWatching()
+                }
+                .disabled(!documentManager.ignoreAllFileChanges)
+            }
+
             CommandMenu("Tab") {
                 Button("Close Tab") {
                     if let selectedId = documentManager.selectedDocumentId,
@@ -175,6 +190,12 @@ struct zMDApp: App {
                     }
                 }
                 .keyboardShortcut("w", modifiers: .command)
+                .disabled(documentManager.openDocuments.isEmpty)
+
+                Button("Refresh Tab") {
+                    documentManager.refreshCurrentDocument()
+                }
+                .keyboardShortcut("r", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
 
                 Divider()

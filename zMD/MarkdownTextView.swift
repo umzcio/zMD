@@ -12,8 +12,9 @@ struct MarkdownTextView: NSViewRepresentable {
     let fontStyle: SettingsManager.FontStyle
     let initialScrollPosition: CGFloat
     let onScrollPositionChanged: ((CGFloat) -> Void)?
+    let onMatchCountChanged: ((Int) -> Void)?
 
-    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil) {
+    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil) {
         self.content = content
         self.baseURL = baseURL
         self._scrollToHeadingId = scrollToHeadingId
@@ -23,6 +24,7 @@ struct MarkdownTextView: NSViewRepresentable {
         self.fontStyle = fontStyle
         self.initialScrollPosition = initialScrollPosition
         self.onScrollPositionChanged = onScrollPositionChanged
+        self.onMatchCountChanged = onMatchCountChanged
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -45,6 +47,7 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
         context.coordinator.onScrollPositionChanged = onScrollPositionChanged
+        context.coordinator.onMatchCountChanged = onMatchCountChanged
 
         // Set up scroll notification
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -63,19 +66,43 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Check if content changed
         let contentChanged = context.coordinator.lastContent != content
+        let searchChanged = context.coordinator.lastSearchText != searchText
+        let matchIndexChanged = context.coordinator.lastMatchIndex != currentMatchIndex
 
-        // Build attributed string from markdown
-        if contentChanged {
+        // Build attributed string from markdown (when content or search changes)
+        if contentChanged || searchChanged {
             let attributedString = buildAttributedString()
             textView.textStorage?.setAttributedString(attributedString)
             context.coordinator.lastContent = content
+            context.coordinator.lastSearchText = searchText
 
-            // Restore scroll position after content is set
-            if initialScrollPosition > 0 {
+            // Find and store all match ranges in the rendered text
+            if !searchText.isEmpty {
+                context.coordinator.findMatchRanges(for: searchText, in: textView)
+            } else {
+                context.coordinator.matchRanges = []
+            }
+
+            // Restore scroll position after content is set (only if not searching)
+            if initialScrollPosition > 0 && searchText.isEmpty {
                 DispatchQueue.main.async {
                     context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
                 }
             }
+
+            // Scroll to first match if searching
+            if !searchText.isEmpty && !context.coordinator.matchRanges.isEmpty {
+                DispatchQueue.main.async {
+                    context.coordinator.scrollToMatch(at: currentMatchIndex, in: textView)
+                }
+            }
+        }
+
+        // Handle match navigation (scroll and update highlight)
+        if matchIndexChanged && !searchText.isEmpty {
+            context.coordinator.lastMatchIndex = currentMatchIndex
+            context.coordinator.updateMatchHighlighting(currentIndex: currentMatchIndex, in: textView, searchText: searchText)
+            context.coordinator.scrollToMatch(at: currentMatchIndex, in: textView)
         }
 
         // Handle scroll to heading
@@ -96,7 +123,11 @@ struct MarkdownTextView: NSViewRepresentable {
         var scrollView: NSScrollView?
         var headingRanges: [String: NSRange] = [:]
         var lastContent: String?
+        var lastSearchText: String?
+        var lastMatchIndex: Int = -1
+        var matchRanges: [NSRange] = []
         var onScrollPositionChanged: ((CGFloat) -> Void)?
+        var onMatchCountChanged: ((Int) -> Void)?
         private var scrollDebounceTimer: Timer?
 
         func scrollToHeading(id: String, in textView: NSTextView) {
@@ -116,6 +147,96 @@ struct MarkdownTextView: NSViewRepresentable {
             let clampedPosition = min(position, maxScroll)
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: clampedPosition))
             scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
+        // MARK: - Search Methods
+
+        func findMatchRanges(for searchText: String, in textView: NSTextView) {
+            matchRanges = []
+            guard let storage = textView.textStorage, !searchText.isEmpty else {
+                onMatchCountChanged?(0)
+                return
+            }
+
+            let string = storage.string as NSString
+            var searchRange = NSRange(location: 0, length: string.length)
+
+            while searchRange.location < string.length {
+                let range = string.range(of: searchText, options: .caseInsensitive, range: searchRange)
+                guard range.location != NSNotFound else { break }
+
+                matchRanges.append(range)
+                searchRange.location = range.location + range.length
+                searchRange.length = string.length - searchRange.location
+            }
+
+            // Report match count back
+            onMatchCountChanged?(matchRanges.count)
+        }
+
+        func scrollToMatch(at index: Int, in textView: NSTextView) {
+            guard index >= 0 && index < matchRanges.count else { return }
+            let range = matchRanges[index]
+
+            // Clear any selection so it doesn't override the yellow highlight
+            textView.setSelectedRange(NSRange(location: range.location, length: 0))
+
+            // Get the rect for this text range
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else {
+                textView.scrollRangeToVisible(range)
+                return
+            }
+
+            // Get the bounding rect for the match
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let matchRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+
+            // Adjust for text container inset
+            let inset = textView.textContainerInset
+            let adjustedRect = NSRect(
+                x: matchRect.origin.x + inset.width,
+                y: matchRect.origin.y + inset.height,
+                width: matchRect.width,
+                height: matchRect.height
+            )
+
+            // Get the scroll view and its visible height
+            guard let scrollView = textView.enclosingScrollView else {
+                textView.scrollRangeToVisible(range)
+                return
+            }
+
+            let visibleHeight = scrollView.contentView.bounds.height
+
+            // Calculate scroll position to center the match vertically
+            let targetY = adjustedRect.origin.y - (visibleHeight / 2) + (adjustedRect.height / 2)
+            let maxY = max(0, textView.frame.height - visibleHeight)
+            let clampedY = min(max(0, targetY), maxY)
+
+            // Scroll to center the match
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: clampedY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
+        func updateMatchHighlighting(currentIndex: Int, in textView: NSTextView, searchText: String) {
+            guard let storage = textView.textStorage else { return }
+
+            // Remove all previous yellow highlighting
+            let fullRange = NSRange(location: 0, length: storage.length)
+            storage.removeAttribute(.backgroundColor, range: fullRange)
+
+            // Re-apply highlighting to all matches
+            for (index, range) in matchRanges.enumerated() {
+                let isCurrent = index == currentIndex
+                // Use bright orange for current match, light yellow for others
+                let bgColor = isCurrent ? NSColor.systemOrange : NSColor.systemYellow.withAlphaComponent(0.5)
+
+                storage.addAttributes([
+                    .backgroundColor: bgColor,
+                    .foregroundColor: NSColor.black
+                ], range: range)
+            }
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
@@ -652,7 +773,7 @@ struct MarkdownTextView: NSViewRepresentable {
     // MARK: - Search Highlighting
 
     private func applySearchHighlighting(to result: NSMutableAttributedString) {
-        guard !searchText.isEmpty, !searchMatches.isEmpty else { return }
+        guard !searchText.isEmpty else { return }
 
         let string = result.string as NSString
         var searchRange = NSRange(location: 0, length: string.length)
@@ -663,7 +784,8 @@ struct MarkdownTextView: NSViewRepresentable {
             guard range.location != NSNotFound else { break }
 
             let isCurrent = matchIndex == currentMatchIndex
-            let bgColor = isCurrent ? NSColor.yellow : NSColor.yellow.withAlphaComponent(0.4)
+            // Use bright orange for current match, light yellow for others
+            let bgColor = isCurrent ? NSColor.systemOrange : NSColor.systemYellow.withAlphaComponent(0.5)
 
             result.addAttributes([
                 .backgroundColor: bgColor,

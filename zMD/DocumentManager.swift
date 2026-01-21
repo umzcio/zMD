@@ -13,10 +13,11 @@ class DocumentManager: ObservableObject {
     @Published var searchText: String = ""
     @Published var currentMatchIndex: Int = 0
     @Published var searchMatches: [SearchMatch] = []
+    @Published var renderedMatchCount: Int = 0
 
     // File watching
     private var fileWatchers: [UUID: FileWatcher] = [:]
-    private var ignoreAllFileChanges = false
+    @Published var ignoreAllFileChanges = false
 
     // Reading position memory
     private var scrollPositions: [String: CGFloat] = [:]
@@ -213,6 +214,22 @@ class DocumentManager: ObservableObject {
         saveScrollPositions()
     }
 
+    // MARK: - File Watching Control
+
+    func resumeFileWatching() {
+        ignoreAllFileChanges = false
+    }
+
+    // MARK: - Refresh/Reload
+
+    func refreshCurrentDocument() {
+        guard let selectedId = selectedDocumentId,
+              let document = openDocuments.first(where: { $0.id == selectedId }) else {
+            return
+        }
+        reloadDocument(document)
+    }
+
     func closeDocument(_ document: MarkdownDocument) {
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             // Clear search state if closing the document being searched
@@ -403,6 +420,7 @@ extension DocumentManager {
         searchText = ""
         searchMatches = []
         currentMatchIndex = 0
+        renderedMatchCount = 0
     }
 
     func performSearch() {
@@ -444,13 +462,21 @@ extension DocumentManager {
     }
 
     func nextMatch() {
-        guard !searchMatches.isEmpty else { return }
-        currentMatchIndex = (currentMatchIndex + 1) % searchMatches.count
+        guard renderedMatchCount > 0 else { return }
+        currentMatchIndex = (currentMatchIndex + 1) % renderedMatchCount
     }
 
     func previousMatch() {
-        guard !searchMatches.isEmpty else { return }
-        currentMatchIndex = (currentMatchIndex - 1 + searchMatches.count) % searchMatches.count
+        guard renderedMatchCount > 0 else { return }
+        currentMatchIndex = (currentMatchIndex - 1 + renderedMatchCount) % renderedMatchCount
+    }
+
+    func setRenderedMatchCount(_ count: Int) {
+        renderedMatchCount = count
+        // Reset index if it's out of bounds
+        if currentMatchIndex >= count {
+            currentMatchIndex = 0
+        }
     }
 }
 
