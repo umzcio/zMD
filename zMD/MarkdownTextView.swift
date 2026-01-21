@@ -84,9 +84,14 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             // Restore scroll position after content is set (only if not searching)
-            if initialScrollPosition > 0 && searchText.isEmpty {
-                DispatchQueue.main.async {
+            DispatchQueue.main.async {
+                if initialScrollPosition > 10 && searchText.isEmpty {
+                    // Restore saved position
                     context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
+                } else if searchText.isEmpty {
+                    // Scroll to top for new documents
+                    scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                    scrollView.reflectScrolledClipView(scrollView.contentView)
                 }
             }
 
