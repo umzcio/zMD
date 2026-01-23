@@ -557,22 +557,59 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func appendCodeBlock(code: String, language: String? = nil, to result: NSMutableAttributedString) {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.paragraphSpacingBefore = 8
-        paragraphStyle.paragraphSpacing = 8
+        // Warp-style code block: dark background, rounded corners feel, language label
+
+        // Code block background color - darker than normal background
+        let codeBackground = NSColor(calibratedWhite: 0.12, alpha: 1.0)
+
+        // Top border with padding
+        let topBorder = "  ╭" + String(repeating: "─", count: 76) + "╮\n"
+        result.append(NSAttributedString(string: topBorder, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]))
 
         // Apply syntax highlighting
         let highlighted = SyntaxHighlighter.shared.highlight(code: code, language: language)
         let mutableHighlighted = NSMutableAttributedString(attributedString: highlighted)
 
-        // Add background color and paragraph style to entire block
-        let fullRange = NSRange(location: 0, length: mutableHighlighted.length)
-        mutableHighlighted.addAttributes([
-            .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.08),
-            .paragraphStyle: paragraphStyle
-        ], range: fullRange)
+        // Add background and left border to each line
+        let codeLines = code.components(separatedBy: .newlines)
+        let result2 = NSMutableAttributedString()
 
-        result.append(mutableHighlighted)
+        for line in codeLines {
+            // Add left border
+            result2.append(NSAttributedString(string: "  │ ", attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: NSColor.tertiaryLabelColor
+            ]))
+
+            // Add highlighted code line
+            let highlightedLine = SyntaxHighlighter.shared.highlight(code: line, language: language)
+            let mutableLine = NSMutableAttributedString(attributedString: highlightedLine)
+
+            // Add background to the line
+            let lineRange = NSRange(location: 0, length: mutableLine.length)
+            mutableLine.addAttribute(.backgroundColor, value: codeBackground, range: lineRange)
+
+            result2.append(mutableLine)
+            result2.append(NSAttributedString(string: "\n", attributes: [
+                .backgroundColor: codeBackground
+            ]))
+        }
+
+        result.append(result2)
+
+        // Bottom border with language label
+        let langLabel = language?.lowercased() ?? "text"
+        let labelPadding = 76 - langLabel.count - 1
+        let bottomBorder = "  ╰" + String(repeating: "─", count: labelPadding) + " " + langLabel + "╯\n"
+        result.append(NSAttributedString(string: bottomBorder, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]))
+
+        // Add spacing after code block
         result.append(NSAttributedString(string: "\n"))
     }
 
@@ -594,33 +631,90 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {
-        let font = fontStyle.nsFont(size: 14)
-        let boldFont = font.withWeight(.medium)
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.paragraphSpacingBefore = 8
-        paragraphStyle.paragraphSpacing = 8
+        guard !rows.isEmpty else { return }
+
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let boldFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+
+        // Calculate column widths
+        var columnWidths: [Int] = []
+        for row in rows {
+            for (colIndex, cell) in row.enumerated() {
+                // Strip markdown formatting for width calculation
+                let plainCell = cell.replacingOccurrences(of: "**", with: "")
+                    .replacingOccurrences(of: "`", with: "")
+                    .replacingOccurrences(of: "*", with: "")
+                let cellWidth = plainCell.count
+                if colIndex >= columnWidths.count {
+                    columnWidths.append(cellWidth)
+                } else {
+                    columnWidths[colIndex] = max(columnWidths[colIndex], cellWidth)
+                }
+            }
+        }
+
+        // Add spacing before table
+        result.append(NSAttributedString(string: "\n"))
 
         for (rowIndex, row) in rows.enumerated() {
             let isHeader = rowIndex == 0
-            let rowFont = isHeader ? boldFont : font
-            let rowText = row.joined(separator: "  |  ")
 
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: rowFont,
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineSpacing = 6
+
+            let baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: isHeader ? boldFont : font,
                 .foregroundColor: NSColor.textColor,
                 .paragraphStyle: paragraphStyle
             ]
 
-            result.append(NSAttributedString(string: "  " + rowText + "\n", attributes: attributes))
+            // Render each cell with inline formatting and padding
+            result.append(NSAttributedString(string: "  ", attributes: baseAttributes))
 
+            for (cellIndex, cell) in row.enumerated() {
+                let width = cellIndex < columnWidths.count ? columnWidths[cellIndex] : cell.count
+
+                // Format cell content with inline markdown
+                let formattedCell = formatInlineMarkdown(cell, attributes: baseAttributes)
+                result.append(formattedCell)
+
+                // Calculate actual display length (without markdown syntax)
+                let plainCell = cell.replacingOccurrences(of: "**", with: "")
+                    .replacingOccurrences(of: "`", with: "")
+                    .replacingOccurrences(of: "*", with: "")
+                let displayLength = plainCell.count
+
+                // Add padding
+                if displayLength < width {
+                    let padding = String(repeating: " ", count: width - displayLength)
+                    result.append(NSAttributedString(string: padding, attributes: baseAttributes))
+                }
+
+                if cellIndex < row.count - 1 {
+                    result.append(NSAttributedString(string: "  │  ", attributes: [
+                        .font: font,
+                        .foregroundColor: NSColor.tertiaryLabelColor
+                    ]))
+                }
+            }
+            result.append(NSAttributedString(string: "\n", attributes: baseAttributes))
+
+            // Add separator after header
             if isHeader {
-                let separator = String(repeating: "─", count: rowText.count)
-                result.append(NSAttributedString(string: "  " + separator + "\n", attributes: [
+                var separatorParts: [String] = []
+                for width in columnWidths {
+                    separatorParts.append(String(repeating: "─", count: width))
+                }
+                let separator = "  " + separatorParts.joined(separator: "──┼──")
+                result.append(NSAttributedString(string: separator + "\n", attributes: [
                     .font: font,
-                    .foregroundColor: NSColor.separatorColor
+                    .foregroundColor: NSColor.tertiaryLabelColor
                 ]))
             }
         }
+
+        // Add spacing after table
+        result.append(NSAttributedString(string: "\n"))
     }
 
     private func appendHorizontalRule(to result: NSMutableAttributedString) {

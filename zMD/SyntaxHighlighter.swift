@@ -51,12 +51,38 @@ class SyntaxHighlighter {
         "true", "false", "inline", "restrict", "auto"
     ])
 
+    private let javaKeywords = Set([
+        "public", "private", "protected", "class", "interface", "extends", "implements",
+        "abstract", "final", "static", "void", "int", "long", "double", "float",
+        "boolean", "char", "byte", "short", "String", "new", "return", "if", "else",
+        "for", "while", "do", "switch", "case", "default", "break", "continue",
+        "try", "catch", "finally", "throw", "throws", "import", "package", "this",
+        "super", "null", "true", "false", "instanceof", "synchronized", "volatile",
+        "transient", "native", "enum", "assert", "var", "record", "sealed", "permits"
+    ])
+
     private let bashKeywords = Set([
         "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case",
         "esac", "function", "return", "exit", "echo", "read", "local", "export",
         "source", "alias", "unalias", "set", "unset", "shift", "true", "false",
         "cd", "pwd", "ls", "cp", "mv", "rm", "mkdir", "rmdir", "cat", "grep",
         "sed", "awk", "find", "xargs", "sort", "uniq", "wc", "head", "tail"
+    ])
+
+    // File extensions to highlight
+    private let fileExtensions = Set([
+        "java", "xml", "swift", "py", "js", "ts", "json", "yaml", "yml",
+        "md", "txt", "html", "css", "scss", "sh", "bash", "c", "cpp", "h",
+        "go", "rs", "rb", "php", "sql", "gradle", "pom", "properties",
+        "conf", "cfg", "ini", "toml", "lock", "gitignore", "dockerfile"
+    ])
+
+    // Special action/status keywords for tree output
+    private let actionKeywords = Set([
+        "MAJOR", "REWRITE", "Update", "Review", "Add", "Remove", "Fix",
+        "Verify", "Test", "Check", "SECURITY", "FIX", "TODO", "NOTE",
+        "WARNING", "ERROR", "CRITICAL", "interface", "class", "enum",
+        "struct", "protocol", "LOC", "files", "dependencies", "changes"
     ])
 
     private let sqlKeywords = Set([
@@ -79,7 +105,12 @@ class SyntaxHighlighter {
             .foregroundColor: NSColor.textColor
         ])
 
-        guard let lang = language?.lowercased() else {
+        // Handle nil/empty language - check for tree structure
+        let lang = language?.lowercased() ?? ""
+        if lang.isEmpty {
+            if looksLikeTree(code) {
+                highlightTree(result)
+            }
             return result
         }
 
@@ -93,8 +124,17 @@ class SyntaxHighlighter {
             highlightGeneric(result, keywords: jsKeywords)
         case "c", "cpp", "c++", "objc", "objective-c":
             highlightGeneric(result, keywords: cKeywords)
+        case "java", "kotlin":
+            highlightGeneric(result, keywords: javaKeywords)
         case "bash", "sh", "shell", "zsh":
-            highlightBash(result)
+            // Check if it looks like a tree/directory structure
+            if looksLikeTree(code) {
+                highlightTree(result)
+            } else {
+                highlightBash(result)
+            }
+        case "tree", "directory", "output":
+            highlightTree(result)
         case "sql":
             highlightSQL(result)
         case "json":
@@ -102,8 +142,13 @@ class SyntaxHighlighter {
         case "html", "xml":
             highlightHTML(result)
         default:
-            // Generic highlighting for unknown languages
-            highlightGeneric(result, keywords: swiftKeywords.union(jsKeywords).union(pythonKeywords))
+            // Check if it looks like a tree structure
+            if looksLikeTree(code) {
+                highlightTree(result)
+            } else {
+                // Generic highlighting for unknown languages
+                highlightGeneric(result, keywords: swiftKeywords.union(jsKeywords).union(pythonKeywords))
+            }
         }
 
         return result
@@ -112,8 +157,6 @@ class SyntaxHighlighter {
     // MARK: - Language-specific Highlighters
 
     private func highlightGeneric(_ result: NSMutableAttributedString, keywords: Set<String>) {
-        let text = result.string
-
         // Highlight strings (double and single quoted)
         highlightPattern(#""[^"\\]*(?:\\.[^"\\]*)*""#, in: result, color: stringColor)
         highlightPattern(#"'[^'\\]*(?:\\.[^'\\]*)*'"#, in: result, color: stringColor)
@@ -219,6 +262,65 @@ class SyntaxHighlighter {
 
         // Comments
         highlightPattern(#"<!--[\s\S]*?-->"#, in: result, color: commentColor)
+    }
+
+    /// Check if code looks like a tree/directory structure
+    private func looksLikeTree(_ code: String) -> Bool {
+        let treeChars = ["├", "└", "│", "─", "├──", "└──"]
+        let lines = code.components(separatedBy: .newlines)
+        var treeLineCount = 0
+
+        for line in lines {
+            for char in treeChars {
+                if line.contains(char) {
+                    treeLineCount += 1
+                    break
+                }
+            }
+        }
+
+        // If more than 30% of lines contain tree characters, treat as tree
+        return lines.count > 0 && Double(treeLineCount) / Double(lines.count) > 0.3
+    }
+
+    /// Highlight tree/directory structure output (like from `tree` command or code structure diagrams)
+    private func highlightTree(_ result: NSMutableAttributedString) {
+        // Define bright colors for tree output - Warp-style
+        let fileColor = NSColor(red: 0.4, green: 0.9, blue: 0.4, alpha: 1.0)  // Bright green for files
+        let labelColor = NSColor(red: 0.9, green: 0.9, blue: 0.4, alpha: 1.0) // Yellow for labels
+        let treeCharColor = NSColor(white: 0.5, alpha: 1.0)  // Medium gray for tree chars
+        let actionColor = NSColor(red: 0.4, green: 0.9, blue: 0.9, alpha: 1.0) // Cyan for keywords
+        let arrowColor = NSColor(red: 0.9, green: 0.5, blue: 0.7, alpha: 1.0)  // Pink for arrows
+
+        // 1. Highlight tree drawing characters (using alternation for Unicode safety)
+        highlightPattern("├──|└──|│|─|├|└", in: result, color: treeCharColor)
+
+        // 2. Highlight filenames with common extensions
+        let filePattern = #"\b\w+\.(java|xml|swift|py|js|ts|json|yaml|yml|md|txt|html|css|sh|c|cpp|h|go|rs|properties|gradle)\b:?"#
+        highlightPattern(filePattern, in: result, color: fileColor)
+
+        // 3. Highlight labels ending with colon (like "pom.xml:" or "Source files:")
+        highlightPattern(#"\b[\w\s]+:"#, in: result, color: labelColor)
+
+        // 5. Highlight numbers
+        highlightPattern(#"\b\d+\b"#, in: result, color: numberColor)
+
+        // 6. Highlight action/status keywords
+        for keyword in actionKeywords {
+            highlightWord(keyword, in: result, color: actionColor)
+        }
+
+        // 7. Highlight arrows
+        highlightPattern("→|->|=>|←|<-", in: result, color: arrowColor)
+
+        // 8. Highlight version numbers (like 1.0.6, 2.3.x, 5.x)
+        highlightPattern(#"\d+\.\d+[\.\dx]*"#, in: result, color: stringColor)
+
+        // 9. Highlight Java/code keywords that appear in tree
+        let codeKeywords = ["API", "SDK", "LDAP", "HTTP", "SSL", "JWT", "OIDC", "Java", "Spring"]
+        for keyword in codeKeywords {
+            highlightWord(keyword, in: result, color: typeColor)
+        }
     }
 
     // MARK: - Helpers
