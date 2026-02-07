@@ -4,6 +4,7 @@ import SwiftUI
 struct zMDApp: App {
     @StateObject private var documentManager = DocumentManager.shared
     @StateObject private var settings = SettingsManager.shared
+    @StateObject private var folderManager = FolderManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var showingHelp = false
 
@@ -15,6 +16,7 @@ struct zMDApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(documentManager)
+                .environmentObject(folderManager)
                 .preferredColorScheme(settings.colorScheme)
                 .onAppear {
                     // Set up window delegate after window is created
@@ -25,6 +27,8 @@ struct zMDApp: App {
                             window.delegate = delegate
                         }
                     }
+                    // Restore last-opened folder
+                    folderManager.restoreFolder()
                 }
                 .sheet(isPresented: $showingHelp) {
                     HelpView()
@@ -50,6 +54,16 @@ struct zMDApp: App {
                     NotificationCenter.default.post(name: .showQuickOpen, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Button("Open Folder...") {
+                    folderManager.openFolder()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .option])
+
+                Button("Close Folder") {
+                    folderManager.closeFolder()
+                }
+                .disabled(folderManager.folderURL == nil)
 
                 Menu("Open Recent") {
                     if documentManager.recentFileURLs.isEmpty {
@@ -165,6 +179,31 @@ struct zMDApp: App {
                     }
                     .disabled(documentManager.openDocuments.isEmpty)
                 }
+            }
+
+            CommandGroup(after: .saveItem) {
+                Button("Save") {
+                    documentManager.saveCurrentDocument()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(documentManager.openDocuments.isEmpty)
+            }
+
+            CommandMenu("View") {
+                Button("Preview Mode") {
+                    documentManager.viewMode = .preview
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Source Mode") {
+                    documentManager.viewMode = .source
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Split Mode") {
+                    documentManager.viewMode = .split
+                }
+                .keyboardShortcut("3", modifiers: .command)
             }
 
             CommandGroup(replacing: .toolbar) {
@@ -307,6 +346,18 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
         if !documentManager.openDocuments.isEmpty {
             if let selectedId = documentManager.selectedDocumentId,
                let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
+                // Warn about unsaved changes
+                if document.isDirty {
+                    let shouldSave = AlertManager.shared.showConfirmation(
+                        title: "Save Changes?",
+                        message: "Do you want to save changes to \"\(document.name)\" before closing?",
+                        confirmButton: "Save",
+                        cancelButton: "Don't Save"
+                    )
+                    if shouldSave {
+                        documentManager.saveDocument(id: document.id)
+                    }
+                }
                 documentManager.closeDocument(document)
             }
             // Don't close the window, just closed the document

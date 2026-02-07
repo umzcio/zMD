@@ -50,6 +50,29 @@ struct SettingsView: View {
                         .cornerRadius(8)
                     }
 
+                    // Editor Section
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Editor")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.secondary)
+
+                        VStack(spacing: 12) {
+                            HStack {
+                                Text("Auto-save files")
+                                    .font(.system(size: 14))
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { DocumentManager.shared.autoSaveEnabled },
+                                    set: { DocumentManager.shared.autoSaveEnabled = $0 }
+                                ))
+                                .toggleStyle(.switch)
+                            }
+                        }
+                        .padding()
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(8)
+                    }
+
                     // Font Section
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Font")

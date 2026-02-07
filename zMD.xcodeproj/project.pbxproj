@@ -19,6 +19,7 @@
 		F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */; };
 		F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F708A /* QuickOpenView.swift */; };
 		F1A2B3C4D5E6F708D /* PrintManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F708C /* PrintManager.swift */; };
+		A1B2C3D4E5F6A70801020304 /* FuzzyMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F70801020304 /* FuzzyMatcher.swift */; };
 		A10000001 /* zMDApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000 /* zMDApp.swift */; };
 		A10000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000002 /* ContentView.swift */; };
 		A10000005 /* DocumentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000004 /* DocumentManager.swift */; };
@@ -28,6 +29,11 @@
 		A1000000B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000A /* Assets.xcassets */; };
 		A1000000D /* OutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000E /* OutlineView.swift */; };
 		A1000000F /* ExportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000010 /* ExportManager.swift */; };
+		D3A9F7E1B5C8462093E7A1B2 /* SourceEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1B4C8D2A7F6390E5D2C1B0A /* SourceEditorView.swift */; };
+		C1D2E3F4A5B6C70801020305 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B70801020305 /* DirectoryWatcher.swift */; };
+		C1D2E3F4A5B6C70801020306 /* FolderManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B70801020306 /* FolderManager.swift */; };
+		C1D2E3F4A5B6C70801020307 /* FolderSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B70801020307 /* FolderSidebarView.swift */; };
+		BD144ED0929DCB16BE557ADC /* WebRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4647E1ABB7480F258C457C59 /* WebRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +48,7 @@
 		F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F708A /* QuickOpenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickOpenView.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F708C /* PrintManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintManager.swift; sourceTree = "<group>"; };
+		F1A2B3C4D5E6F70801020304 /* FuzzyMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatcher.swift; sourceTree = "<group>"; };
 		A10000000 /* zMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = zMDApp.swift; sourceTree = "<group>"; };
 		A10000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A10000004 /* DocumentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentManager.swift; sourceTree = "<group>"; };
@@ -53,6 +60,11 @@
 		A1000000E /* OutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineView.swift; sourceTree = "<group>"; };
 		A10000010 /* ExportManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportManager.swift; sourceTree = "<group>"; };
 		A1111111 /* zMD.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = zMD.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1B4C8D2A7F6390E5D2C1B0A /* SourceEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorView.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5A6B70801020305 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5A6B70801020306 /* FolderManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderManager.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5A6B70801020307 /* FolderSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderSidebarView.swift; sourceTree = "<group>"; };
+		4647E1ABB7480F258C457C59 /* WebRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRenderer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,14 +104,20 @@
 				F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */,
 				F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */,
 				F1A2B3C4D5E6F708A /* QuickOpenView.swift */,
+				F1A2B3C4D5E6F70801020304 /* FuzzyMatcher.swift */,
 				F1A2B3C4D5E6F708C /* PrintManager.swift */,
 				A1000000A /* Assets.xcassets */,
 				A1000000C /* zMD.entitlements */,
 
 				7B3F07EF007F429AB9E72113 /* SettingsManager.swift */,
+				E1B4C8D2A7F6390E5D2C1B0A /* SourceEditorView.swift */,
 				98515A5CFBA7411D8B33B552 /* SettingsView.swift */,
 				74BFD9DFBCBC4E8593B2C133 /* Resources */,
-				B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */,);
+				B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */,
+				B1C2D3E4F5A6B70801020305 /* DirectoryWatcher.swift */,
+				B1C2D3E4F5A6B70801020306 /* FolderManager.swift */,
+				B1C2D3E4F5A6B70801020307 /* FolderSidebarView.swift */,
+				4647E1ABB7480F258C457C59 /* WebRenderer.swift */,);
 			path = zMD;
 			sourceTree = "<group>";
 		};
@@ -197,10 +215,16 @@ A1111111 /* zMD.app */,
 				F1A2B3C4D5E6F7087 /* MarkdownTextView.swift in Sources */,
 				F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */,
 				F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */,
+				A1B2C3D4E5F6A70801020304 /* FuzzyMatcher.swift in Sources */,
 				F1A2B3C4D5E6F708D /* PrintManager.swift in Sources */,
 
 				8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */,
-				9F0CF7C93C0F452694B0B0CC /* SettingsView.swift in Sources */,);
+				D3A9F7E1B5C8462093E7A1B2 /* SourceEditorView.swift in Sources */,
+				9F0CF7C93C0F452694B0B0CC /* SettingsView.swift in Sources */,
+				C1D2E3F4A5B6C70801020305 /* DirectoryWatcher.swift in Sources */,
+				C1D2E3F4A5B6C70801020306 /* FolderManager.swift in Sources */,
+				C1D2E3F4A5B6C70801020307 /* FolderSidebarView.swift in Sources */,
+				BD144ED0929DCB16BE557ADC /* WebRenderer.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */

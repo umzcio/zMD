@@ -17,13 +17,14 @@ class MarkdownParser {
         case paragraph(String)
         case list(items: [String])
         case codeBlock(code: String, language: String?)
+        case mermaidBlock(code: String)
+        case displayMath(latex: String)
         case table(rows: [[String]])
         case image(alt: String, path: String)
         case horizontalRule
         case blockquote(String)
 
         var id: String {
-            // Generate stable ID based on content
             switch self {
             case .heading1(let text): return "h1-\(text.hashValue)"
             case .heading2(let text): return "h2-\(text.hashValue)"
@@ -32,6 +33,8 @@ class MarkdownParser {
             case .paragraph(let text): return "p-\(text.hashValue)"
             case .list(let items): return "list-\(items.joined().hashValue)"
             case .codeBlock(let code, _): return "code-\(code.hashValue)"
+            case .mermaidBlock(let code): return "mermaid-\(code.hashValue)"
+            case .displayMath(let latex): return "math-\(latex.hashValue)"
             case .table(let rows): return "table-\(rows.flatMap { $0 }.joined().hashValue)"
             case .image(let alt, let path): return "img-\(alt.hashValue)-\(path.hashValue)"
             case .horizontalRule: return "hr-\(UUID().uuidString)"
@@ -48,6 +51,10 @@ class MarkdownParser {
                 return items.joined(separator: "\n")
             case .codeBlock(let code, _):
                 return code
+            case .mermaidBlock(let code):
+                return code
+            case .displayMath(let latex):
+                return latex
             case .table(let rows):
                 return rows.flatMap { $0 }.joined(separator: " ")
             case .image(let alt, _):
@@ -147,6 +154,16 @@ class MarkdownParser {
                 let itemText = extractListItemText(line)
                 listItems.append(itemText)
             }
+            // Display math $$...$$
+            else if line.trimmingCharacters(in: .whitespaces) == "$$" {
+                var mathLines: [String] = []
+                i += 1
+                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces) != "$$" {
+                    mathLines.append(lines[i])
+                    i += 1
+                }
+                elements.append(.displayMath(latex: mathLines.joined(separator: "\n")))
+            }
             // Code block
             else if line.hasPrefix("```") {
                 let language = line.count > 3 ? String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces) : nil
@@ -156,7 +173,11 @@ class MarkdownParser {
                     codeLines.append(lines[i])
                     i += 1
                 }
-                elements.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: language.flatMap { $0.isEmpty ? nil : $0 }))
+                if language?.lowercased() == "mermaid" {
+                    elements.append(.mermaidBlock(code: codeLines.joined(separator: "\n")))
+                } else {
+                    elements.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: language.flatMap { $0.isEmpty ? nil : $0 }))
+                }
             }
             // Blockquote
             else if line.hasPrefix("> ") {
@@ -236,12 +257,29 @@ class MarkdownParser {
 
     /// Convert markdown to full HTML document with styles
     func toHTML(_ markdown: String, includeStyles: Bool = true) -> String {
+        let elements = parse(markdown)
+        let hasMermaid = elements.contains(where: { if case .mermaidBlock = $0 { return true } else { return false } })
+        let hasMath = elements.contains(where: { if case .displayMath = $0 { return true } else { return false } })
+            || markdown.range(of: #"(?<!\$)\$(?!\$)(?! )(.+?)(?<! )\$(?!\$)"#, options: .regularExpression) != nil
+
         var html = """
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
         """
+
+        if hasMermaid {
+            html += "\n    <script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>"
+            html += "\n    <script>mermaid.initialize({startOnLoad: true});</script>"
+        }
+
+        if hasMath {
+            html += "\n    <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css\">"
+            html += "\n    <script src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js\"></script>"
+            html += "\n    <script src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js\"></script>"
+            html += "\n    <script>document.addEventListener('DOMContentLoaded', function() { renderMathInElement(document.body, { delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}] }); });</script>"
+        }
 
         if includeStyles {
             html += """
@@ -401,6 +439,10 @@ class MarkdownParser {
             return html
         case .codeBlock(let code, _):
             return "<pre><code>\(escapeHTML(code))</code></pre>\n"
+        case .mermaidBlock(let code):
+            return "<pre class=\"mermaid\">\(escapeHTML(code))</pre>\n"
+        case .displayMath(let latex):
+            return "<div class=\"math-display\">$$\(escapeHTML(latex))$$</div>\n"
         case .table(let rows):
             var html = "<table>\n"
             for (rowIndex, row) in rows.enumerated() {

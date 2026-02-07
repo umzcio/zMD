@@ -8,6 +8,22 @@ class DocumentManager: ObservableObject {
     @Published var selectedDocumentId: UUID?
     @Published var recentFileURLs: [URL] = []
 
+    // Tab drag-reorder
+    @Published var draggingDocumentId: UUID?
+
+    // Split view
+    @Published var secondaryDocumentId: UUID?
+    @Published var isSplitViewActive: Bool = false
+
+    // View mode
+    @Published var viewMode: ViewMode = .preview
+
+    // Auto-save
+    @Published var autoSaveEnabled: Bool {
+        didSet { UserDefaults.standard.set(autoSaveEnabled, forKey: "autoSaveEnabled") }
+    }
+    private var autoSaveTimer: Timer?
+
     // Search state
     @Published var isSearching: Bool = false
     @Published var searchText: String = ""
@@ -28,6 +44,7 @@ class DocumentManager: ObservableObject {
     private let alertManager = AlertManager.shared
 
     init() {
+        self.autoSaveEnabled = UserDefaults.standard.bool(forKey: "autoSaveEnabled")
         loadRecentFiles()
         loadScrollPositions()
     }
@@ -92,7 +109,8 @@ class DocumentManager: ObservableObject {
                 throw NSError(domain: "DocumentManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to decode file with any supported encoding"])
             }
 
-            let document = MarkdownDocument(url: url, content: fileContent)
+            var document = MarkdownDocument(url: url, content: fileContent)
+            document.bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
             openDocuments.append(document)
             selectedDocumentId = document.id
 
@@ -250,11 +268,119 @@ class DocumentManager: ObservableObject {
         reloadDocument(document)
     }
 
+    // MARK: - Tab Reorder
+
+    func moveDocument(withId id: UUID, toIndex: Int) {
+        guard let fromIndex = openDocuments.firstIndex(where: { $0.id == id }),
+              fromIndex != toIndex, toIndex >= 0, toIndex < openDocuments.count else { return }
+        let doc = openDocuments.remove(at: fromIndex)
+        openDocuments.insert(doc, at: toIndex)
+    }
+
+    // MARK: - Split View
+
+    func openInSplitView(documentId: UUID) {
+        guard documentId != selectedDocumentId else { return }
+        secondaryDocumentId = documentId
+        isSplitViewActive = true
+    }
+
+    func closeSplitView() {
+        secondaryDocumentId = nil
+        isSplitViewActive = false
+    }
+
+    // MARK: - Content Editing & Save
+
+    func updateContent(for documentId: UUID, newContent: String) {
+        guard let index = openDocuments.firstIndex(where: { $0.id == documentId }) else { return }
+        openDocuments[index].content = newContent
+        openDocuments[index].isDirty = true
+
+        // Pause file watcher during editing
+        fileWatchers[documentId]?.pause()
+
+        // Schedule auto-save if enabled
+        if autoSaveEnabled {
+            autoSaveTimer?.invalidate()
+            autoSaveTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                self?.saveDocument(id: documentId)
+            }
+        }
+    }
+
+    func saveDocument(id: UUID) {
+        guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
+        let document = openDocuments[index]
+
+        // Try using bookmark data for security-scoped access
+        var accessGranted = false
+        var resolvedURL = document.url
+
+        if let bookmark = document.bookmarkData {
+            var isStale = false
+            if let url = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                accessGranted = url.startAccessingSecurityScopedResource()
+                resolvedURL = url
+            }
+        }
+
+        do {
+            try document.content.write(to: resolvedURL, atomically: true, encoding: .utf8)
+            openDocuments[index].isDirty = false
+
+            // Resume file watcher, ignoring this change
+            fileWatchers[id]?.ignoreNextChange = true
+            fileWatchers[id]?.resume()
+        } catch {
+            // Fall back to NSSavePanel
+            let savePanel = NSSavePanel()
+            savePanel.nameFieldStringValue = document.url.lastPathComponent
+            savePanel.directoryURL = document.url.deletingLastPathComponent()
+            savePanel.begin { [weak self] response in
+                guard response == .OK, let newURL = savePanel.url else { return }
+                do {
+                    try document.content.write(to: newURL, atomically: true, encoding: .utf8)
+                    self?.openDocuments[index].isDirty = false
+                    self?.openDocuments[index].url = newURL
+                    self?.openDocuments[index].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    self?.fileWatchers[id]?.ignoreNextChange = true
+                    self?.fileWatchers[id]?.resume()
+                } catch {
+                    self?.alertManager.showError("Save Failed", message: error.localizedDescription)
+                }
+            }
+        }
+
+        if accessGranted {
+            resolvedURL.stopAccessingSecurityScopedResource()
+        }
+    }
+
+    func saveCurrentDocument() {
+        guard let selectedId = selectedDocumentId else { return }
+        saveDocument(id: selectedId)
+    }
+
+    func hasUnsavedChanges() -> Bool {
+        openDocuments.contains(where: { $0.isDirty })
+    }
+
     func closeDocument(_ document: MarkdownDocument) {
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             // Clear search state if closing the document being searched
             if document.id == selectedDocumentId && isSearching {
                 endSearch()
+            }
+
+            // Handle split view: if closing secondary, just close split
+            if document.id == secondaryDocumentId {
+                closeSplitView()
+            }
+            // If closing primary while split is active, promote secondary
+            else if document.id == selectedDocumentId && isSplitViewActive {
+                selectedDocumentId = secondaryDocumentId
+                closeSplitView()
             }
 
             // Stop file watching
@@ -263,9 +389,9 @@ class DocumentManager: ObservableObject {
             openDocuments.remove(at: index)
 
             // Select another document if available
-            if !openDocuments.isEmpty {
+            if !openDocuments.isEmpty && selectedDocumentId == document.id {
                 selectedDocumentId = openDocuments.last?.id
-            } else {
+            } else if openDocuments.isEmpty {
                 selectedDocumentId = nil
             }
         }
@@ -401,8 +527,10 @@ class DocumentManager: ObservableObject {
 
 struct MarkdownDocument: Identifiable {
     let id: UUID
-    let url: URL
-    let content: String
+    var url: URL
+    var content: String
+    var isDirty: Bool = false
+    var bookmarkData: Data?
 
     init(url: URL, content: String) {
         self.id = UUID()
@@ -418,6 +546,20 @@ struct MarkdownDocument: Identifiable {
 
     var name: String {
         url.lastPathComponent
+    }
+}
+
+enum ViewMode: String, CaseIterable {
+    case preview = "Preview"
+    case source = "Source"
+    case split = "Split"
+
+    var icon: String {
+        switch self {
+        case .preview: return "doc.richtext"
+        case .source: return "doc.text"
+        case .split: return "rectangle.split.2x1"
+        }
     }
 }
 

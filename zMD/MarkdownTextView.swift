@@ -58,6 +58,14 @@ struct MarkdownTextView: NSViewRepresentable {
             object: scrollView.contentView
         )
 
+        // Listen for diagram render completions
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.diagramDidRender),
+            name: .diagramRendered,
+            object: nil
+        )
+
         return scrollView
     }
 
@@ -137,6 +145,8 @@ struct MarkdownTextView: NSViewRepresentable {
         private var scrollDebounceTimer: Timer?
         // Image cache shared across renders
         static var imageCache: [String: NSImage] = [:]
+        // Diagram/math cache
+        static var diagramCache: [String: NSImage] = [:]
 
         func scrollToHeading(id: String, in textView: NSTextView) {
             if let range = headingRanges[id] {
@@ -245,6 +255,11 @@ struct MarkdownTextView: NSViewRepresentable {
                     .foregroundColor: NSColor.black
                 ], range: range)
             }
+        }
+
+        @objc func diagramDidRender() {
+            // Force rebuild by clearing lastContent so next SwiftUI update triggers re-render
+            lastContent = nil
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
@@ -369,6 +384,16 @@ struct MarkdownTextView: NSViewRepresentable {
                 let item = extractListItemText(line)
                 listItems.append(item)
             }
+            // Display math $$...$$
+            else if line.trimmingCharacters(in: .whitespaces) == "$$" {
+                var mathLines: [String] = []
+                i += 1
+                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces) != "$$" {
+                    mathLines.append(lines[i])
+                    i += 1
+                }
+                appendDisplayMath(latex: mathLines.joined(separator: "\n"), to: result)
+            }
             // Code block with optional language
             else if line.hasPrefix("```") {
                 // Extract language identifier (e.g., ```swift -> "swift")
@@ -379,7 +404,12 @@ struct MarkdownTextView: NSViewRepresentable {
                     codeLines.append(lines[i])
                     i += 1
                 }
-                appendCodeBlock(code: codeLines.joined(separator: "\n"), language: language, to: result)
+                // Mermaid diagram rendering
+                if language?.lowercased() == "mermaid" {
+                    appendMermaidBlock(code: codeLines.joined(separator: "\n"), to: result)
+                } else {
+                    appendCodeBlock(code: codeLines.joined(separator: "\n"), language: language, to: result)
+                }
             }
             // Empty line
             else if line.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -806,6 +836,68 @@ struct MarkdownTextView: NSViewRepresentable {
         return nil
     }
 
+    // MARK: - Mermaid & Math
+
+    private func appendMermaidBlock(code: String, to result: NSMutableAttributedString) {
+        let cacheKey = "mermaid-" + code
+        if let cached = Coordinator.diagramCache[cacheKey] {
+            // Embed cached image
+            let attachment = NSTextAttachment()
+            let maxWidth: CGFloat = 700
+            let scale = min(1.0, maxWidth / cached.size.width)
+            let newSize = NSSize(width: cached.size.width * scale, height: cached.size.height * scale)
+            let resized = NSImage(size: newSize)
+            resized.lockFocus()
+            cached.draw(in: NSRect(origin: .zero, size: newSize))
+            resized.unlockFocus()
+            attachment.image = resized
+            result.append(NSAttributedString(string: "\n"))
+            result.append(NSAttributedString(attachment: attachment))
+            result.append(NSAttributedString(string: "\n\n"))
+        } else {
+            // Show as code block placeholder and trigger async render
+            appendCodeBlock(code: code, language: "mermaid", to: result)
+
+            Task { @MainActor in
+                WebRenderer.shared.renderMermaid(code) { image in
+                    guard let image = image else { return }
+                    Coordinator.diagramCache[cacheKey] = image
+                    NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                }
+            }
+        }
+    }
+
+    private func appendDisplayMath(latex: String, to result: NSMutableAttributedString) {
+        let cacheKey = "math-display-" + latex
+        if let cached = Coordinator.diagramCache[cacheKey] {
+            let attachment = NSTextAttachment()
+            attachment.image = cached
+            result.append(NSAttributedString(string: "\n"))
+            result.append(NSAttributedString(attachment: attachment))
+            result.append(NSAttributedString(string: "\n\n"))
+        } else {
+            // Show raw LaTeX as placeholder
+            let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .center
+            paragraphStyle.paragraphSpacing = 8
+            result.append(NSAttributedString(string: latex + "\n", attributes: [
+                .font: font,
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraphStyle
+            ]))
+
+            Task { @MainActor in
+                WebRenderer.shared.renderMath(latex, displayMode: true) { image in
+                    guard let image = image else { return }
+                    Coordinator.diagramCache[cacheKey] = image
+                    NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                }
+            }
+        }
+    }
+
     // MARK: - Inline Formatting
 
     private func formatInlineMarkdown(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
@@ -829,6 +921,9 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Links [text](url)
         applyLinkPattern(to: result)
+
+        // Inline math $...$
+        applyInlineMathPattern(to: result)
 
         return result
     }
@@ -890,6 +985,46 @@ struct MarkdownTextView: NSViewRepresentable {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
 
             result.replaceCharacters(in: fullRange, with: NSAttributedString(string: text, attributes: attributes))
+        }
+    }
+
+    private func applyInlineMathPattern(to result: NSMutableAttributedString) {
+        // Match $...$ but not $$, and not $ preceded/followed by space
+        let pattern = #"(?<!\$)\$(?!\$)(?! )(.+?)(?<! )\$(?!\$)"#
+        guard let regex = Self.cachedRegex(pattern) else { return }
+        let string = result.string as NSString
+
+        let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()
+
+        for match in matches {
+            guard match.numberOfRanges >= 2 else { continue }
+            let fullRange = match.range(at: 0)
+            let contentRange = match.range(at: 1)
+            let latex = string.substring(with: contentRange)
+            let cacheKey = "math-inline-" + latex
+
+            if let cached = Coordinator.diagramCache[cacheKey] {
+                // Replace with image attachment
+                let attachment = NSTextAttachment()
+                attachment.image = cached
+                let replacement = NSAttributedString(attachment: attachment)
+                result.replaceCharacters(in: fullRange, with: replacement)
+            } else {
+                // Style as code-like placeholder and trigger async render
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                    .foregroundColor: NSColor.systemPurple
+                ]
+                result.replaceCharacters(in: fullRange, with: NSAttributedString(string: latex, attributes: attributes))
+
+                Task { @MainActor in
+                    WebRenderer.shared.renderMath(latex, displayMode: false) { image in
+                        guard let image = image else { return }
+                        Coordinator.diagramCache[cacheKey] = image
+                        NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                    }
+                }
+            }
         }
     }
 

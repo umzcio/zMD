@@ -35,11 +35,17 @@ struct OutlineView: View {
         }
         .frame(width: 250)
         .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
-        .onAppear { headings = extractHeadings(from: content) }
-        .onChange(of: content) { _ in headings = extractHeadings(from: content) }
+        .onAppear { headings = OutlineItem.extractHeadings(from: content) }
+        .onChange(of: content) { _ in headings = OutlineItem.extractHeadings(from: content) }
     }
+}
 
-    func extractHeadings(from markdown: String) -> [OutlineItem] {
+struct OutlineItem: Identifiable {
+    let id: String
+    let level: Int
+    let text: String
+
+    static func extractHeadings(from markdown: String) -> [OutlineItem] {
         var items: [OutlineItem] = []
         let lines = markdown.components(separatedBy: .newlines)
 
@@ -47,9 +53,7 @@ struct OutlineView: View {
             if line.hasPrefix("#") {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 var level = 0
-                var text = trimmed
 
-                // Count the number of # symbols
                 for char in trimmed {
                     if char == "#" {
                         level += 1
@@ -58,9 +62,8 @@ struct OutlineView: View {
                     }
                 }
 
-                // Extract the text after the # symbols
                 if level > 0 {
-                    text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
+                    let text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
                     items.append(OutlineItem(id: "heading-\(index)", level: level, text: text))
                 }
             }
@@ -68,12 +71,6 @@ struct OutlineView: View {
 
         return items
     }
-}
-
-struct OutlineItem: Identifiable {
-    let id: String
-    let level: Int
-    let text: String
 }
 
 struct OutlineItemView: View {

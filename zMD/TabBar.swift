@@ -36,6 +36,17 @@ struct TabBar: View {
             .padding(.horizontal, 4)
             .help("Open File")
 
+            // View mode picker
+            Picker("", selection: $documentManager.viewMode) {
+                ForEach(ViewMode.allCases, id: \.self) { mode in
+                    Image(systemName: mode.icon)
+                        .help(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 100)
+            .padding(.horizontal, 4)
+
             // Outline toggle button
             Button(action: {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -60,15 +71,33 @@ struct TabItem: View {
     @EnvironmentObject var documentManager: DocumentManager
     let document: MarkdownDocument
     let isSelected: Bool
+    @State private var isDragTarget = false
 
     var body: some View {
         HStack(spacing: 4) {
+            if document.isDirty {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+            }
+
             Text(document.name)
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .foregroundColor(isSelected ? .primary : .secondary)
 
             Button(action: {
+                if document.isDirty {
+                    let shouldSave = AlertManager.shared.showConfirmation(
+                        title: "Save Changes?",
+                        message: "Do you want to save changes to \"\(document.name)\" before closing?",
+                        confirmButton: "Save",
+                        cancelButton: "Don't Save"
+                    )
+                    if shouldSave {
+                        documentManager.saveDocument(id: document.id)
+                    }
+                }
                 documentManager.closeDocument(document)
             }) {
                 Image(systemName: "xmark")
@@ -82,21 +111,39 @@ struct TabItem: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(isDragTarget ? Color.accentColor.opacity(0.25) : (isSelected ? Color.accentColor.opacity(0.15) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+                .stroke(isDragTarget ? Color.accentColor.opacity(0.6) : (isSelected ? Color.accentColor.opacity(0.3) : Color.clear), lineWidth: 1)
         )
         .contentShape(Rectangle())
         .help(document.url.path)
         .onTapGesture {
             documentManager.selectedDocumentId = document.id
         }
+        .onDrag {
+            documentManager.draggingDocumentId = document.id
+            return NSItemProvider(object: document.id.uuidString as NSString)
+        }
+        .onDrop(of: [.text], isTargeted: $isDragTarget) { _ in
+            guard let sourceId = documentManager.draggingDocumentId,
+                  let targetIndex = documentManager.openDocuments.firstIndex(where: { $0.id == document.id }) else { return false }
+            documentManager.moveDocument(withId: sourceId, toIndex: targetIndex)
+            documentManager.draggingDocumentId = nil
+            return true
+        }
         .contextMenu {
             Button("Refresh") {
                 documentManager.reloadDocument(document)
             }
+
+            Divider()
+
+            Button("Open in Split View") {
+                documentManager.openInSplitView(documentId: document.id)
+            }
+            .disabled(document.id == documentManager.selectedDocumentId || documentManager.openDocuments.count < 2)
 
             Divider()
 
