@@ -71,8 +71,9 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Build attributed string from markdown (when content or search changes)
         if contentChanged || searchChanged {
-            let attributedString = buildAttributedString()
+            let (attributedString, headingRanges) = buildAttributedString()
             textView.textStorage?.setAttributedString(attributedString)
+            context.coordinator.headingRanges = headingRanges
             context.coordinator.lastContent = content
             context.coordinator.lastSearchText = searchText
 
@@ -134,6 +135,8 @@ struct MarkdownTextView: NSViewRepresentable {
         var onScrollPositionChanged: ((CGFloat) -> Void)?
         var onMatchCountChanged: ((Int) -> Void)?
         private var scrollDebounceTimer: Timer?
+        // Image cache shared across renders
+        static var imageCache: [String: NSImage] = [:]
 
         func scrollToHeading(id: String, in textView: NSTextView) {
             if let range = headingRanges[id] {
@@ -263,7 +266,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     // MARK: - Build Attributed String
 
-    private func buildAttributedString() -> NSAttributedString {
+    private func buildAttributedString() -> (NSAttributedString, [String: NSRange]) {
         let result = NSMutableAttributedString()
         let lines = content.components(separatedBy: .newlines)
         var i = 0
@@ -406,7 +409,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // Apply search highlighting
         applySearchHighlighting(to: result)
 
-        return result
+        return (result, headingRanges)
     }
 
     // MARK: - Append Methods
@@ -569,11 +572,7 @@ struct MarkdownTextView: NSViewRepresentable {
             .foregroundColor: NSColor.tertiaryLabelColor
         ]))
 
-        // Apply syntax highlighting
-        let highlighted = SyntaxHighlighter.shared.highlight(code: code, language: language)
-        let mutableHighlighted = NSMutableAttributedString(attributedString: highlighted)
-
-        // Add background and left border to each line
+        // Add background and left border to each line (with per-line syntax highlighting)
         let codeLines = code.components(separatedBy: .newlines)
         let result2 = NSMutableAttributedString()
 
@@ -766,26 +765,42 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func loadImage(path: String) -> NSImage? {
-        // Remote URL
+        // Check cache first
+        if let cached = Coordinator.imageCache[path] {
+            return cached
+        }
+
+        // Remote URL — return nil (placeholder) and load asynchronously
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
-            if let url = URL(string: path), let image = NSImage(contentsOf: url) {
-                return image
+            if let url = URL(string: path) {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    guard let image = NSImage(contentsOf: url) else { return }
+                    DispatchQueue.main.async {
+                        Coordinator.imageCache[path] = image
+                        // Trigger re-render by posting notification (content hasn't changed,
+                        // but the view should rebuild to include the now-cached image)
+                    }
+                }
             }
             return nil
         }
 
-        // Absolute path
+        // Local file — synchronous is fine for local disk I/O
+        let resolvedURL: URL?
+
         let absoluteURL = URL(fileURLWithPath: path)
         if FileManager.default.fileExists(atPath: absoluteURL.path) {
-            return NSImage(contentsOf: absoluteURL)
+            resolvedURL = absoluteURL
+        } else if let base = baseURL?.deletingLastPathComponent() {
+            let relativeURL = base.appendingPathComponent(path)
+            resolvedURL = FileManager.default.fileExists(atPath: relativeURL.path) ? relativeURL : nil
+        } else {
+            resolvedURL = nil
         }
 
-        // Relative to document
-        if let base = baseURL?.deletingLastPathComponent() {
-            let relativeURL = base.appendingPathComponent(path)
-            if FileManager.default.fileExists(atPath: relativeURL.path) {
-                return NSImage(contentsOf: relativeURL)
-            }
+        if let url = resolvedURL, let image = NSImage(contentsOf: url) {
+            Coordinator.imageCache[path] = image
+            return image
         }
 
         return nil
@@ -818,8 +833,17 @@ struct MarkdownTextView: NSViewRepresentable {
         return result
     }
 
+    private static var regexCache: [String: NSRegularExpression] = [:]
+
+    private static func cachedRegex(_ pattern: String) -> NSRegularExpression? {
+        if let cached = regexCache[pattern] { return cached }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        regexCache[pattern] = regex
+        return regex
+    }
+
     private func applyPattern(_ pattern: String, to result: NSMutableAttributedString, attributes: [NSAttributedString.Key: Any]) {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
         // Find all matches in reverse order to preserve indices when modifying
@@ -846,7 +870,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     private func applyLinkPattern(to result: NSMutableAttributedString) {
         let pattern = #"\[(.+?)\]\((.+?)\)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
         let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()

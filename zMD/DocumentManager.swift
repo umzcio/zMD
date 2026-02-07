@@ -37,7 +37,7 @@ class DocumentManager: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]
+        panel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
 
         panel.begin { response in
             if response == .OK {
@@ -209,8 +209,28 @@ class DocumentManager: ObservableObject {
         return scrollPositions[url.path] ?? 0
     }
 
+    private let maxScrollPositions = 100
+
     func setScrollPosition(_ position: CGFloat, for url: URL) {
         scrollPositions[url.path] = position
+
+        // Prune if exceeding limit (remove entries for files that no longer exist)
+        if scrollPositions.count > maxScrollPositions {
+            let existingPaths = scrollPositions.keys.filter { FileManager.default.fileExists(atPath: $0) }
+            let stalePaths = Set(scrollPositions.keys).subtracting(existingPaths)
+            for path in stalePaths {
+                scrollPositions.removeValue(forKey: path)
+            }
+            // If still over limit, just keep the most recent entries (by removing random old ones)
+            if scrollPositions.count > maxScrollPositions {
+                let excess = scrollPositions.count - maxScrollPositions
+                let keysToRemove = Array(scrollPositions.keys.prefix(excess))
+                for key in keysToRemove {
+                    scrollPositions.removeValue(forKey: key)
+                }
+            }
+        }
+
         saveScrollPositions()
     }
 
@@ -298,7 +318,7 @@ class DocumentManager: ObservableObject {
 
     func duplicateDocument(document: MarkdownDocument) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]
+        savePanel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
         savePanel.directoryURL = document.url.deletingLastPathComponent()
         savePanel.nameFieldStringValue = document.url.deletingPathExtension().lastPathComponent + " copy.md"
         savePanel.title = "Duplicate File"
@@ -312,14 +332,14 @@ class DocumentManager: ObservableObject {
                 // Open the duplicated file
                 self.loadDocument(from: newURL)
             } catch {
-                print("Error duplicating file: \(error)")
+                self.alertManager.showError("Duplicate Failed", message: "Error duplicating file: \(error.localizedDescription)")
             }
         }
     }
 
     func renameDocument(document: MarkdownDocument) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]
+        savePanel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
         savePanel.directoryURL = document.url.deletingLastPathComponent()
         savePanel.nameFieldStringValue = document.url.lastPathComponent
         savePanel.title = "Rename File"
@@ -335,22 +355,22 @@ class DocumentManager: ObservableObject {
                 // Move the file to the new name
                 try FileManager.default.moveItem(at: document.url, to: newURL)
 
-                // Update the document in the array
+                // Update the document in place, preserving UUID
                 if let index = self.openDocuments.firstIndex(where: { $0.id == document.id }) {
-                    self.openDocuments.remove(at: index)
-                    let newDocument = MarkdownDocument(url: newURL, content: document.content)
-                    self.openDocuments.insert(newDocument, at: index)
-                    self.selectedDocumentId = newDocument.id
+                    self.stopWatchingFile(for: document)
+                    let updatedDocument = MarkdownDocument(id: document.id, url: newURL, content: document.content)
+                    self.openDocuments[index] = updatedDocument
+                    self.startWatchingFile(for: updatedDocument)
                 }
             } catch {
-                print("Error renaming file: \(error)")
+                self.alertManager.showError("Rename Failed", message: "Error renaming file: \(error.localizedDescription)")
             }
         }
     }
 
     func moveDocument(document: MarkdownDocument) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]
+        savePanel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
         savePanel.nameFieldStringValue = document.url.lastPathComponent
         savePanel.title = "Move File"
         savePanel.message = "Choose a new location for the file"
@@ -365,15 +385,15 @@ class DocumentManager: ObservableObject {
                 // Move the file to the new location
                 try FileManager.default.moveItem(at: document.url, to: newURL)
 
-                // Update the document in the array
+                // Update the document in place, preserving UUID
                 if let index = self.openDocuments.firstIndex(where: { $0.id == document.id }) {
-                    self.openDocuments.remove(at: index)
-                    let newDocument = MarkdownDocument(url: newURL, content: document.content)
-                    self.openDocuments.insert(newDocument, at: index)
-                    self.selectedDocumentId = newDocument.id
+                    self.stopWatchingFile(for: document)
+                    let updatedDocument = MarkdownDocument(id: document.id, url: newURL, content: document.content)
+                    self.openDocuments[index] = updatedDocument
+                    self.startWatchingFile(for: updatedDocument)
                 }
             } catch {
-                print("Error moving file: \(error)")
+                self.alertManager.showError("Move Failed", message: "Error moving file: \(error.localizedDescription)")
             }
         }
     }

@@ -6,7 +6,7 @@ struct TabBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView(.horizontal, showsIndicators: true) {
                 HStack(spacing: 0) {
                     ForEach(documentManager.openDocuments) { document in
                         TabItem(
@@ -89,6 +89,7 @@ struct TabItem: View {
                 .stroke(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
+        .help(document.url.path)
         .onTapGesture {
             documentManager.selectedDocumentId = document.id
         }

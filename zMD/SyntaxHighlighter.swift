@@ -325,8 +325,18 @@ class SyntaxHighlighter {
 
     // MARK: - Helpers
 
+    private static var regexCache: [String: NSRegularExpression] = [:]
+
     private func highlightPattern(_ pattern: String, in result: NSMutableAttributedString, color: NSColor) {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let regex: NSRegularExpression
+        if let cached = Self.regexCache[pattern] {
+            regex = cached
+        } else if let compiled = try? NSRegularExpression(pattern: pattern) {
+            Self.regexCache[pattern] = compiled
+            regex = compiled
+        } else {
+            return
+        }
         let text = result.string as NSString
         let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: text.length))
 

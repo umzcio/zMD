@@ -3,10 +3,7 @@ import SwiftUI
 struct OutlineView: View {
     let content: String
     @Binding var selectedHeadingId: String?
-
-    var headings: [OutlineItem] {
-        extractHeadings(from: content)
-    }
+    @State private var headings: [OutlineItem] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,6 +35,8 @@ struct OutlineView: View {
         }
         .frame(width: 250)
         .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+        .onAppear { headings = extractHeadings(from: content) }
+        .onChange(of: content) { _ in headings = extractHeadings(from: content) }
     }
 
     func extractHeadings(from markdown: String) -> [OutlineItem] {

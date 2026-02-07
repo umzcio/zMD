@@ -63,32 +63,27 @@ zMDApp (App entry point)
     │   └── TabItem[] (Individual tabs with context menus)
     └── HStack
         ├── OutlineView (Sidebar - conditional)
-        └── MarkdownView (Rendered content)
+        └── MarkdownTextView (Rendered content via NSTextView)
 ```
 
 ### Markdown Rendering Architecture
 
-**Custom Parser** (`MarkdownView.swift`):
-- Line-by-line stateful parser (not using external markdown libraries)
-- Converts markdown → array of `MarkdownElement` enum cases
-- Each element renders itself via `@ViewBuilder`
-- Handles: headings (H1-H4), paragraphs, lists, code blocks, tables
-- Inline formatting uses SwiftUI's `AttributedString(markdown:)` for bold/italic/code
+**Two-layer rendering:**
+- `MarkdownTextView.swift` (NSViewRepresentable): Line-by-line parser builds NSAttributedString for NSTextView rendering. Handles headings, paragraphs, lists, code blocks (with syntax highlighting via SyntaxHighlighter), tables, blockquotes, images, frontmatter.
+- `MarkdownParser.swift`: Shared parser used by ExportManager for HTML/PDF/RTF/DOCX exports. Single source of truth for export parsing.
 
-**Why Custom Parser:**
-- Full control over rendering style to match Typora aesthetics
-- Avoids third-party dependencies and sandboxing issues
-- Simplified table/list handling specific to app needs
+**Note:** `MarkdownView.swift` was removed as dead code. The active renderer is `MarkdownTextView.swift`.
 
 ### Export System
 
-**ExportManager** (`ExportManager.swift`) is a singleton providing three export paths:
+**ExportManager** (`ExportManager.swift`) handles PDF, HTML, RTF, and DOCX exports:
 
-1. **PDF Export**: Markdown → HTML → NSAttributedString → CGContext rendering with pagination
-2. **HTML Export**: Custom markdown-to-HTML converter with optional CSS styling
+1. **PDF Export**: Markdown → HTML (via MarkdownParser) → NSAttributedString → CGContext rendering with pagination
+2. **HTML Export**: Markdown → HTML (via MarkdownParser) with optional CSS styling
 3. **RTF Export**: Markdown → HTML → NSAttributedString → RTF data
+4. **DOCX Export**: Custom XML generation with inline formatting, tables, lists, and hyperlinks
 
-All exports use `NSSavePanel` and run on main thread. The HTML converter mirrors the parser structure to ensure visual consistency.
+All exports use `NSSavePanel` and run on main thread. HTML conversion routes through `MarkdownParser.shared.toHTML()` for consistent, safe output.
 
 ### Menu Commands & Shortcuts
 
@@ -105,13 +100,18 @@ Defined in `zMDApp.swift` using SwiftUI's `.commands` modifier:
 zMD/
 ├── zMDApp.swift           # App entry point, menu commands, keyboard shortcuts
 ├── ContentView.swift      # Main view container and layout
-├── DocumentManager.swift  # Document state management (@ObservableObject)
-├── MarkdownView.swift     # Markdown parser and rendering engine
-├── TabBar.swift           # Tab bar UI and tab items
-├── OutlineView.swift      # Hierarchical outline sidebar
-├── ExportManager.swift    # PDF/HTML/RTF export functionality
-├── Assets.xcassets/       # App icon and resources
-└── zMD.entitlements       # Sandbox permissions (currently empty)
+├── DocumentManager.swift    # Document state management (@ObservableObject)
+├── MarkdownTextView.swift   # NSTextView-based markdown renderer (active)
+├── MarkdownParser.swift     # Shared markdown parser for exports
+├── TabBar.swift             # Tab bar UI and tab items
+├── OutlineView.swift        # Hierarchical outline sidebar (cached headings)
+├── ExportManager.swift      # PDF/HTML/RTF/DOCX export functionality
+├── SyntaxHighlighter.swift  # Code block syntax highlighting
+├── AlertManager.swift       # Centralized alert/error management
+├── FileWatcher.swift        # File change monitoring
+├── QuickOpenView.swift      # Quick open dialog
+├── Assets.xcassets/         # App icon and resources
+└── zMD.entitlements         # Sandbox permissions (currently empty)
 ```
 
 ## Development Notes
@@ -120,10 +120,10 @@ zMD/
 
 To add support for new markdown syntax:
 
-1. Add case to `MarkdownElement.MarkdownContent` enum in `MarkdownView.swift`
-2. Add parsing logic in `parseMarkdown()` function (line-by-line state machine)
-3. Add view rendering in `MarkdownElement.view` @ViewBuilder
-4. Mirror the logic in `ExportManager.convertMarkdownToHTMLBody()` for export consistency
+1. Add rendering logic in `MarkdownTextView.swift`'s `buildAttributedString()` method
+2. Add a new case to `MarkdownParser.Element` enum in `MarkdownParser.swift`
+3. Add parsing logic in `MarkdownParser.parse()` and HTML conversion in `elementToHTML()`
+4. This ensures rendering and export stay in sync
 
 ### Working with Document State
 
@@ -142,6 +142,6 @@ The app runs in macOS App Sandbox (see `zMD.entitlements`):
 ### Known Limitations
 
 - Text selection implementation is incomplete (partially works)
-- Outline click-to-scroll not yet implemented (UI exists but `selectedHeadingId` binding not connected)
 - Table rendering may overflow on very wide tables
 - Markdown parser is simplified (doesn't support all CommonMark features)
+- Remote images load asynchronously but don't trigger re-render when cached

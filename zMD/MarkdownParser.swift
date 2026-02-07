@@ -1,7 +1,7 @@
 import Foundation
 
-/// Unified markdown parser used by both MarkdownView (rendering) and ExportManager (export)
-/// This is the single source of truth for markdown parsing in zMD 2.0
+/// Unified markdown parser used by ExportManager (export) and MarkdownTextView (rendering)
+/// This is the single source of truth for markdown parsing in zMD
 class MarkdownParser {
     static let shared = MarkdownParser()
 
@@ -371,13 +371,7 @@ class MarkdownParser {
     /// Convert markdown to HTML body content only (no wrapper)
     func toHTMLBody(_ markdown: String) -> String {
         let elements = parse(markdown)
-        var html = ""
-
-        for element in elements {
-            html += elementToHTML(element)
-        }
-
-        return html
+        return elements.map { elementToHTML($0) }.joined()
     }
 
     private func elementToHTML(_ element: Element) -> String {
