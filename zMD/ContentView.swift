@@ -3,11 +3,14 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var folderManager: FolderManager
+    @EnvironmentObject var settings: SettingsManager
     @State private var showOutline = false
     @State private var selectedHeadingId: String?
     @State private var showQuickOpen = false
     @State private var showCommandPalette = false
     @State private var showFocusExitPill = false
+    @State private var magnifyMonitor: Any?
+    @State private var baseZoomForGesture: CGFloat = 1.0
 
     var body: some View {
         ZStack {
@@ -129,6 +132,30 @@ struct ContentView: View {
                 documentManager.isFocusModeActive.toggle()
             }
         }
+        .onAppear {
+            magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { event in
+                if event.phase == .began {
+                    baseZoomForGesture = SettingsManager.shared.zoomLevel
+                }
+                // Accumulate delta magnification
+                baseZoomForGesture += event.magnification
+                let clamped = min(2.0, max(0.5, baseZoomForGesture))
+                // Snap to 10% increments on gesture end
+                if event.phase == .ended || event.phase == .cancelled {
+                    SettingsManager.shared.zoomLevel = (clamped * 10).rounded() / 10
+                    baseZoomForGesture = SettingsManager.shared.zoomLevel
+                } else {
+                    SettingsManager.shared.zoomLevel = clamped
+                }
+                return event
+            }
+        }
+        .onDisappear {
+            if let monitor = magnifyMonitor {
+                NSEvent.removeMonitor(monitor)
+                magnifyMonitor = nil
+            }
+        }
     }
 
     @ViewBuilder
@@ -185,7 +212,8 @@ struct ContentView: View {
                                     searchText: "",
                                     currentMatchIndex: 0,
                                     searchMatches: [],
-                                    fontStyle: SettingsManager.shared.fontStyle,
+                                    fontStyle: settings.fontStyle,
+                                    zoomLevel: settings.zoomLevel,
                                     initialScrollPosition: documentManager.getScrollPosition(for: secondaryDoc.url),
                                     onScrollPositionChanged: { position in
                                         documentManager.setScrollPosition(position, for: secondaryDoc.url)
@@ -422,7 +450,8 @@ extension ContentView {
             searchText: documentManager.isSearching ? documentManager.searchText : "",
             currentMatchIndex: documentManager.currentMatchIndex,
             searchMatches: documentManager.searchMatches,
-            fontStyle: SettingsManager.shared.fontStyle,
+            fontStyle: settings.fontStyle,
+            zoomLevel: settings.zoomLevel,
             initialScrollPosition: documentManager.getScrollPosition(for: document.url),
             onScrollPositionChanged: { position in
                 documentManager.setScrollPosition(position, for: document.url)
@@ -450,7 +479,8 @@ extension ContentView {
             content: sourceEditorBinding(for: document.id),
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
-            }
+            },
+            zoomLevel: settings.zoomLevel
         )
     }
 
@@ -461,6 +491,7 @@ extension ContentView {
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
             },
+            zoomLevel: settings.zoomLevel,
             onScrollPercentChanged: documentManager.isScrollSyncEnabled ? { percent in
                 guard documentManager.scrollSyncOrigin != .preview else { return }
                 documentManager.scrollSyncOrigin = .source
@@ -484,7 +515,8 @@ extension ContentView {
             searchText: documentManager.isSearching ? documentManager.searchText : "",
             currentMatchIndex: documentManager.currentMatchIndex,
             searchMatches: documentManager.searchMatches,
-            fontStyle: SettingsManager.shared.fontStyle,
+            fontStyle: settings.fontStyle,
+            zoomLevel: settings.zoomLevel,
             initialScrollPosition: documentManager.getScrollPosition(for: document.url),
             onScrollPositionChanged: { position in
                 documentManager.setScrollPosition(position, for: document.url)
@@ -526,4 +558,5 @@ extension ContentView {
     ContentView()
         .environmentObject(DocumentManager())
         .environmentObject(FolderManager.shared)
+        .environmentObject(SettingsManager.shared)
 }

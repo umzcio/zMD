@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StatusBarView: View {
     @EnvironmentObject var documentManager: DocumentManager
+    @EnvironmentObject var settings: SettingsManager
 
     var body: some View {
         if let selectedId = documentManager.selectedDocumentId,
@@ -16,8 +17,14 @@ struct StatusBarView: View {
 
                 Spacer()
 
-                // Right: view mode, encoding
+                // Right: zoom, view mode, encoding
                 HStack(spacing: 8) {
+                    if settings.zoomLevel != 1.0 {
+                        Text("\(Int(settings.zoomLevel * 100))%")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+
                     Text(documentManager.viewMode.rawValue)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)

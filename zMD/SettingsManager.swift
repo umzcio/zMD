@@ -15,6 +15,24 @@ class SettingsManager: ObservableObject {
         }
     }
 
+    @Published var zoomLevel: CGFloat {
+        didSet {
+            UserDefaults.standard.set(zoomLevel, forKey: "zoomLevel")
+        }
+    }
+
+    func zoomIn() {
+        zoomLevel = min(2.0, (zoomLevel * 10 + 1).rounded() / 10)
+    }
+
+    func zoomOut() {
+        zoomLevel = max(0.5, (zoomLevel * 10 - 1).rounded() / 10)
+    }
+
+    func resetZoom() {
+        zoomLevel = 1.0
+    }
+
     enum FontStyle: String, CaseIterable {
         case system = "System"
         case serif = "Serif"
@@ -38,6 +56,12 @@ class SettingsManager: ObservableObject {
 
     init() {
         // Load saved preferences
+        let savedFont = UserDefaults.standard.string(forKey: "fontStyle") ?? FontStyle.system.rawValue
+        self.fontStyle = FontStyle(rawValue: savedFont) ?? .system
+
+        let savedZoom = UserDefaults.standard.double(forKey: "zoomLevel")
+        self.zoomLevel = savedZoom > 0 ? CGFloat(savedZoom) : 1.0
+
         let savedScheme = UserDefaults.standard.string(forKey: "colorScheme") ?? "system"
         switch savedScheme {
         case "dark":
@@ -47,8 +71,5 @@ class SettingsManager: ObservableObject {
         default:
             self.colorScheme = nil
         }
-
-        let savedFont = UserDefaults.standard.string(forKey: "fontStyle") ?? FontStyle.system.rawValue
-        self.fontStyle = FontStyle(rawValue: savedFont) ?? .system
     }
 }

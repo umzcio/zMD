@@ -86,6 +86,15 @@ class CommandRegistry {
             CommandAction(name: "Toggle Focus Mode", category: .view, shortcut: "\u{2318}\u{21E7}F", icon: "arrow.up.left.and.arrow.down.right", isEnabled: { true }) {
                 NotificationCenter.default.post(name: .toggleFocusMode, object: nil)
             },
+            CommandAction(name: "Zoom In", category: .view, shortcut: "\u{2318}=", icon: "plus.magnifyingglass", isEnabled: { true }) {
+                SettingsManager.shared.zoomIn()
+            },
+            CommandAction(name: "Zoom Out", category: .view, shortcut: "\u{2318}-", icon: "minus.magnifyingglass", isEnabled: { true }) {
+                SettingsManager.shared.zoomOut()
+            },
+            CommandAction(name: "Reset Zoom", category: .view, shortcut: "\u{2318}0", icon: "1.magnifyingglass", isEnabled: { true }) {
+                SettingsManager.shared.resetZoom()
+            },
 
             // Edit
             CommandAction(name: "Find", category: .edit, shortcut: "\u{2318}F", icon: "magnifyingglass", isEnabled: hasDoc) {

@@ -17,6 +17,7 @@ struct zMDApp: App {
             ContentView()
                 .environmentObject(documentManager)
                 .environmentObject(folderManager)
+                .environmentObject(settings)
                 .preferredColorScheme(settings.colorScheme)
                 .frame(minWidth: 700, minHeight: 550)
                 .onAppear {
@@ -236,6 +237,23 @@ struct zMDApp: App {
                     NotificationCenter.default.post(name: .showCommandPalette, object: nil)
                 }
                 .keyboardShortcut("k", modifiers: .command)
+
+                Divider()
+
+                Button("Zoom In") {
+                    SettingsManager.shared.zoomIn()
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Zoom Out") {
+                    SettingsManager.shared.zoomOut()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Reset Zoom") {
+                    SettingsManager.shared.resetZoom()
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
 
             CommandGroup(replacing: .toolbar) {

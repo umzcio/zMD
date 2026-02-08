@@ -4,6 +4,7 @@ import AppKit
 struct SourceEditorView: NSViewRepresentable {
     @Binding var content: String
     let onContentChange: ((String) -> Void)?
+    var zoomLevel: CGFloat = 1.0
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
 
@@ -17,7 +18,7 @@ struct SourceEditorView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.textContainerInset = NSSize(width: 40, height: 30)
-        textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.font = NSFont.monospacedSystemFont(ofSize: 14 * zoomLevel, weight: .regular)
         textView.textColor = NSColor.textColor
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -31,6 +32,7 @@ struct SourceEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
+        context.coordinator.zoomLevel = zoomLevel
         context.coordinator.onScrollPercentChanged = onScrollPercentChanged
 
         // Set up scroll notification for sync
@@ -52,6 +54,13 @@ struct SourceEditorView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
         context.coordinator.onScrollPercentChanged = onScrollPercentChanged
+
+        // Update zoom level if changed
+        if context.coordinator.zoomLevel != zoomLevel {
+            context.coordinator.zoomLevel = zoomLevel
+            textView.font = NSFont.monospacedSystemFont(ofSize: 14 * zoomLevel, weight: .regular)
+            context.coordinator.applyHighlighting(to: textView)
+        }
 
         // Skip update if user is currently typing (prevents cursor jump)
         if context.coordinator.isUpdatingFromUser { return }
@@ -78,6 +87,7 @@ struct SourceEditorView: NSViewRepresentable {
         var scrollView: NSScrollView?
         var isUpdatingFromUser = false
         var isUserScrolling = false
+        var zoomLevel: CGFloat = 1.0
         var onScrollPercentChanged: ((CGFloat) -> Void)?
         let onContentChange: ((String) -> Void)?
         private var highlightTimer: Timer?
@@ -157,21 +167,22 @@ struct SourceEditorView: NSViewRepresentable {
             storage.beginEditing()
 
             // Reset to default
+            let fontSize = 14 * zoomLevel
             storage.addAttributes([
-                .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+                .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
                 .foregroundColor: NSColor.textColor
             ], range: fullRange)
 
             let nsText = text as NSString
 
             // Headings (#)
-            highlightPattern(#"^#{1,6}\s+.*$"#, in: storage, text: nsText, color: NSColor.systemBlue, font: NSFont.monospacedSystemFont(ofSize: 14, weight: .bold))
+            highlightPattern(#"^#{1,6}\s+.*$"#, in: storage, text: nsText, color: NSColor.systemBlue, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold))
 
             // Bold **text**
-            highlightPattern(#"\*\*[^\*]+\*\*"#, in: storage, text: nsText, color: NSColor.textColor, font: NSFont.monospacedSystemFont(ofSize: 14, weight: .bold))
+            highlightPattern(#"\*\*[^\*]+\*\*"#, in: storage, text: nsText, color: NSColor.textColor, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold))
 
             // Italic *text*
-            highlightPattern(#"(?<!\*)\*(?!\*)([^\*]+)(?<!\*)\*(?!\*)"#, in: storage, text: nsText, color: NSColor.textColor, font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular).withTraits(.italic))
+            highlightPattern(#"(?<!\*)\*(?!\*)([^\*]+)(?<!\*)\*(?!\*)"#, in: storage, text: nsText, color: NSColor.textColor, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular).withTraits(.italic))
 
             // Inline code `text`
             highlightPattern(#"`[^`]+`"#, in: storage, text: nsText, color: NSColor.systemOrange)

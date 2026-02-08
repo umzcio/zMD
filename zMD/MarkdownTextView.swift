@@ -10,13 +10,14 @@ struct MarkdownTextView: NSViewRepresentable {
     let currentMatchIndex: Int
     let searchMatches: [SearchMatch]
     let fontStyle: SettingsManager.FontStyle
+    let zoomLevel: CGFloat
     let initialScrollPosition: CGFloat
     let onScrollPositionChanged: ((CGFloat) -> Void)?
     let onMatchCountChanged: ((Int) -> Void)?
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
 
-    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil) {
+    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil) {
         self.content = content
         self.baseURL = baseURL
         self._scrollToHeadingId = scrollToHeadingId
@@ -24,6 +25,7 @@ struct MarkdownTextView: NSViewRepresentable {
         self.currentMatchIndex = currentMatchIndex
         self.searchMatches = searchMatches
         self.fontStyle = fontStyle
+        self.zoomLevel = zoomLevel
         self.initialScrollPosition = initialScrollPosition
         self.onScrollPositionChanged = onScrollPositionChanged
         self.onMatchCountChanged = onMatchCountChanged
@@ -81,9 +83,11 @@ struct MarkdownTextView: NSViewRepresentable {
         let contentChanged = context.coordinator.lastContent != content
         let searchChanged = context.coordinator.lastSearchText != searchText
         let matchIndexChanged = context.coordinator.lastMatchIndex != currentMatchIndex
+        let zoomChanged = context.coordinator.lastZoomLevel != zoomLevel
 
-        // Build attributed string from markdown (when content or search changes)
-        if contentChanged || searchChanged {
+        // Build attributed string from markdown (when content, search, or zoom changes)
+        if contentChanged || searchChanged || zoomChanged {
+            context.coordinator.lastZoomLevel = zoomLevel
             let (attributedString, headingRanges) = buildAttributedString()
             textView.textStorage?.setAttributedString(attributedString)
             context.coordinator.headingRanges = headingRanges
@@ -97,15 +101,17 @@ struct MarkdownTextView: NSViewRepresentable {
                 context.coordinator.matchRanges = []
             }
 
-            // Restore scroll position after content is set (only if not searching)
-            DispatchQueue.main.async {
-                if initialScrollPosition > 10 && searchText.isEmpty {
-                    // Restore saved position
-                    context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
-                } else if searchText.isEmpty {
-                    // Scroll to top for new documents
-                    scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
-                    scrollView.reflectScrolledClipView(scrollView.contentView)
+            // Restore scroll position after content is set (only on content change, not zoom)
+            if contentChanged {
+                DispatchQueue.main.async {
+                    if initialScrollPosition > 10 && searchText.isEmpty {
+                        // Restore saved position
+                        context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
+                    } else if searchText.isEmpty {
+                        // Scroll to top for new documents
+                        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                        scrollView.reflectScrolledClipView(scrollView.contentView)
+                    }
                 }
             }
 
@@ -149,6 +155,7 @@ struct MarkdownTextView: NSViewRepresentable {
         var headingRanges: [String: NSRange] = [:]
         var lastContent: String?
         var lastSearchText: String?
+        var lastZoomLevel: CGFloat = 1.0
         var lastMatchIndex: Int = -1
         var matchRanges: [NSRange] = []
         var onScrollPositionChanged: ((CGFloat) -> Void)?
@@ -357,7 +364,7 @@ struct MarkdownTextView: NSViewRepresentable {
         var listItems: [(level: Int, text: String)] = []
         var headingRanges: [String: NSRange] = [:]
 
-        let baseFont = fontStyle.nsFont(size: 16)
+        let baseFont = fontStyle.nsFont(size: 16 * zoomLevel)
         let defaultAttributes: [NSAttributedString.Key: Any] = [
             .font: baseFont,
             .foregroundColor: NSColor.textColor,
@@ -515,7 +522,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     private func appendHeading(text: String, level: Int, to result: NSMutableAttributedString) {
         let sizes: [Int: CGFloat] = [1: 28, 2: 24, 3: 20, 4: 18]
-        let size = sizes[level] ?? 16
+        let size = (sizes[level] ?? 16) * zoomLevel
         let font = fontStyle.nsFont(size: size).withWeight(.semibold)
 
         // Heading color hierarchy
@@ -556,7 +563,7 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func appendParagraph(text: String, to result: NSMutableAttributedString) {
-        let font = fontStyle.nsFont(size: 16)
+        let font = fontStyle.nsFont(size: 16 * zoomLevel)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.paragraphSpacing = 10
         paragraphStyle.lineSpacing = 4
@@ -573,7 +580,7 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func appendList(items: [(level: Int, text: String)], to result: NSMutableAttributedString) {
-        let font = fontStyle.nsFont(size: 16)
+        let font = fontStyle.nsFont(size: 16 * zoomLevel)
 
         for (level, text) in items {
             // Calculate indentation based on nesting level
@@ -625,9 +632,9 @@ struct MarkdownTextView: NSViewRepresentable {
     private func appendFrontmatter(lines: [String], to result: NSMutableAttributedString) {
         guard !lines.isEmpty else { return }
 
-        let titleFont = fontStyle.nsFont(size: 11).withWeight(.semibold)
-        let keyFont = fontStyle.nsFont(size: 12).withWeight(.medium)
-        let valueFont = fontStyle.nsFont(size: 12)
+        let titleFont = fontStyle.nsFont(size: 11 * zoomLevel).withWeight(.semibold)
+        let keyFont = fontStyle.nsFont(size: 12 * zoomLevel).withWeight(.medium)
+        let valueFont = fontStyle.nsFont(size: 12 * zoomLevel)
 
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.paragraphSpacing = 2
@@ -690,7 +697,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // Top border with padding
         let topBorder = "  ╭" + String(repeating: "─", count: 76) + "╮\n"
         result.append(NSAttributedString(string: topBorder, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .font: NSFont.monospacedSystemFont(ofSize: 11 * zoomLevel, weight: .regular),
             .foregroundColor: NSColor.tertiaryLabelColor
         ]))
 
@@ -701,7 +708,7 @@ struct MarkdownTextView: NSViewRepresentable {
         for line in codeLines {
             // Add left border
             result2.append(NSAttributedString(string: "  │ ", attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                .font: NSFont.monospacedSystemFont(ofSize: 11 * zoomLevel, weight: .regular),
                 .foregroundColor: NSColor.tertiaryLabelColor
             ]))
 
@@ -726,7 +733,7 @@ struct MarkdownTextView: NSViewRepresentable {
         let labelPadding = 76 - langLabel.count - 1
         let bottomBorder = "  ╰" + String(repeating: "─", count: labelPadding) + " " + langLabel + "╯\n"
         result.append(NSAttributedString(string: bottomBorder, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .font: NSFont.monospacedSystemFont(ofSize: 11 * zoomLevel, weight: .regular),
             .foregroundColor: NSColor.tertiaryLabelColor
         ]))
 
@@ -735,7 +742,7 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func appendBlockquote(text: String, to result: NSMutableAttributedString) {
-        let font = fontStyle.nsFont(size: 16).withTraits(.italic)
+        let font = fontStyle.nsFont(size: 16 * zoomLevel).withTraits(.italic)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.headIndent = 24
         paragraphStyle.firstLineHeadIndent = 24
@@ -744,7 +751,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Accent-colored bar character
         let barAttr = NSAttributedString(string: "  ┃ ", attributes: [
-            .font: NSFont.systemFont(ofSize: 16),
+            .font: NSFont.systemFont(ofSize: 16 * zoomLevel),
             .foregroundColor: NSColor.controlAccentColor.withAlphaComponent(0.5),
             .paragraphStyle: paragraphStyle
         ])
@@ -762,8 +769,8 @@ struct MarkdownTextView: NSViewRepresentable {
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {
         guard !rows.isEmpty else { return }
 
-        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let boldFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        let font = NSFont.monospacedSystemFont(ofSize: 12 * zoomLevel, weight: .regular)
+        let boldFont = NSFont.monospacedSystemFont(ofSize: 12 * zoomLevel, weight: .semibold)
 
         // Calculate column widths
         var columnWidths: [Int] = []
@@ -923,7 +930,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 } else {
                     // Show placeholder for missing image
                     let attributes: [NSAttributedString.Key: Any] = [
-                        .font: fontStyle.nsFont(size: 14),
+                        .font: fontStyle.nsFont(size: 14 * zoomLevel),
                         .foregroundColor: NSColor.secondaryLabelColor
                     ]
                     result.append(NSAttributedString(string: "[Image: \(alt.isEmpty ? path : alt)]\n", attributes: attributes))
@@ -1002,7 +1009,7 @@ struct MarkdownTextView: NSViewRepresentable {
             let placeholder = NSMutableAttributedString()
             placeholder.append(NSAttributedString(string: "\n", attributes: [:]))
             placeholder.append(NSAttributedString(string: "    Rendering diagram...\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .font: NSFont.systemFont(ofSize: 13 * zoomLevel, weight: .medium),
                 .foregroundColor: NSColor.tertiaryLabelColor,
                 .paragraphStyle: placeholderStyle
             ]))
@@ -1033,7 +1040,7 @@ struct MarkdownTextView: NSViewRepresentable {
             paragraphStyle.alignment = .center
             paragraphStyle.paragraphSpacing = 8
             result.append(NSAttributedString(string: "  Rendering math...\n", attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .font: NSFont.systemFont(ofSize: 13 * zoomLevel, weight: .medium),
                 .foregroundColor: NSColor.tertiaryLabelColor,
                 .paragraphStyle: paragraphStyle
             ]))
@@ -1162,7 +1169,7 @@ struct MarkdownTextView: NSViewRepresentable {
             } else {
                 // Style as code-like placeholder and trigger async render
                 let attributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                    .font: NSFont.monospacedSystemFont(ofSize: 13 * zoomLevel, weight: .regular),
                     .foregroundColor: NSColor.systemPurple
                 ]
                 result.replaceCharacters(in: fullRange, with: NSAttributedString(string: latex, attributes: attributes))
