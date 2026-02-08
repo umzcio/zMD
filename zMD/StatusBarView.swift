@@ -19,11 +19,32 @@ struct StatusBarView: View {
 
                 // Right: zoom, view mode, encoding
                 HStack(spacing: 8) {
-                    if settings.zoomLevel != 1.0 {
+                    Menu {
+                        ForEach([50, 75, 90, 100, 110, 125, 150, 175, 200], id: \.self) { percent in
+                            Button {
+                                settings.zoomLevel = CGFloat(percent) / 100.0
+                            } label: {
+                                HStack {
+                                    Text("\(percent)%")
+                                    if Int(settings.zoomLevel * 100) == percent {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Reset to 100%") {
+                            settings.resetZoom()
+                        }
+                        .disabled(settings.zoomLevel == 1.0)
+                    } label: {
                         Text("\(Int(settings.zoomLevel * 100))%")
                             .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(settings.zoomLevel != 1.0 ? .secondary : Color(NSColor.tertiaryLabelColor))
                     }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
 
                     Text(documentManager.viewMode.rawValue)
                         .font(.system(size: 11))
