@@ -115,6 +115,7 @@ class ExportManager {
                     context.closePDF()
 
                     try pdfData.write(to: url)
+                    ToastManager.shared.show("Exported as PDF", style: .success)
                 } catch {
                     self.alertManager.showExportError("PDF", error: error)
                 }
@@ -136,6 +137,7 @@ class ExportManager {
 
             do {
                 try html.write(to: url, atomically: true, encoding: .utf8)
+                ToastManager.shared.show("Exported as HTML", style: .success)
             } catch {
                 self.alertManager.showExportError("HTML", error: error)
             }
@@ -179,6 +181,7 @@ class ExportManager {
                         documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
                     )
                     try rtfData.write(to: url)
+                    ToastManager.shared.show("Exported as RTF", style: .success)
                 } catch {
                     self.alertManager.showExportError("RTF", error: error)
                 }
@@ -199,6 +202,7 @@ class ExportManager {
             DispatchQueue.main.async {
                 do {
                     try self.createCustomDOCX(content: content, outputURL: url)
+                    ToastManager.shared.show("Exported as Word", style: .success)
                 } catch {
                     self.alertManager.showExportError("DOCX", error: error)
                 }

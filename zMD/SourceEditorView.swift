@@ -4,6 +4,8 @@ import AppKit
 struct SourceEditorView: NSViewRepresentable {
     @Binding var content: String
     let onContentChange: ((String) -> Void)?
+    var onScrollPercentChanged: ((CGFloat) -> Void)?
+    var scrollToPercent: CGFloat?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -28,6 +30,17 @@ struct SourceEditorView: NSViewRepresentable {
 
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
+        context.coordinator.scrollView = scrollView
+        context.coordinator.onScrollPercentChanged = onScrollPercentChanged
+
+        // Set up scroll notification for sync
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.scrollViewDidScroll(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
 
         textView.string = content
         context.coordinator.applyHighlighting(to: textView)
@@ -38,6 +51,8 @@ struct SourceEditorView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
+        context.coordinator.onScrollPercentChanged = onScrollPercentChanged
+
         // Skip update if user is currently typing (prevents cursor jump)
         if context.coordinator.isUpdatingFromUser { return }
 
@@ -47,6 +62,11 @@ struct SourceEditorView: NSViewRepresentable {
             textView.selectedRanges = selectedRanges
             context.coordinator.applyHighlighting(to: textView)
         }
+
+        // Handle programmatic scroll from sync
+        if let percent = scrollToPercent, !context.coordinator.isUserScrolling {
+            context.coordinator.scrollToPercent(percent, in: scrollView)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -55,12 +75,61 @@ struct SourceEditorView: NSViewRepresentable {
 
     class Coordinator: NSObject, NSTextViewDelegate {
         var textView: NSTextView?
+        var scrollView: NSScrollView?
         var isUpdatingFromUser = false
+        var isUserScrolling = false
+        var onScrollPercentChanged: ((CGFloat) -> Void)?
         let onContentChange: ((String) -> Void)?
         private var highlightTimer: Timer?
+        private var scrollDebounceTimer: Timer?
+        private var isProgrammaticScroll = false
 
         init(onContentChange: ((String) -> Void)?) {
             self.onContentChange = onContentChange
+        }
+
+        @objc func scrollViewDidScroll(_ notification: Notification) {
+            guard !isProgrammaticScroll else { return }
+            guard let scrollView = scrollView,
+                  let documentView = scrollView.documentView else { return }
+
+            let contentHeight = documentView.frame.height
+            let viewportHeight = scrollView.contentView.bounds.height
+            let scrollableHeight = contentHeight - viewportHeight
+
+            guard scrollableHeight > 0 else { return }
+
+            let currentOffset = scrollView.contentView.bounds.origin.y
+            let percent = min(1.0, max(0.0, currentOffset / scrollableHeight))
+
+            isUserScrolling = true
+            scrollDebounceTimer?.invalidate()
+            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+                self?.isUserScrolling = false
+            }
+
+            onScrollPercentChanged?(percent)
+        }
+
+        func scrollToPercent(_ percent: CGFloat, in scrollView: NSScrollView) {
+            guard let documentView = scrollView.documentView else { return }
+            let contentHeight = documentView.frame.height
+            let viewportHeight = scrollView.contentView.bounds.height
+            let scrollableHeight = contentHeight - viewportHeight
+
+            guard scrollableHeight > 0 else { return }
+
+            let targetY = percent * scrollableHeight
+
+            isProgrammaticScroll = true
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.15
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
+            }) { [weak self] in
+                self?.isProgrammaticScroll = false
+            }
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         func textDidChange(_ notification: Notification) {

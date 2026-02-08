@@ -18,6 +18,7 @@ struct zMDApp: App {
                 .environmentObject(documentManager)
                 .environmentObject(folderManager)
                 .preferredColorScheme(settings.colorScheme)
+                .frame(minWidth: 700, minHeight: 550)
                 .onAppear {
                     // Set up window delegate after window is created
                     DispatchQueue.main.async {
@@ -25,6 +26,17 @@ struct zMDApp: App {
                             let delegate = WindowCloseDelegate.shared
                             delegate.documentManager = documentManager
                             window.delegate = delegate
+                            // Set default window size on first launch
+                            if window.frame.width < 900 || window.frame.height < 650 {
+                                let screen = window.screen ?? NSScreen.main
+                                let screenFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+                                let newSize = NSSize(width: 1000, height: 700)
+                                let origin = NSPoint(
+                                    x: screenFrame.midX - newSize.width / 2,
+                                    y: screenFrame.midY - newSize.height / 2
+                                )
+                                window.setFrame(NSRect(origin: origin, size: newSize), display: true, animate: false)
+                            }
                         }
                     }
                     // Restore last-opened folder
@@ -204,6 +216,26 @@ struct zMDApp: App {
                     documentManager.viewMode = .split
                 }
                 .keyboardShortcut("3", modifiers: .command)
+
+                Divider()
+
+                Button(documentManager.isFocusModeActive ? "Exit Focus Mode" : "Focus Mode") {
+                    NotificationCenter.default.post(name: .toggleFocusMode, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(documentManager.isScrollSyncEnabled ? "Disable Scroll Sync" : "Enable Scroll Sync") {
+                    documentManager.isScrollSyncEnabled.toggle()
+                }
+
+                Divider()
+
+                Button("Command Palette...") {
+                    NotificationCenter.default.post(name: .showCommandPalette, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
 
             CommandGroup(replacing: .toolbar) {

@@ -4,6 +4,7 @@ struct FolderSidebarView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var folderManager: FolderManager
     @State private var expandedDirectories: Set<String> = []
+    @State private var closeButtonHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,16 +18,30 @@ struct FolderSidebarView: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button(action: { folderManager.closeFolder() }) {
+                Button(action: {
+                    NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        folderManager.closeFolder()
+                    }
+                }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(closeButtonHovered ? .primary : .secondary)
+                        .frame(width: 18, height: 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(closeButtonHovered ? Color(NSColor.controlBackgroundColor) : Color.clear)
+                        )
                 }
                 .buttonStyle(PlainButtonStyle())
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        closeButtonHovered = hovering
+                    }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
 
             Divider()
 
@@ -49,7 +64,7 @@ struct FolderSidebarView: View {
             }
         }
         .frame(width: 220)
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+        .background(.ultraThinMaterial)
     }
 
     private var activeDocumentURL: URL? {
@@ -64,6 +79,7 @@ struct FileTreeItemView: View {
     @Binding var expandedDirectories: Set<String>
     let onFileSelected: (URL) -> Void
     let activeURL: URL?
+    @State private var isHovered = false
 
     private var isExpanded: Bool {
         expandedDirectories.contains(item.id)
@@ -73,10 +89,12 @@ struct FileTreeItemView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: {
                 if item.isDirectory {
-                    if isExpanded {
-                        expandedDirectories.remove(item.id)
-                    } else {
-                        expandedDirectories.insert(item.id)
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if isExpanded {
+                            expandedDirectories.remove(item.id)
+                        } else {
+                            expandedDirectories.insert(item.id)
+                        }
                     }
                 } else {
                     onFileSelected(item.url)
@@ -84,10 +102,11 @@ struct FileTreeItemView: View {
             }) {
                 HStack(spacing: 4) {
                     if item.isDirectory {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundColor(Color(nsColor: .secondaryLabelColor))
                             .frame(width: 12)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     } else {
                         Spacer()
                             .frame(width: 12)
@@ -100,17 +119,24 @@ struct FileTreeItemView: View {
                     Text(item.name)
                         .font(.system(size: 12))
                         .lineLimit(1)
-                        .foregroundColor(isActive ? .primary : .secondary)
+                        .foregroundColor(isActive ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
 
                     Spacer()
                 }
                 .padding(.leading, CGFloat(8 + depth * 16))
                 .padding(.trailing, 8)
                 .padding(.vertical, 4)
-                .background(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
-                .cornerRadius(4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isActive ? Color.accentColor.opacity(0.12) : (isHovered ? Color.accentColor.opacity(0.06) : Color.clear))
+                )
             }
             .buttonStyle(PlainButtonStyle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.1)) {
+                    isHovered = hovering
+                }
+            }
             .padding(.horizontal, 4)
 
             // Show children if expanded
@@ -123,6 +149,7 @@ struct FileTreeItemView: View {
                         onFileSelected: onFileSelected,
                         activeURL: activeURL
                     )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }

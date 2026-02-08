@@ -19,7 +19,6 @@ struct OutlineView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
 
             Divider()
 
@@ -34,7 +33,7 @@ struct OutlineView: View {
             }
         }
         .frame(width: 250)
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+        .background(.ultraThinMaterial)
         .onAppear { headings = OutlineItem.extractHeadings(from: content) }
         .onChange(of: content) { _ in headings = OutlineItem.extractHeadings(from: content) }
     }
@@ -76,6 +75,11 @@ struct OutlineItem: Identifiable {
 struct OutlineItemView: View {
     let item: OutlineItem
     @Binding var selectedId: String?
+    @State private var isHovered = false
+
+    private var isActive: Bool {
+        selectedId == item.id
+    }
 
     var body: some View {
         Button(action: {
@@ -84,17 +88,24 @@ struct OutlineItemView: View {
             HStack(spacing: 6) {
                 Text(item.text)
                     .font(.system(size: fontSize))
-                    .foregroundColor(selectedId == item.id ? .primary : .secondary)
+                    .foregroundColor(isActive ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.leading, CGFloat(12 + (item.level - 1) * 16))
             .padding(.trailing, 12)
             .padding(.vertical, 6)
-            .background(selectedId == item.id ? Color.accentColor.opacity(0.1) : Color.clear)
-            .cornerRadius(4)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(isActive ? Color.accentColor.opacity(0.1) : (isHovered ? Color.accentColor.opacity(0.06) : Color.clear))
+            )
         }
         .buttonStyle(PlainButtonStyle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isHovered = hovering
+            }
+        }
         .padding(.horizontal, 8)
     }
 

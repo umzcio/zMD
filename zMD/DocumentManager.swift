@@ -18,6 +18,15 @@ class DocumentManager: ObservableObject {
     // View mode
     @Published var viewMode: ViewMode = .preview
 
+    // Focus mode
+    @Published var isFocusModeActive: Bool = false
+
+    // Scroll sync in split mode
+    @Published var isScrollSyncEnabled: Bool = true
+    @Published var scrollSyncSourcePercent: CGFloat = 0
+    @Published var scrollSyncPreviewPercent: CGFloat = 0
+    var scrollSyncOrigin: ScrollSyncOrigin = .none
+
     // Auto-save
     @Published var autoSaveEnabled: Bool {
         didSet { UserDefaults.standard.set(autoSaveEnabled, forKey: "autoSaveEnabled") }
@@ -332,6 +341,8 @@ class DocumentManager: ObservableObject {
             // Resume file watcher, ignoring this change
             fileWatchers[id]?.ignoreNextChange = true
             fileWatchers[id]?.resume()
+
+            ToastManager.shared.show("File saved", style: .success)
         } catch {
             // Fall back to NSSavePanel
             let savePanel = NSSavePanel()
@@ -569,6 +580,12 @@ struct SearchMatch: Identifiable {
     let lineNumber: Int
 }
 
+enum ScrollSyncOrigin {
+    case none
+    case source
+    case preview
+}
+
 extension DocumentManager {
     func startSearch() {
         isSearching = true
@@ -650,6 +667,8 @@ extension DocumentManager: FileWatcherDelegate {
 
         // Find the document that corresponds to this URL
         guard let document = openDocuments.first(where: { $0.url == url }) else { return }
+
+        ToastManager.shared.show("File changed externally", style: .warning)
 
         // Ask user what to do
         let action = alertManager.showFileChangedDialog(fileName: url.lastPathComponent)

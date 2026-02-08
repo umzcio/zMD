@@ -13,8 +13,10 @@ struct MarkdownTextView: NSViewRepresentable {
     let initialScrollPosition: CGFloat
     let onScrollPositionChanged: ((CGFloat) -> Void)?
     let onMatchCountChanged: ((Int) -> Void)?
+    var onScrollPercentChanged: ((CGFloat) -> Void)?
+    var scrollToPercent: CGFloat?
 
-    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil) {
+    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil) {
         self.content = content
         self.baseURL = baseURL
         self._scrollToHeadingId = scrollToHeadingId
@@ -25,6 +27,8 @@ struct MarkdownTextView: NSViewRepresentable {
         self.initialScrollPosition = initialScrollPosition
         self.onScrollPositionChanged = onScrollPositionChanged
         self.onMatchCountChanged = onMatchCountChanged
+        self.onScrollPercentChanged = onScrollPercentChanged
+        self.scrollToPercent = scrollToPercent
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -48,6 +52,7 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.scrollView = scrollView
         context.coordinator.onScrollPositionChanged = onScrollPositionChanged
         context.coordinator.onMatchCountChanged = onMatchCountChanged
+        context.coordinator.onScrollPercentChanged = onScrollPercentChanged
 
         // Set up scroll notification
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -126,6 +131,12 @@ struct MarkdownTextView: NSViewRepresentable {
                 scrollToHeadingId = nil
             }
         }
+
+        // Handle programmatic scroll from sync
+        context.coordinator.onScrollPercentChanged = onScrollPercentChanged
+        if let percent = scrollToPercent, !context.coordinator.isUserScrolling {
+            context.coordinator.scrollToPercent(percent)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -142,20 +153,42 @@ struct MarkdownTextView: NSViewRepresentable {
         var matchRanges: [NSRange] = []
         var onScrollPositionChanged: ((CGFloat) -> Void)?
         var onMatchCountChanged: ((Int) -> Void)?
+        var onScrollPercentChanged: ((CGFloat) -> Void)?
+        var isProgrammaticScroll = false
+        var isUserScrolling = false
         private var scrollDebounceTimer: Timer?
+        private var syncDebounceTimer: Timer?
         // Image cache shared across renders
         static var imageCache: [String: NSImage] = [:]
         // Diagram/math cache
         static var diagramCache: [String: NSImage] = [:]
 
         func scrollToHeading(id: String, in textView: NSTextView) {
-            if let range = headingRanges[id] {
-                textView.scrollRangeToVisible(range)
-                // Briefly highlight the heading
-                textView.setSelectedRange(range)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    textView.setSelectedRange(NSRange(location: range.location, length: 0))
-                }
+            guard let range = headingRanges[id],
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let scrollView = textView.enclosingScrollView else { return }
+
+            // Calculate target position
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let headingRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            let inset = textView.textContainerInset
+            let targetY = headingRect.origin.y + inset.height - 20 // 20px above heading
+            let maxY = max(0, textView.frame.height - scrollView.contentView.bounds.height)
+            let clampedY = min(max(0, targetY), maxY)
+
+            // Animate the scroll
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: clampedY))
+            }
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+
+            // Briefly highlight the heading
+            textView.setSelectedRange(range)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                textView.setSelectedRange(NSRange(location: range.location, length: 0))
             }
         }
 
@@ -271,6 +304,42 @@ struct MarkdownTextView: NSViewRepresentable {
                 let position = clipView.bounds.origin.y
                 self?.onScrollPositionChanged?(position)
             }
+
+            // Scroll sync percent reporting
+            if !isProgrammaticScroll, let sv = scrollView, let docView = sv.documentView {
+                let contentHeight = docView.frame.height
+                let viewportHeight = sv.contentView.bounds.height
+                let scrollableHeight = contentHeight - viewportHeight
+                if scrollableHeight > 0 {
+                    let percent = min(1.0, max(0.0, clipView.bounds.origin.y / scrollableHeight))
+                    isUserScrolling = true
+                    syncDebounceTimer?.invalidate()
+                    syncDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+                        self?.isUserScrolling = false
+                    }
+                    onScrollPercentChanged?(percent)
+                }
+            }
+        }
+
+        func scrollToPercent(_ percent: CGFloat) {
+            guard let scrollView = scrollView, let documentView = scrollView.documentView else { return }
+            let contentHeight = documentView.frame.height
+            let viewportHeight = scrollView.contentView.bounds.height
+            let scrollableHeight = contentHeight - viewportHeight
+            guard scrollableHeight > 0 else { return }
+
+            let targetY = percent * scrollableHeight
+
+            isProgrammaticScroll = true
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.15
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
+            }) { [weak self] in
+                self?.isProgrammaticScroll = false
+            }
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         deinit {
@@ -449,19 +518,41 @@ struct MarkdownTextView: NSViewRepresentable {
         let size = sizes[level] ?? 16
         let font = fontStyle.nsFont(size: size).withWeight(.semibold)
 
+        // Heading color hierarchy
+        let headingColors: [Int: NSColor] = [
+            1: NSColor.controlAccentColor,
+            2: NSColor.controlAccentColor.withAlphaComponent(0.8),
+            3: NSColor.textColor,
+            4: NSColor.secondaryLabelColor
+        ]
+        let color = headingColors[level] ?? NSColor.textColor
+
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.paragraphSpacingBefore = level == 1 ? 24 : (level == 2 ? 20 : 16)
-        paragraphStyle.paragraphSpacing = level == 1 ? 12 : 8
+        paragraphStyle.paragraphSpacing = (level <= 2) ? 4 : 8
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.textColor,
+            .foregroundColor: color,
             .paragraphStyle: paragraphStyle
         ]
 
         let formatted = formatInlineMarkdown(text, attributes: attributes)
         result.append(formatted)
         result.append(NSAttributedString(string: "\n"))
+
+        // H1 and H2 get a subtle underline divider
+        if level <= 2 {
+            let dividerStyle = NSMutableParagraphStyle()
+            dividerStyle.paragraphSpacing = 10
+            let dividerLength = level == 1 ? 50 : 35
+            let dividerColor = NSColor.controlAccentColor.withAlphaComponent(level == 1 ? 0.4 : 0.25)
+            result.append(NSAttributedString(string: String(repeating: "─", count: dividerLength) + "\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 6),
+                .foregroundColor: dividerColor,
+                .paragraphStyle: dividerStyle
+            ]))
+        }
     }
 
     private func appendParagraph(text: String, to result: NSMutableAttributedString) {
@@ -517,9 +608,10 @@ struct MarkdownTextView: NSViewRepresentable {
                 itemText = String(text.dropFirst(4))
             }
 
+            let bulletColor = NSColor.controlAccentColor.withAlphaComponent(0.7)
             let bulletAttr = NSAttributedString(string: bulletPrefix, attributes: [
                 .font: font,
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: bulletColor,
                 .paragraphStyle: paragraphStyle
             ])
             result.append(bulletAttr)
@@ -645,10 +737,18 @@ struct MarkdownTextView: NSViewRepresentable {
     private func appendBlockquote(text: String, to result: NSMutableAttributedString) {
         let font = fontStyle.nsFont(size: 16).withTraits(.italic)
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.headIndent = 20
-        paragraphStyle.firstLineHeadIndent = 20
+        paragraphStyle.headIndent = 24
+        paragraphStyle.firstLineHeadIndent = 24
         paragraphStyle.paragraphSpacingBefore = 8
         paragraphStyle.paragraphSpacing = 8
+
+        // Accent-colored bar character
+        let barAttr = NSAttributedString(string: "  ┃ ", attributes: [
+            .font: NSFont.systemFont(ofSize: 16),
+            .foregroundColor: NSColor.controlAccentColor.withAlphaComponent(0.5),
+            .paragraphStyle: paragraphStyle
+        ])
+        result.append(barAttr)
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -656,20 +756,19 @@ struct MarkdownTextView: NSViewRepresentable {
             .paragraphStyle: paragraphStyle
         ]
 
-        result.append(NSAttributedString(string: "  " + text + "\n", attributes: attributes))
+        result.append(NSAttributedString(string: text + "\n", attributes: attributes))
     }
 
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {
         guard !rows.isEmpty else { return }
 
-        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        let boldFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let boldFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
 
         // Calculate column widths
         var columnWidths: [Int] = []
         for row in rows {
             for (colIndex, cell) in row.enumerated() {
-                // Strip markdown formatting for width calculation
                 let plainCell = cell.replacingOccurrences(of: "**", with: "")
                     .replacingOccurrences(of: "`", with: "")
                     .replacingOccurrences(of: "*", with: "")
@@ -679,6 +778,21 @@ struct MarkdownTextView: NSViewRepresentable {
                 } else {
                     columnWidths[colIndex] = max(columnWidths[colIndex], cellWidth)
                 }
+            }
+        }
+
+        // Cap total width to fit container (~95 chars at 12pt mono in 700px)
+        let separatorWidth = 3 // " │ "
+        let maxTotalChars = 92
+        let numCols = columnWidths.count
+        let totalSeparators = max(0, numCols - 1) * separatorWidth
+        let totalContentWidth = columnWidths.reduce(0, +) + totalSeparators + 2 // +2 for leading indent
+
+        if totalContentWidth > maxTotalChars && numCols > 0 {
+            let availableForContent = maxTotalChars - totalSeparators - 2
+            let ratio = Double(availableForContent) / Double(columnWidths.reduce(0, +))
+            for i in 0..<columnWidths.count {
+                columnWidths[i] = max(4, Int(Double(columnWidths[i]) * ratio))
             }
         }
 
@@ -693,51 +807,64 @@ struct MarkdownTextView: NSViewRepresentable {
 
             let baseAttributes: [NSAttributedString.Key: Any] = [
                 .font: isHeader ? boldFont : font,
-                .foregroundColor: NSColor.textColor,
+                .foregroundColor: isHeader ? NSColor.controlAccentColor : NSColor.textColor,
                 .paragraphStyle: paragraphStyle
             ]
 
-            // Render each cell with inline formatting and padding
+            // Render each cell
             result.append(NSAttributedString(string: "  ", attributes: baseAttributes))
 
             for (cellIndex, cell) in row.enumerated() {
-                let width = cellIndex < columnWidths.count ? columnWidths[cellIndex] : cell.count
+                let maxWidth = cellIndex < columnWidths.count ? columnWidths[cellIndex] : cell.count
 
-                // Format cell content with inline markdown
-                let formattedCell = formatInlineMarkdown(cell, attributes: baseAttributes)
-                result.append(formattedCell)
-
-                // Calculate actual display length (without markdown syntax)
+                // Strip markdown for display length calculation
                 let plainCell = cell.replacingOccurrences(of: "**", with: "")
                     .replacingOccurrences(of: "`", with: "")
                     .replacingOccurrences(of: "*", with: "")
-                let displayLength = plainCell.count
 
-                // Add padding
-                if displayLength < width {
-                    let padding = String(repeating: " ", count: width - displayLength)
+                // Truncate if needed
+                let displayText: String
+                if plainCell.count > maxWidth {
+                    displayText = String(plainCell.prefix(maxWidth - 1)) + "…"
+                } else {
+                    displayText = cell
+                }
+
+                // Format cell content
+                let formattedCell = formatInlineMarkdown(displayText, attributes: baseAttributes)
+                result.append(formattedCell)
+
+                // Calculate display length for padding
+                let displayPlain = displayText.replacingOccurrences(of: "**", with: "")
+                    .replacingOccurrences(of: "`", with: "")
+                    .replacingOccurrences(of: "*", with: "")
+                let displayLength = displayPlain.count
+
+                // Pad to column width
+                if displayLength < maxWidth {
+                    let padding = String(repeating: " ", count: maxWidth - displayLength)
                     result.append(NSAttributedString(string: padding, attributes: baseAttributes))
                 }
 
                 if cellIndex < row.count - 1 {
-                    result.append(NSAttributedString(string: "  │  ", attributes: [
+                    result.append(NSAttributedString(string: " │ ", attributes: [
                         .font: font,
-                        .foregroundColor: NSColor.tertiaryLabelColor
+                        .foregroundColor: NSColor.controlAccentColor.withAlphaComponent(0.3)
                     ]))
                 }
             }
             result.append(NSAttributedString(string: "\n", attributes: baseAttributes))
 
-            // Add separator after header
+            // Separator after header with accent color
             if isHeader {
                 var separatorParts: [String] = []
                 for width in columnWidths {
                     separatorParts.append(String(repeating: "─", count: width))
                 }
-                let separator = "  " + separatorParts.joined(separator: "──┼──")
+                let separator = "  " + separatorParts.joined(separator: "─┼─")
                 result.append(NSAttributedString(string: separator + "\n", attributes: [
                     .font: font,
-                    .foregroundColor: NSColor.tertiaryLabelColor
+                    .foregroundColor: NSColor.controlAccentColor.withAlphaComponent(0.35)
                 ]))
             }
         }
@@ -751,12 +878,23 @@ struct MarkdownTextView: NSViewRepresentable {
         paragraphStyle.paragraphSpacingBefore = 16
         paragraphStyle.paragraphSpacing = 16
 
-        let rule = String(repeating: "─", count: 60)
-        result.append(NSAttributedString(string: rule + "\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 12),
-            .foregroundColor: NSColor.separatorColor,
-            .paragraphStyle: paragraphStyle
-        ]))
+        // Gradient-like rule: accent fading to transparent
+        let accentColor = NSColor.controlAccentColor
+        let segments = 40
+        let ruleStr = NSMutableAttributedString()
+        for i in 0..<segments {
+            let progress = CGFloat(i) / CGFloat(segments)
+            // Bell curve: strong in center, fading at edges
+            let intensity = sin(progress * .pi)
+            let color = accentColor.withAlphaComponent(intensity * 0.5)
+            ruleStr.append(NSAttributedString(string: "─", attributes: [
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: color,
+                .paragraphStyle: paragraphStyle
+            ]))
+        }
+        ruleStr.append(NSAttributedString(string: "\n"))
+        result.append(ruleStr)
     }
 
     private func appendImage(line: String, to result: NSMutableAttributedString) {
@@ -855,8 +993,21 @@ struct MarkdownTextView: NSViewRepresentable {
             result.append(NSAttributedString(attachment: attachment))
             result.append(NSAttributedString(string: "\n\n"))
         } else {
-            // Show as code block placeholder and trigger async render
-            appendCodeBlock(code: code, language: "mermaid", to: result)
+            // Show styled loading placeholder
+            let placeholderStyle = NSMutableParagraphStyle()
+            placeholderStyle.alignment = .center
+            placeholderStyle.paragraphSpacingBefore = 12
+            placeholderStyle.paragraphSpacing = 12
+
+            let placeholder = NSMutableAttributedString()
+            placeholder.append(NSAttributedString(string: "\n", attributes: [:]))
+            placeholder.append(NSAttributedString(string: "    Rendering diagram...\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .foregroundColor: NSColor.tertiaryLabelColor,
+                .paragraphStyle: placeholderStyle
+            ]))
+            placeholder.append(NSAttributedString(string: "\n", attributes: [:]))
+            result.append(placeholder)
 
             Task { @MainActor in
                 WebRenderer.shared.renderMermaid(code) { image in
@@ -877,14 +1028,13 @@ struct MarkdownTextView: NSViewRepresentable {
             result.append(NSAttributedString(attachment: attachment))
             result.append(NSAttributedString(string: "\n\n"))
         } else {
-            // Show raw LaTeX as placeholder
-            let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            // Show styled loading placeholder
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.alignment = .center
             paragraphStyle.paragraphSpacing = 8
-            result.append(NSAttributedString(string: latex + "\n", attributes: [
-                .font: font,
-                .foregroundColor: NSColor.secondaryLabelColor,
+            result.append(NSAttributedString(string: "  Rendering math...\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .foregroundColor: NSColor.tertiaryLabelColor,
                 .paragraphStyle: paragraphStyle
             ]))
 

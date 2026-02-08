@@ -3,6 +3,7 @@ import SwiftUI
 struct TabBar: View {
     @EnvironmentObject var documentManager: DocumentManager
     @Binding var showOutline: Bool
+    @State private var addButtonHovered = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -13,8 +14,13 @@ struct TabBar: View {
                             document: document,
                             isSelected: documentManager.selectedDocumentId == document.id
                         )
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.8)),
+                            removal: .opacity.combined(with: .scale(scale: 0.8))
+                        ))
                     }
                 }
+                .animation(.easeInOut(duration: 0.2), value: documentManager.openDocuments.map(\.id))
             }
 
             Spacer()
@@ -25,14 +31,20 @@ struct TabBar: View {
             }) {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(addButtonHovered ? .primary : .secondary)
                     .frame(width: 28, height: 28)
                     .background(
                         Circle()
-                            .fill(Color(NSColor.controlBackgroundColor))
+                            .fill(addButtonHovered ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                     )
+                    .scaleEffect(addButtonHovered ? 1.1 : 1.0)
             }
             .buttonStyle(PlainButtonStyle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    addButtonHovered = hovering
+                }
+            }
             .padding(.horizontal, 4)
             .help("Open File")
 
@@ -52,6 +64,7 @@ struct TabBar: View {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showOutline.toggle()
                 }
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
             }) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 14))
@@ -63,7 +76,7 @@ struct TabBar: View {
             .padding(.horizontal, 8)
         }
         .frame(height: 32)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
+        .background(.ultraThinMaterial)
     }
 }
 
@@ -72,6 +85,8 @@ struct TabItem: View {
     let document: MarkdownDocument
     let isSelected: Bool
     @State private var isDragTarget = false
+    @State private var isHovered = false
+    @State private var dirtyPulse = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -79,12 +94,24 @@ struct TabItem: View {
                 Circle()
                     .fill(Color.accentColor)
                     .frame(width: 6, height: 6)
+                    .scaleEffect(dirtyPulse ? 1.5 : 1.0)
+                    .opacity(dirtyPulse ? 0.6 : 1.0)
+                    .onAppear {
+                        withAnimation(.easeOut(duration: 0.4)) {
+                            dirtyPulse = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            withAnimation(.easeIn(duration: 0.2)) {
+                                dirtyPulse = false
+                            }
+                        }
+                    }
             }
 
             Text(document.name)
                 .font(.system(size: 12))
                 .lineLimit(1)
-                .foregroundColor(isSelected ? .primary : .secondary)
+                .foregroundColor(isSelected ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
 
             Button(action: {
                 if document.isDirty {
@@ -98,7 +125,10 @@ struct TabItem: View {
                         documentManager.saveDocument(id: document.id)
                     }
                 }
-                documentManager.closeDocument(document)
+                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    documentManager.closeDocument(document)
+                }
             }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .medium))
@@ -106,12 +136,13 @@ struct TabItem: View {
             }
             .buttonStyle(PlainButtonStyle())
             .frame(width: 14, height: 14)
+            .opacity(isHovered || isSelected ? 1.0 : 0.0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isDragTarget ? Color.accentColor.opacity(0.25) : (isSelected ? Color.accentColor.opacity(0.15) : Color.clear))
+                .fill(isDragTarget ? Color.accentColor.opacity(0.25) : (isSelected ? Color.accentColor.opacity(0.15) : (isHovered ? Color.accentColor.opacity(0.08) : Color.clear)))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 4)
@@ -119,6 +150,11 @@ struct TabItem: View {
         )
         .contentShape(Rectangle())
         .help(document.url.path)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
         .onTapGesture {
             documentManager.selectedDocumentId = document.id
         }
@@ -129,7 +165,10 @@ struct TabItem: View {
         .onDrop(of: [.text], isTargeted: $isDragTarget) { _ in
             guard let sourceId = documentManager.draggingDocumentId,
                   let targetIndex = documentManager.openDocuments.firstIndex(where: { $0.id == document.id }) else { return false }
-            documentManager.moveDocument(withId: sourceId, toIndex: targetIndex)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                documentManager.moveDocument(withId: sourceId, toIndex: targetIndex)
+            }
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
             documentManager.draggingDocumentId = nil
             return true
         }
