@@ -201,7 +201,7 @@ class ExportManager {
 
             DispatchQueue.main.async {
                 do {
-                    try self.createCustomDOCX(content: content, outputURL: url)
+                    try self.createCustomDOCX(content: content, outputURL: url, fileName: fileName)
                     ToastManager.shared.show("Exported as Word", style: .success)
                 } catch {
                     self.alertManager.showExportError("DOCX", error: error)
@@ -212,12 +212,13 @@ class ExportManager {
 
     // Property to track hyperlinks during document generation
     private var hyperlinkRelationships: [(id: String, url: String)] = []
-    private var nextHyperlinkId = 3 // Start at 3 since rId1 and rId2 are taken
+    private var nextHyperlinkId = 6 // rId1-5 reserved for numbering, styles, settings, header, footer
+    private var numberedListCount = 0 // tracks how many separate numbered lists for numId generation
 
-    private func createCustomDOCX(content: String, outputURL: URL) throws {
+    private func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil) throws {
         // Reset hyperlink tracking for new document
         hyperlinkRelationships = []
-        nextHyperlinkId = 3
+        nextHyperlinkId = 6
 
         // Create temporary directory for DOCX structure
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -249,6 +250,9 @@ class ExportManager {
             <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
             <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
             <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+            <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+            <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+            <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
         </Types>
         """
         try contentTypes.write(to: tempDir.appendingPathComponent("[Content_Types].xml"), atomically: true, encoding: .utf8)
@@ -262,30 +266,95 @@ class ExportManager {
         """
         try mainRels.write(to: relsDir.appendingPathComponent(".rels"), atomically: true, encoding: .utf8)
 
-        // Create word/_rels/document.xml.rels with hyperlink relationships
+        // Create word/_rels/document.xml.rels
         var documentRels = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
             <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
             <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+            <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+            <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+            <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
         """
 
-        // Add hyperlink relationships
         for hyperlink in hyperlinkRelationships {
-            documentRels += """
-
-                <Relationship Id="\(hyperlink.id)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="\(xmlEscape(hyperlink.url))" TargetMode="External"/>
-            """
+            documentRels += "\n    <Relationship Id=\"\(hyperlink.id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"\(xmlEscape(hyperlink.url))\" TargetMode=\"External\"/>"
         }
 
-        documentRels += """
-
-        </Relationships>
-        """
+        documentRels += "\n</Relationships>"
         try documentRels.write(to: wordRelsDir.appendingPathComponent("document.xml.rels"), atomically: true, encoding: .utf8)
 
-        // Create word/numbering.xml for list styles
-        let numberingXML = """
+        // Create word/header1.xml
+        let docTitle = xmlEscape(fileName?.replacingOccurrences(of: ".md", with: "") ?? "Document")
+        let headerXML = """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            <w:p>
+                <w:pPr><w:jc w:val="right"/></w:pPr>
+                <w:r>
+                    <w:rPr><w:i/><w:iCs/><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:t>\(docTitle)</w:t>
+                </w:r>
+            </w:p>
+        </w:hdr>
+        """
+        try headerXML.write(to: wordDir.appendingPathComponent("header1.xml"), atomically: true, encoding: .utf8)
+
+        // Create word/footer1.xml with page numbers
+        let footerXML = """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            <w:p>
+                <w:pPr><w:jc w:val="center"/></w:pPr>
+                <w:r>
+                    <w:rPr><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:t xml:space="preserve">Page </w:t>
+                </w:r>
+                <w:r>
+                    <w:rPr><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:fldChar w:fldCharType="begin"/>
+                </w:r>
+                <w:r>
+                    <w:rPr><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:instrText>PAGE</w:instrText>
+                </w:r>
+                <w:r>
+                    <w:rPr><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:fldChar w:fldCharType="separate"/>
+                </w:r>
+                <w:r>
+                    <w:rPr><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:t>1</w:t>
+                </w:r>
+                <w:r>
+                    <w:rPr><w:color w:val="888888"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>
+                    <w:fldChar w:fldCharType="end"/>
+                </w:r>
+            </w:p>
+        </w:ftr>
+        """
+        try footerXML.write(to: wordDir.appendingPathComponent("footer1.xml"), atomically: true, encoding: .utf8)
+
+        // Create word/settings.xml
+        let settingsXML = """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:o="urn:schemas-microsoft-com:office:office">
+            <w:defaultTabStop w:val="720"/>
+            <w:characterSpacingControl w:val="doNotCompress"/>
+            <w:compat>
+                <w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>
+            </w:compat>
+            <m:mathPr>
+                <m:mathFont m:val="Cambria Math"/>
+            </m:mathPr>
+        </w:settings>
+        """
+        try settingsXML.write(to: wordDir.appendingPathComponent("settings.xml"), atomically: true, encoding: .utf8)
+
+        // Create word/numbering.xml
+        // numId 1 = bullets (abstractNum 0), numId 2 = base numbered (abstractNum 1)
+        // numIds 3+ = separate numbered lists, each restarting at 1
+        var numberingXML = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
             <w:abstractNum w:abstractNumId="0">
@@ -293,14 +362,20 @@ class ExportManager {
                 <w:lvl w:ilvl="0">
                     <w:start w:val="1"/>
                     <w:numFmt w:val="bullet"/>
-                    <w:lvlText w:val="\u{F0B7}"/>
+                    <w:lvlText w:val="\u{2022}"/>
                     <w:lvlJc w:val="left"/>
                     <w:pPr>
                         <w:ind w:left="720" w:hanging="360"/>
                     </w:pPr>
-                    <w:rPr>
-                        <w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/>
-                    </w:rPr>
+                </w:lvl>
+                <w:lvl w:ilvl="1">
+                    <w:start w:val="1"/>
+                    <w:numFmt w:val="bullet"/>
+                    <w:lvlText w:val="\u{25CB}"/>
+                    <w:lvlJc w:val="left"/>
+                    <w:pPr>
+                        <w:ind w:left="1440" w:hanging="360"/>
+                    </w:pPr>
                 </w:lvl>
             </w:abstractNum>
             <w:abstractNum w:abstractNumId="1">
@@ -314,6 +389,15 @@ class ExportManager {
                         <w:ind w:left="720" w:hanging="360"/>
                     </w:pPr>
                 </w:lvl>
+                <w:lvl w:ilvl="1">
+                    <w:start w:val="1"/>
+                    <w:numFmt w:val="lowerLetter"/>
+                    <w:lvlText w:val="%2."/>
+                    <w:lvlJc w:val="left"/>
+                    <w:pPr>
+                        <w:ind w:left="1440" w:hanging="360"/>
+                    </w:pPr>
+                </w:lvl>
             </w:abstractNum>
             <w:num w:numId="1">
                 <w:abstractNumId w:val="0"/>
@@ -321,27 +405,29 @@ class ExportManager {
             <w:num w:numId="2">
                 <w:abstractNumId w:val="1"/>
             </w:num>
-        </w:numbering>
         """
+        // Add a <w:num> for each separate numbered list, with restart override
+        for listIdx in 1...max(numberedListCount, 1) {
+            let numId = 2 + listIdx
+            numberingXML += "\n    <w:num w:numId=\"\(numId)\"><w:abstractNumId w:val=\"1\"/><w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"1\"/></w:lvlOverride></w:num>"
+        }
+        numberingXML += "\n</w:numbering>"
         try numberingXML.write(to: wordDir.appendingPathComponent("numbering.xml"), atomically: true, encoding: .utf8)
 
-        // Create word/styles.xml for proper Word styling
+        // Create word/styles.xml
         let stylesXML = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
             <w:docDefaults>
                 <w:rPrDefault>
                     <w:rPr>
-                        <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/>
+                        <w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>
                         <w:sz w:val="22"/>
                         <w:szCs w:val="22"/>
+                        <w:lang w:val="en-US"/>
                     </w:rPr>
                 </w:rPrDefault>
-                <w:pPrDefault>
-                    <w:pPr>
-                        <w:spacing w:after="160" w:line="276" w:lineRule="auto"/>
-                    </w:pPr>
-                </w:pPrDefault>
+                <w:pPrDefault/>
             </w:docDefaults>
             <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
                 <w:name w:val="Normal"/>
@@ -349,92 +435,76 @@ class ExportManager {
             </w:style>
             <w:style w:type="paragraph" w:styleId="Heading1">
                 <w:name w:val="heading 1"/>
-                <w:basedOn w:val="Normal"/>
-                <w:next w:val="Normal"/>
+                <w:uiPriority w:val="9"/>
                 <w:qFormat/>
                 <w:pPr>
-                    <w:keepNext/>
-                    <w:keepLines/>
-                    <w:spacing w:before="480" w:after="0"/>
+                    <w:spacing w:before="360" w:after="200"/>
                     <w:outlineLvl w:val="0"/>
                 </w:pPr>
                 <w:rPr>
                     <w:b/>
                     <w:bCs/>
-                    <w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light"/>
-                    <w:color w:val="2E74B5" w:themeColor="accent1" w:themeShade="BF"/>
+                    <w:color w:val="6D2040"/>
                     <w:sz w:val="32"/>
                     <w:szCs w:val="32"/>
                 </w:rPr>
             </w:style>
             <w:style w:type="paragraph" w:styleId="Heading2">
                 <w:name w:val="heading 2"/>
-                <w:basedOn w:val="Normal"/>
-                <w:next w:val="Normal"/>
+                <w:uiPriority w:val="9"/>
                 <w:qFormat/>
                 <w:pPr>
-                    <w:keepNext/>
-                    <w:keepLines/>
-                    <w:spacing w:before="240" w:after="0"/>
+                    <w:spacing w:before="280" w:after="160"/>
                     <w:outlineLvl w:val="1"/>
                 </w:pPr>
                 <w:rPr>
                     <w:b/>
                     <w:bCs/>
-                    <w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light"/>
-                    <w:color w:val="2E74B5" w:themeColor="accent1" w:themeShade="BF"/>
+                    <w:color w:val="8C3A5A"/>
                     <w:sz w:val="26"/>
                     <w:szCs w:val="26"/>
                 </w:rPr>
             </w:style>
             <w:style w:type="paragraph" w:styleId="Heading3">
                 <w:name w:val="heading 3"/>
-                <w:basedOn w:val="Normal"/>
-                <w:next w:val="Normal"/>
+                <w:uiPriority w:val="9"/>
                 <w:qFormat/>
                 <w:pPr>
-                    <w:keepNext/>
-                    <w:keepLines/>
-                    <w:spacing w:before="240" w:after="0"/>
+                    <w:spacing w:before="200" w:after="120"/>
                     <w:outlineLvl w:val="2"/>
                 </w:pPr>
                 <w:rPr>
                     <w:b/>
                     <w:bCs/>
-                    <w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light"/>
-                    <w:color w:val="1F4D78" w:themeColor="accent1" w:themeShade="7F"/>
-                    <w:sz w:val="24"/>
-                    <w:szCs w:val="24"/>
+                    <w:color w:val="A05070"/>
+                    <w:sz w:val="22"/>
+                    <w:szCs w:val="22"/>
                 </w:rPr>
             </w:style>
             <w:style w:type="paragraph" w:styleId="Heading4">
                 <w:name w:val="heading 4"/>
-                <w:basedOn w:val="Normal"/>
-                <w:next w:val="Normal"/>
+                <w:uiPriority w:val="9"/>
                 <w:qFormat/>
                 <w:pPr>
-                    <w:keepNext/>
-                    <w:keepLines/>
-                    <w:spacing w:before="120" w:after="0"/>
                     <w:outlineLvl w:val="3"/>
                 </w:pPr>
                 <w:rPr>
-                    <w:b/>
-                    <w:bCs/>
-                    <w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light"/>
                     <w:i/>
                     <w:iCs/>
-                    <w:color w:val="2E74B5" w:themeColor="accent1" w:themeShade="BF"/>
+                    <w:color w:val="6D2040"/>
                 </w:rPr>
             </w:style>
             <w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont">
                 <w:name w:val="Default Paragraph Font"/>
+                <w:uiPriority w:val="1"/>
                 <w:semiHidden/>
             </w:style>
             <w:style w:type="table" w:default="1" w:styleId="TableNormal">
                 <w:name w:val="Normal Table"/>
+                <w:uiPriority w:val="99"/>
                 <w:semiHidden/>
                 <w:tblPr>
+                    <w:tblInd w:w="0" w:type="dxa"/>
                     <w:tblCellMar>
                         <w:top w:w="0" w:type="dxa"/>
                         <w:left w:w="108" w:type="dxa"/>
@@ -442,6 +512,22 @@ class ExportManager {
                         <w:right w:w="108" w:type="dxa"/>
                     </w:tblCellMar>
                 </w:tblPr>
+            </w:style>
+            <w:style w:type="paragraph" w:styleId="ListParagraph">
+                <w:name w:val="List Paragraph"/>
+                <w:qFormat/>
+                <w:pPr>
+                    <w:spacing w:before="20" w:after="80"/>
+                    <w:ind w:left="720"/>
+                </w:pPr>
+            </w:style>
+            <w:style w:type="character" w:styleId="Hyperlink">
+                <w:name w:val="Hyperlink"/>
+                <w:uiPriority w:val="99"/>
+                <w:rPr>
+                    <w:color w:val="0563C1"/>
+                    <w:u w:val="single"/>
+                </w:rPr>
             </w:style>
             <w:style w:type="paragraph" w:styleId="Code">
                 <w:name w:val="Code"/>
@@ -453,6 +539,7 @@ class ExportManager {
                 <w:rPr>
                     <w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/>
                     <w:sz w:val="18"/>
+                    <w:szCs w:val="18"/>
                 </w:rPr>
             </w:style>
         </w:styles>
@@ -462,6 +549,8 @@ class ExportManager {
         // Create ZIP archive
         try createZipArchive(sourceURL: tempDir, destinationURL: outputURL)
     }
+
+    // MARK: - DOCX Document XML Generation
 
     private func generateDocumentXML(markdown: String) -> String {
         var xml = """
@@ -474,16 +563,22 @@ class ExportManager {
         var i = 0
         var inCodeBlock = false
         var inList = false
+        var inNumberedList = false
+        var currentNumberedNumId = 2 // default numId for numbered lists
+        var inBlockquote = false
+        numberedListCount = 0
 
         while i < lines.count {
             let line = lines[i]
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
 
             // Code blocks
-            if line.hasPrefix("```") {
+            if trimmedLine.hasPrefix("```") {
                 if inCodeBlock {
                     inCodeBlock = false
                 } else {
-                    if inList { inList = false }
+                    if inList { inList = false; inNumberedList = false }
+                    if inBlockquote { inBlockquote = false }
                     inCodeBlock = true
                 }
                 i += 1
@@ -496,124 +591,175 @@ class ExportManager {
                 continue
             }
 
+            // Blockquotes
+            if trimmedLine.hasPrefix("> ") {
+                if inList { inList = false; inNumberedList = false }
+                let quoteText = String(trimmedLine.dropFirst(2))
+                xml += createBlockquoteParagraph(text: quoteText)
+                inBlockquote = true
+                i += 1
+                continue
+            } else if inBlockquote {
+                inBlockquote = false
+            }
+
             // Tables
-            if line.hasPrefix("|") && line.hasSuffix("|") {
-                if inList { inList = false }
+            if trimmedLine.hasPrefix("|") && trimmedLine.hasSuffix("|") {
+                if inList { inList = false; inNumberedList = false }
 
-                xml += "<w:tbl>"
-                xml += """
-                    <w:tblPr>
-                        <w:tblStyle w:val="TableGrid"/>
-                        <w:tblW w:w="5000" w:type="pct"/>
-                        <w:tblBorders>
-                            <w:top w:val="single" w:sz="4" w:space="0" w:color="666666"/>
-                            <w:left w:val="single" w:sz="4" w:space="0" w:color="666666"/>
-                            <w:bottom w:val="single" w:sz="4" w:space="0" w:color="666666"/>
-                            <w:right w:val="single" w:sz="4" w:space="0" w:color="666666"/>
-                            <w:insideH w:val="single" w:sz="4" w:space="0" w:color="666666"/>
-                            <w:insideV w:val="single" w:sz="4" w:space="0" w:color="666666"/>
-                        </w:tblBorders>
-                    </w:tblPr>
-                    <w:tblGrid/>
-                """
+                // Collect all table rows to determine column count and widths
+                var tableRows: [[String]] = []
+                var separatorIndex = -1
+                var tableStart = i
 
-                var isFirstRow = true
-                while i < lines.count && lines[i].hasPrefix("|") {
-                    let currentLine = lines[i].trimmingCharacters(in: .whitespaces)
+                while tableStart < lines.count {
+                    let tl = lines[tableStart].trimmingCharacters(in: .whitespaces)
+                    guard tl.hasPrefix("|") else { break }
 
-                    // Skip separator row
-                    if currentLine.contains("---") || currentLine.contains("--") {
-                        i += 1
-                        isFirstRow = false
+                    if tl.contains("---") || tl.range(of: #"\|[\s:-]+\|"#, options: .regularExpression) != nil {
+                        separatorIndex = tableRows.count
+                        tableStart += 1
                         continue
                     }
 
-                    let cells = currentLine
+                    let cells = tl
                         .split(separator: "|")
                         .map { $0.trimmingCharacters(in: .whitespaces) }
                         .filter { !$0.isEmpty }
 
                     if !cells.isEmpty {
-                        xml += "<w:tr>"
-                        for cell in cells {
-                            xml += "<w:tc>"
-                            xml += "<w:tcPr>"
-                            if isFirstRow {
-                                xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"E8E8E8\"/>"
-                            }
-                            xml += "<w:tcBorders>"
-                            xml += "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"666666\"/>"
-                            xml += "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"666666\"/>"
-                            xml += "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"666666\"/>"
-                            xml += "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"666666\"/>"
-                            xml += "</w:tcBorders>"
-                            xml += "</w:tcPr>"
-                            xml += "<w:p>"
+                        tableRows.append(cells)
+                    }
+                    tableStart += 1
+                }
 
-                            // For header row, make text bold AND process inline formatting
-                            if isFirstRow {
-                                // Process inline formatting but wrap in bold
-                                let formattedRuns = createRunsForFormattedText(cell)
-                                // Add bold to all runs in the cell
-                                xml += formattedRuns.replacingOccurrences(of: "<w:rPr>", with: "<w:rPr><w:b/>")
-                                    .replacingOccurrences(of: "<w:r>", with: "<w:r><w:rPr><w:b/></w:rPr>")
-                                    // Clean up double rPr tags
-                                    .replacingOccurrences(of: "<w:rPr><w:b/><w:rPr>", with: "<w:rPr>")
-                            } else {
-                                // Regular cell - just process inline formatting
-                                xml += createRunsForFormattedText(cell)
-                            }
+                let columnCount = tableRows.map { $0.count }.max() ?? 1
+                // Page width: 12240 - 1440 left - 1440 right = 9360 DXA
+                let tableWidth = 9360
+                let columnWidth = tableWidth / columnCount
 
-                            xml += "</w:p>"
-                            xml += "</w:tc>"
+                xml += "<w:tbl>"
+                xml += "<w:tblPr>"
+                xml += "<w:tblW w:w=\"\(tableWidth)\" w:type=\"dxa\"/>"
+                xml += "<w:tblBorders>"
+                xml += "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+                xml += "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+                xml += "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+                xml += "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+                xml += "<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+                xml += "<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+                xml += "</w:tblBorders>"
+                xml += "<w:tblCellMar>"
+                xml += "<w:left w:w=\"10\" w:type=\"dxa\"/>"
+                xml += "<w:right w:w=\"10\" w:type=\"dxa\"/>"
+                xml += "</w:tblCellMar>"
+                xml += "<w:tblLook w:val=\"0000\" w:firstRow=\"0\" w:lastRow=\"0\" w:firstColumn=\"0\" w:lastColumn=\"0\" w:noHBand=\"0\" w:noVBand=\"0\"/>"
+                xml += "</w:tblPr>"
+                xml += "<w:tblGrid>"
+                for _ in 0..<columnCount {
+                    xml += "<w:gridCol w:w=\"\(columnWidth)\"/>"
+                }
+                xml += "</w:tblGrid>"
+
+                for (rowIndex, cells) in tableRows.enumerated() {
+                    let isHeader = rowIndex == 0 && separatorIndex >= 0
+                    xml += "<w:tr>"
+
+                    for colIndex in 0..<columnCount {
+                        let cellText = colIndex < cells.count ? cells[colIndex] : ""
+                        xml += "<w:tc>"
+                        xml += "<w:tcPr>"
+                        xml += "<w:tcW w:w=\"\(columnWidth)\" w:type=\"dxa\"/>"
+                        xml += "<w:tcBorders>"
+                        xml += "<w:top w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                        xml += "<w:left w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                        xml += "<w:bottom w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                        xml += "<w:right w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                        xml += "</w:tcBorders>"
+
+                        if isHeader {
+                            xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"6D2040\"/>"
+                        } else if rowIndex % 2 == 0 && separatorIndex >= 0 {
+                            xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"E0E0E0\"/>"
                         }
-                        xml += "</w:tr>"
+
+                        xml += "<w:tcMar>"
+                        xml += "<w:top w:w=\"60\" w:type=\"dxa\"/>"
+                        xml += "<w:left w:w=\"100\" w:type=\"dxa\"/>"
+                        xml += "<w:bottom w:w=\"60\" w:type=\"dxa\"/>"
+                        xml += "<w:right w:w=\"100\" w:type=\"dxa\"/>"
+                        xml += "</w:tcMar>"
+                        xml += "</w:tcPr>"
+                        xml += "<w:p>"
+
+                        if isHeader {
+                            xml += createHeaderCellRun(text: cellText)
+                        } else {
+                            xml += createRunsForFormattedText(cellText)
+                        }
+
+                        xml += "</w:p>"
+                        xml += "</w:tc>"
                     }
 
-                    i += 1
+                    xml += "</w:tr>"
                 }
+
                 xml += "</w:tbl>"
+                // Add spacing paragraph after table
+                xml += "<w:p><w:pPr><w:spacing w:before=\"120\"/></w:pPr></w:p>"
+                i = tableStart
                 continue
             }
 
             // Headings
-            if line.hasPrefix("#### ") {
-                if inList { inList = false }
-                xml += createHeadingParagraph(text: String(line.dropFirst(5)), level: 4)
-            } else if line.hasPrefix("### ") {
-                if inList { inList = false }
-                xml += createHeadingParagraph(text: String(line.dropFirst(4)), level: 3)
-            } else if line.hasPrefix("## ") {
-                if inList { inList = false }
-                xml += createHeadingParagraph(text: String(line.dropFirst(3)), level: 2)
-            } else if line.hasPrefix("# ") {
-                if inList { inList = false }
-                xml += createHeadingParagraph(text: String(line.dropFirst(2)), level: 1)
+            if trimmedLine.hasPrefix("#### ") {
+                if inList { inList = false; inNumberedList = false }
+                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(5)), level: 4)
+            } else if trimmedLine.hasPrefix("### ") {
+                if inList { inList = false; inNumberedList = false }
+                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(4)), level: 3)
+            } else if trimmedLine.hasPrefix("## ") {
+                if inList { inList = false; inNumberedList = false }
+                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(3)), level: 2)
+            } else if trimmedLine.hasPrefix("# ") {
+                if inList { inList = false; inNumberedList = false }
+                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(2)), level: 1)
             }
-            // Bullet Lists
-            else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
-                let itemText = String(line.dropFirst(2))
-                xml += createListParagraph(text: itemText, numbered: false)
+            // Bullet Lists (including indented sub-items)
+            else if trimmedLine.hasPrefix("- ") || trimmedLine.hasPrefix("* ") || trimmedLine.hasPrefix("+ ") {
+                let itemText = String(trimmedLine.dropFirst(2))
+                let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
+                let level = min(indent / 2, 2) // 0, 1, or 2 based on indentation
+                xml += createListParagraph(text: itemText, numId: 1, level: level)
                 inList = true
             }
-            // Numbered Lists (1. 2. 3. etc)
-            else if let match = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-                let itemText = String(line[match.upperBound...])
-                xml += createListParagraph(text: itemText, numbered: true)
+            // Numbered Lists (including indented: 1. 2. 3. etc)
+            else if let match = trimmedLine.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+                let itemText = String(trimmedLine[match.upperBound...])
+                let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
+                let level = min(indent / 2, 2)
+                if !inNumberedList {
+                    // Starting a new numbered list — assign a new numId
+                    numberedListCount += 1
+                    currentNumberedNumId = 2 + numberedListCount // numId 3, 4, 5, etc.
+                    inNumberedList = true
+                }
+                xml += createListParagraph(text: itemText, numId: currentNumberedNumId, level: level)
                 inList = true
             }
             // Horizontal rule (---, ___, ***)
-            else if line.trimmingCharacters(in: .whitespaces).range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil {
-                if inList { inList = false }
+            else if trimmedLine.range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil {
+                if inList { inList = false; inNumberedList = false }
                 xml += createHorizontalRule()
             }
             // Empty line
-            else if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                if inList { inList = false }
+            else if trimmedLine.isEmpty {
+                if inList { inList = false; inNumberedList = false }
             }
             // Regular paragraph
-            else if !line.isEmpty {
-                if inList { inList = false }
+            else if !trimmedLine.isEmpty {
+                if inList { inList = false; inNumberedList = false }
                 xml += createNormalParagraph(text: line)
             }
 
@@ -622,8 +768,10 @@ class ExportManager {
 
         xml += """
                 <w:sectPr>
+                    <w:headerReference w:type="default" r:id="rId4"/>
+                    <w:footerReference w:type="default" r:id="rId5"/>
                     <w:pgSz w:w="12240" w:h="15840"/>
-                    <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+                    <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>
                 </w:sectPr>
             </w:body>
         </w:document>
@@ -632,69 +780,46 @@ class ExportManager {
         return xml
     }
 
+    // MARK: - DOCX Paragraph Helpers
+
     private func createHeadingParagraph(text: String, level: Int) -> String {
         return """
-            <w:p>
-                <w:pPr>
-                    <w:pStyle w:val="Heading\(level)"/>
-                </w:pPr>
-                <w:r>
-                    <w:t>\(xmlEscape(formatInlineMarkdownForDOCX(text)))</w:t>
-                </w:r>
-            </w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading\(level)"/></w:pPr>\(createRunsForFormattedText(formatInlineMarkdownForDOCX(text)))</w:p>
         """
     }
 
     private func createNormalParagraph(text: String) -> String {
         return """
-            <w:p>
-                <w:pPr>
-                    <w:spacing w:after="160"/>
-                </w:pPr>
-                \(createRunsForFormattedText(text))
-            </w:p>
+        <w:p><w:pPr><w:spacing w:after="160"/></w:pPr>\(createRunsForFormattedText(text))</w:p>
         """
     }
 
-    private func createListParagraph(text: String, numbered: Bool) -> String {
-        // numId 1 = bullets, numId 2 = numbers
-        let numId = numbered ? "2" : "1"
+    private func createListParagraph(text: String, numId: Int, level: Int = 0) -> String {
         return """
-            <w:p>
-                <w:pPr>
-                    <w:numPr>
-                        <w:ilvl w:val="0"/>
-                        <w:numId w:val="\(numId)"/>
-                    </w:numPr>
-                </w:pPr>
-                \(createRunsForFormattedText(text))
-            </w:p>
+        <w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="\(level)"/><w:numId w:val="\(numId)"/></w:numPr></w:pPr>\(createRunsForFormattedText(text))</w:p>
         """
     }
 
     private func createCodeParagraph(text: String) -> String {
         return """
-            <w:p>
-                <w:pPr>
-                    <w:pStyle w:val="Code"/>
-                </w:pPr>
-                <w:r>
-                    <w:t xml:space="preserve">\(xmlEscape(text))</w:t>
-                </w:r>
-            </w:p>
+        <w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr><w:r><w:t xml:space="preserve">\(xmlEscape(text))</w:t></w:r></w:p>
+        """
+    }
+
+    private func createBlockquoteParagraph(text: String) -> String {
+        return """
+        <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:ind w:left="360"/><w:spacing w:after="120"/></w:pPr><w:r><w:rPr><w:i/><w:color w:val="555555"/></w:rPr><w:t xml:space="preserve">\(xmlEscape(text))</w:t></w:r></w:p>
         """
     }
 
     private func createHorizontalRule() -> String {
         return """
-            <w:p>
-                <w:r>
-                    <w:pict>
-                        <v:rect style="width:0;height:1.5pt" o:hralign="center" o:hrstd="t" o:hr="t"/>
-                    </w:pict>
-                </w:r>
-            </w:p>
+        <w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/></w:pBdr><w:spacing w:before="200" w:after="200"/></w:pPr></w:p>
         """
+    }
+
+    private func createHeaderCellRun(text: String) -> String {
+        return "<w:r><w:rPr><w:b/><w:bCs/><w:color w:val=\"FFFFFF\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(text))</w:t></w:r>"
     }
 
     private func createRunsForFormattedText(_ text: String) -> String {
