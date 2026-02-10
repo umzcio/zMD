@@ -425,9 +425,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 appendHorizontalRule(to: result)
             }
             // Table
-            else if line.hasPrefix("|") && line.hasSuffix("|") {
+            else if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") && line.trimmingCharacters(in: .whitespaces).hasSuffix("|") {
                 var tableRows: [[String]] = []
-                while i < lines.count && lines[i].hasPrefix("|") {
+                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
                     let currentLine = lines[i].trimmingCharacters(in: .whitespaces)
                     if !isTableSeparator(currentLine) {
                         let cells = currentLine
