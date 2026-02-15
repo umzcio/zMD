@@ -769,114 +769,54 @@ struct MarkdownTextView: NSViewRepresentable {
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {
         guard !rows.isEmpty else { return }
 
-        let font = NSFont.monospacedSystemFont(ofSize: 12 * zoomLevel, weight: .regular)
-        let boldFont = NSFont.monospacedSystemFont(ofSize: 12 * zoomLevel, weight: .semibold)
+        let font = NSFont.systemFont(ofSize: 13 * zoomLevel, weight: .regular)
+        let boldFont = NSFont.systemFont(ofSize: 13 * zoomLevel, weight: .semibold)
+        let columnCount = rows.map { $0.count }.max() ?? 1
 
-        // Calculate column widths
-        var columnWidths: [Int] = []
-        for row in rows {
-            for (colIndex, cell) in row.enumerated() {
-                let plainCell = cell.replacingOccurrences(of: "**", with: "")
-                    .replacingOccurrences(of: "`", with: "")
-                    .replacingOccurrences(of: "*", with: "")
-                let cellWidth = plainCell.count
-                if colIndex >= columnWidths.count {
-                    columnWidths.append(cellWidth)
-                } else {
-                    columnWidths[colIndex] = max(columnWidths[colIndex], cellWidth)
-                }
-            }
-        }
+        let table = NSTextTable()
+        table.numberOfColumns = columnCount
+        table.setContentWidth(100, type: .percentageValueType)
+        table.hidesEmptyCells = false
 
-        // Cap total width to fit container (~95 chars at 12pt mono in 700px)
-        let separatorWidth = 3 // " │ "
-        let maxTotalChars = 92
-        let numCols = columnWidths.count
-        let totalSeparators = max(0, numCols - 1) * separatorWidth
-        let totalContentWidth = columnWidths.reduce(0, +) + totalSeparators + 2 // +2 for leading indent
-
-        if totalContentWidth > maxTotalChars && numCols > 0 {
-            let availableForContent = maxTotalChars - totalSeparators - 2
-            let ratio = Double(availableForContent) / Double(columnWidths.reduce(0, +))
-            for i in 0..<columnWidths.count {
-                columnWidths[i] = max(4, Int(Double(columnWidths[i]) * ratio))
-            }
-        }
-
-        // Add spacing before table
-        result.append(NSAttributedString(string: "\n"))
+        let borderColor = NSColor.separatorColor
 
         for (rowIndex, row) in rows.enumerated() {
             let isHeader = rowIndex == 0
 
-            let paragraphStyle = NSMutableParagraphStyle()
-            paragraphStyle.lineSpacing = 6
+            for colIndex in 0..<columnCount {
+                let cellText = colIndex < row.count ? row[colIndex] : ""
 
-            let baseAttributes: [NSAttributedString.Key: Any] = [
-                .font: isHeader ? boldFont : font,
-                .foregroundColor: isHeader ? NSColor.controlAccentColor : NSColor.textColor,
-                .paragraphStyle: paragraphStyle
-            ]
+                let block = NSTextTableBlock(table: table, startingRow: rowIndex, rowSpan: 1, startingColumn: colIndex, columnSpan: 1)
 
-            // Render each cell
-            result.append(NSAttributedString(string: "  ", attributes: baseAttributes))
+                block.setBorderColor(borderColor)
+                block.setWidth(0.5, type: .absoluteValueType, for: .border)
+                block.setWidth(6, type: .absoluteValueType, for: .padding)
 
-            for (cellIndex, cell) in row.enumerated() {
-                let maxWidth = cellIndex < columnWidths.count ? columnWidths[cellIndex] : cell.count
-
-                // Strip markdown for display length calculation
-                let plainCell = cell.replacingOccurrences(of: "**", with: "")
-                    .replacingOccurrences(of: "`", with: "")
-                    .replacingOccurrences(of: "*", with: "")
-
-                // Truncate if needed
-                let displayText: String
-                if plainCell.count > maxWidth {
-                    displayText = String(plainCell.prefix(maxWidth - 1)) + "…"
-                } else {
-                    displayText = cell
+                if isHeader {
+                    block.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12)
+                } else if rowIndex % 2 == 0 {
+                    block.backgroundColor = NSColor.textColor.withAlphaComponent(0.03)
                 }
 
-                // Format cell content
-                let formattedCell = formatInlineMarkdown(displayText, attributes: baseAttributes)
+                let cellStyle = NSMutableParagraphStyle()
+                cellStyle.textBlocks = [block]
+                cellStyle.lineSpacing = 2
+                cellStyle.paragraphSpacingBefore = 2
+                cellStyle.paragraphSpacing = 2
+
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: isHeader ? boldFont : font,
+                    .foregroundColor: NSColor.textColor,
+                    .paragraphStyle: cellStyle
+                ]
+
+                let formattedCell = formatInlineMarkdown(cellText, attributes: attrs)
                 result.append(formattedCell)
-
-                // Calculate display length for padding
-                let displayPlain = displayText.replacingOccurrences(of: "**", with: "")
-                    .replacingOccurrences(of: "`", with: "")
-                    .replacingOccurrences(of: "*", with: "")
-                let displayLength = displayPlain.count
-
-                // Pad to column width
-                if displayLength < maxWidth {
-                    let padding = String(repeating: " ", count: maxWidth - displayLength)
-                    result.append(NSAttributedString(string: padding, attributes: baseAttributes))
-                }
-
-                if cellIndex < row.count - 1 {
-                    result.append(NSAttributedString(string: " │ ", attributes: [
-                        .font: font,
-                        .foregroundColor: NSColor.controlAccentColor.withAlphaComponent(0.3)
-                    ]))
-                }
-            }
-            result.append(NSAttributedString(string: "\n", attributes: baseAttributes))
-
-            // Separator after header with accent color
-            if isHeader {
-                var separatorParts: [String] = []
-                for width in columnWidths {
-                    separatorParts.append(String(repeating: "─", count: width))
-                }
-                let separator = "  " + separatorParts.joined(separator: "─┼─")
-                result.append(NSAttributedString(string: separator + "\n", attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.controlAccentColor.withAlphaComponent(0.35)
-                ]))
+                result.append(NSAttributedString(string: "\n", attributes: attrs))
             }
         }
 
-        // Add spacing after table
+        // Spacing after table
         result.append(NSAttributedString(string: "\n"))
     }
 
