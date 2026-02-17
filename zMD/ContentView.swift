@@ -208,6 +208,7 @@ struct ContentView: View {
                                 MarkdownTextView(
                                     content: secondaryDoc.content,
                                     baseURL: secondaryDoc.url,
+                                    directoryBookmark: secondaryDoc.directoryBookmarkData,
                                     scrollToHeadingId: .constant(nil),
                                     searchText: "",
                                     currentMatchIndex: 0,
@@ -446,6 +447,7 @@ extension ContentView {
         MarkdownTextView(
             content: document.content,
             baseURL: document.url,
+            directoryBookmark: document.directoryBookmarkData,
             scrollToHeadingId: $selectedHeadingId,
             searchText: documentManager.isSearching ? documentManager.searchText : "",
             currentMatchIndex: documentManager.currentMatchIndex,
@@ -511,6 +513,7 @@ extension ContentView {
         MarkdownTextView(
             content: document.content,
             baseURL: document.url,
+            directoryBookmark: document.directoryBookmarkData,
             scrollToHeadingId: $selectedHeadingId,
             searchText: documentManager.isSearching ? documentManager.searchText : "",
             currentMatchIndex: documentManager.currentMatchIndex,

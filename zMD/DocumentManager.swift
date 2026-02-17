@@ -68,13 +68,16 @@ class DocumentManager: ObservableObject {
         panel.begin { response in
             if response == .OK {
                 for url in panel.urls {
-                    self.loadDocument(from: url)
+                    // Save directory bookmark while NSOpenPanel grants access
+                    let parentDir = url.deletingLastPathComponent()
+                    let dirBookmark = try? parentDir.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    self.loadDocument(from: url, directoryBookmark: dirBookmark)
                 }
             }
         }
     }
 
-    func loadDocument(from url: URL) {
+    func loadDocument(from url: URL, directoryBookmark: Data? = nil) {
         // Check if already open
         if openDocuments.contains(where: { $0.url == url }) {
             if let doc = openDocuments.first(where: { $0.url == url }) {
@@ -120,6 +123,7 @@ class DocumentManager: ObservableObject {
 
             var document = MarkdownDocument(url: url, content: fileContent)
             document.bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            document.directoryBookmarkData = directoryBookmark
             openDocuments.append(document)
             selectedDocumentId = document.id
 
@@ -542,6 +546,7 @@ struct MarkdownDocument: Identifiable {
     var content: String
     var isDirty: Bool = false
     var bookmarkData: Data?
+    var directoryBookmarkData: Data?
 
     init(url: URL, content: String) {
         self.id = UUID()

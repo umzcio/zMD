@@ -190,7 +190,7 @@ class ExportManager {
     }
 
     // MARK: - DOCX Export (Custom Generator)
-    func exportToDOCX(content: String, fileName: String) {
+    func exportToDOCX(content: String, fileName: String, baseURL: URL? = nil) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [UTType(filenameExtension: "docx")].compactMap { $0 }
         savePanel.nameFieldStringValue = fileName.replacingOccurrences(of: ".md", with: ".docx")
@@ -201,7 +201,7 @@ class ExportManager {
 
             DispatchQueue.main.async {
                 do {
-                    try self.createCustomDOCX(content: content, outputURL: url, fileName: fileName)
+                    try self.createCustomDOCX(content: content, outputURL: url, fileName: fileName, baseURL: baseURL)
                     ToastManager.shared.show("Exported as Word", style: .success)
                 } catch {
                     self.alertManager.showExportError("DOCX", error: error)
@@ -210,15 +210,19 @@ class ExportManager {
         }
     }
 
-    // Property to track hyperlinks during document generation
+    // Property to track hyperlinks and images during document generation
     private var hyperlinkRelationships: [(id: String, url: String)] = []
+    private var imageRelationships: [(id: String, fileName: String, data: Data, ext: String)] = []
     private var nextHyperlinkId = 6 // rId1-5 reserved for numbering, styles, settings, header, footer
+    private var nextImageId = 1
     private var numberedListCount = 0 // tracks how many separate numbered lists for numId generation
 
-    private func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil) throws {
-        // Reset hyperlink tracking for new document
+    private func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil, baseURL: URL? = nil) throws {
+        // Reset hyperlink and image tracking for new document
         hyperlinkRelationships = []
+        imageRelationships = []
         nextHyperlinkId = 6
+        nextImageId = 1
 
         // Create temporary directory for DOCX structure
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -238,15 +242,41 @@ class ExportManager {
         try FileManager.default.createDirectory(at: wordRelsDir, withIntermediateDirectories: true)
 
         // Generate document.xml content
-        let documentXML = generateDocumentXML(markdown: content)
+        let documentXML = generateDocumentXML(markdown: content, baseURL: baseURL)
         try documentXML.write(to: wordDir.appendingPathComponent("document.xml"), atomically: true, encoding: .utf8)
 
+        // Copy embedded images to word/media/
+        if !imageRelationships.isEmpty {
+            let mediaDir = wordDir.appendingPathComponent("media")
+            try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+            for img in imageRelationships {
+                try img.data.write(to: mediaDir.appendingPathComponent(img.fileName))
+            }
+        }
+
         // Create [Content_Types].xml
-        let contentTypes = """
+        var contentTypesXML = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
             <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
             <Default Extension="xml" ContentType="application/xml"/>
+        """
+        // Add image content types
+        let imageExts = Set(imageRelationships.map { $0.ext })
+        for ext in imageExts {
+            let contentType: String
+            switch ext {
+            case "png": contentType = "image/png"
+            case "jpg", "jpeg": contentType = "image/jpeg"
+            case "gif": contentType = "image/gif"
+            case "tiff", "tif": contentType = "image/tiff"
+            case "bmp": contentType = "image/bmp"
+            default: contentType = "image/png"
+            }
+            contentTypesXML += "\n    <Default Extension=\"\(ext)\" ContentType=\"\(contentType)\"/>"
+        }
+        contentTypesXML += """
+
             <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
             <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
             <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
@@ -255,7 +285,7 @@ class ExportManager {
             <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
         </Types>
         """
-        try contentTypes.write(to: tempDir.appendingPathComponent("[Content_Types].xml"), atomically: true, encoding: .utf8)
+        try contentTypesXML.write(to: tempDir.appendingPathComponent("[Content_Types].xml"), atomically: true, encoding: .utf8)
 
         // Create _rels/.rels
         let mainRels = """
@@ -279,6 +309,10 @@ class ExportManager {
 
         for hyperlink in hyperlinkRelationships {
             documentRels += "\n    <Relationship Id=\"\(hyperlink.id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"\(xmlEscape(hyperlink.url))\" TargetMode=\"External\"/>"
+        }
+
+        for img in imageRelationships {
+            documentRels += "\n    <Relationship Id=\"\(img.id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/\(img.fileName)\"/>"
         }
 
         documentRels += "\n</Relationships>"
@@ -552,10 +586,10 @@ class ExportManager {
 
     // MARK: - DOCX Document XML Generation
 
-    private func generateDocumentXML(markdown: String) -> String {
+    private func generateDocumentXML(markdown: String, baseURL: URL? = nil) -> String {
         var xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
             <w:body>
         """
 
@@ -753,6 +787,16 @@ class ExportManager {
                 if inList { inList = false; inNumberedList = false }
                 xml += createHorizontalRule()
             }
+            // Image ![alt](path)
+            else if trimmedLine.range(of: #"^!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) != nil {
+                if inList { inList = false; inNumberedList = false }
+                if let altRange = trimmedLine.range(of: #"\[([^\]]*)\]"#, options: .regularExpression),
+                   let pathRange = trimmedLine.range(of: #"\(([^\)]+)\)"#, options: .regularExpression) {
+                    let alt = String(trimmedLine[altRange].dropFirst().dropLast())
+                    let path = String(trimmedLine[pathRange].dropFirst().dropLast())
+                    xml += createImageParagraph(path: path, alt: alt, baseURL: baseURL)
+                }
+            }
             // Empty line
             else if trimmedLine.isEmpty {
                 if inList { inList = false; inNumberedList = false }
@@ -815,6 +859,71 @@ class ExportManager {
     private func createHorizontalRule() -> String {
         return """
         <w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/></w:pBdr><w:spacing w:before="200" w:after="200"/></w:pPr></w:p>
+        """
+    }
+
+    private func createImageParagraph(path: String, alt: String, baseURL: URL?) -> String {
+        // Resolve the image path
+        let resolvedURL: URL?
+        let absoluteURL = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: absoluteURL.path) {
+            resolvedURL = absoluteURL
+        } else if let base = baseURL?.deletingLastPathComponent() {
+            let relativeURL = base.appendingPathComponent(path)
+            resolvedURL = FileManager.default.fileExists(atPath: relativeURL.path) ? relativeURL : nil
+        } else {
+            resolvedURL = nil
+        }
+
+        guard let imageURL = resolvedURL,
+              let imageData = try? Data(contentsOf: imageURL),
+              let image = NSImage(data: imageData) else {
+            // Fallback: show alt text as placeholder
+            return createNormalParagraph(text: "[\(alt.isEmpty ? path : alt)]")
+        }
+
+        // Determine file extension
+        let ext = imageURL.pathExtension.lowercased()
+        let safeExt = ["png", "jpg", "jpeg", "gif", "tiff", "tif", "bmp"].contains(ext) ? ext : "png"
+
+        // Use image data directly (or re-encode if extension was unknown)
+        let finalData: Data
+        if safeExt == ext {
+            finalData = imageData
+        } else if let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]) {
+            finalData = png
+        } else {
+            return createNormalParagraph(text: "[\(alt.isEmpty ? path : alt)]")
+        }
+
+        // Register image
+        let rId = "rId\(nextHyperlinkId)"
+        nextHyperlinkId += 1
+        let imgFileName = "image\(nextImageId).\(safeExt)"
+        nextImageId += 1
+        imageRelationships.append((id: rId, fileName: imgFileName, data: finalData, ext: safeExt))
+
+        // Calculate dimensions in EMU (1 inch = 914400 EMU, 96 DPI assumed)
+        let pixelWidth = image.representations.first?.pixelsWide ?? Int(image.size.width)
+        let pixelHeight = image.representations.first?.pixelsHigh ?? Int(image.size.height)
+
+        // Max width = page width - margins = 6.5 inches = 5943600 EMU
+        let maxWidthEMU: Int = 5943600
+        var widthEMU = pixelWidth * 9525
+        var heightEMU = pixelHeight * 9525
+
+        if widthEMU > maxWidthEMU {
+            let scale = Double(maxWidthEMU) / Double(widthEMU)
+            widthEMU = maxWidthEMU
+            heightEMU = Int(Double(heightEMU) * scale)
+        }
+
+        let docPrId = nextImageId - 1
+
+        return """
+        <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="\(widthEMU)" cy="\(heightEMU)"/><wp:docPr id="\(docPrId)" name="\(xmlEscape(alt.isEmpty ? imgFileName : alt))"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="\(xmlEscape(imgFileName))"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="\(rId)"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="\(widthEMU)" cy="\(heightEMU)"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
         """
     }
 

@@ -179,7 +179,7 @@ struct zMDApp: App {
                     Button("Word (.docx)...") {
                         if let selectedId = documentManager.selectedDocumentId,
                            let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
-                            ExportManager.shared.exportToDOCX(content: document.content, fileName: document.name)
+                            ExportManager.shared.exportToDOCX(content: document.content, fileName: document.name, baseURL: document.url)
                         }
                     }
                     .disabled(documentManager.openDocuments.isEmpty)

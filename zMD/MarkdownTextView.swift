@@ -5,6 +5,7 @@ import AppKit
 struct MarkdownTextView: NSViewRepresentable {
     let content: String
     let baseURL: URL?
+    let directoryBookmark: Data?
     @Binding var scrollToHeadingId: String?
     let searchText: String
     let currentMatchIndex: Int
@@ -17,9 +18,10 @@ struct MarkdownTextView: NSViewRepresentable {
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
 
-    init(content: String, baseURL: URL?, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil) {
         self.content = content
         self.baseURL = baseURL
+        self.directoryBookmark = directoryBookmark
         self._scrollToHeadingId = scrollToHeadingId
         self.searchText = searchText
         self.currentMatchIndex = currentMatchIndex
@@ -854,7 +856,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 let path = String(matchedString[pathRange].dropFirst().dropLast())
 
                 // Try to load and embed the image
+                print("[DEBUG IMAGE] path=\(path) baseURL=\(String(describing: baseURL))")
                 if let image = loadImage(path: path) {
+                    print("[DEBUG IMAGE] Loaded successfully: \(image.size)")
                     let attachment = NSTextAttachment()
                     let maxWidth: CGFloat = 700
                     let scale = min(1.0, maxWidth / image.size.width)
@@ -898,6 +902,22 @@ struct MarkdownTextView: NSViewRepresentable {
                 }
             }
             return nil
+        }
+
+        // Activate directory security scope for relative image access
+        var accessingDirectory = false
+        var dirURL: URL?
+        if let bookmark = directoryBookmark {
+            var isStale = false
+            if let resolved = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                dirURL = resolved
+                accessingDirectory = resolved.startAccessingSecurityScopedResource()
+            }
+        }
+        defer {
+            if accessingDirectory, let dir = dirURL {
+                dir.stopAccessingSecurityScopedResource()
+            }
         }
 
         // Local file — synchronous is fine for local disk I/O

@@ -123,7 +123,7 @@ class CommandRegistry {
             CommandAction(name: "Export as Word (.docx)", category: .export, shortcut: nil, icon: "doc.fill", isEnabled: hasDoc) {
                 if let id = documentManager.selectedDocumentId,
                    let doc = documentManager.openDocuments.first(where: { $0.id == id }) {
-                    ExportManager.shared.exportToDOCX(content: doc.content, fileName: doc.name)
+                    ExportManager.shared.exportToDOCX(content: doc.content, fileName: doc.name, baseURL: doc.url)
                 }
             },
             CommandAction(name: "Export as Word (.rtf)", category: .export, shortcut: nil, icon: "doc.fill", isEnabled: hasDoc) {
