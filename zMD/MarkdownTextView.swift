@@ -856,9 +856,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 let path = String(matchedString[pathRange].dropFirst().dropLast())
 
                 // Try to load and embed the image
-                print("[DEBUG IMAGE] path=\(path) baseURL=\(String(describing: baseURL))")
                 if let image = loadImage(path: path) {
-                    print("[DEBUG IMAGE] Loaded successfully: \(image.size)")
                     let attachment = NSTextAttachment()
                     let maxWidth: CGFloat = 700
                     let scale = min(1.0, maxWidth / image.size.width)
