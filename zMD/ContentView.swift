@@ -1,10 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var folderManager: FolderManager
     @EnvironmentObject var settings: SettingsManager
-    @State private var showOutline = false
+    @AppStorage("showOutline") private var showOutline = false
     @State private var selectedHeadingId: String?
     @State private var showQuickOpen = false
     @State private var showCommandPalette = false
@@ -155,6 +156,19 @@ struct ContentView: View {
                 NSEvent.removeMonitor(monitor)
                 magnifyMonitor = nil
             }
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            for provider in providers {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+                    guard let data = data as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                          ["md", "markdown"].contains(url.pathExtension.lowercased()) else { return }
+                    DispatchQueue.main.async {
+                        documentManager.loadDocument(from: url)
+                    }
+                }
+            }
+            return true
         }
     }
 

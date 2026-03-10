@@ -52,6 +52,28 @@ class DocumentManager: ObservableObject {
     private let recentFilesKey = "RecentMarkdownFiles"
     private let alertManager = AlertManager.shared
 
+    /// Decode file data trying multiple encodings, returns content and encoding name
+    private func decodeFileData(_ data: Data) -> (content: String, encoding: String) {
+        if let str = String(data: data, encoding: .utf8) {
+            return (str, "UTF-8")
+        }
+        if let str = String(data: data, encoding: .windowsCP1252) {
+            return (str, "CP1252")
+        }
+        if let str = String(data: data, encoding: .isoLatin1) {
+            return (str, "ISO-8859-1")
+        }
+        if let str = String(data: data, encoding: .macOSRoman) {
+            return (str, "Mac Roman")
+        }
+        if data.count >= 2 && (data[0] == 0xFF && data[1] == 0xFE || data[0] == 0xFE && data[1] == 0xFF) {
+            if let str = String(data: data, encoding: .utf16) {
+                return (str, "UTF-16")
+            }
+        }
+        return (String(decoding: data, as: UTF8.self), "UTF-8")
+    }
+
     init() {
         self.autoSaveEnabled = UserDefaults.standard.bool(forKey: "autoSaveEnabled")
         loadRecentFiles()
@@ -87,41 +109,11 @@ class DocumentManager: ObservableObject {
         }
 
         do {
-            // Read file data first
             let data = try Data(contentsOf: url)
-
-            // Try UTF-8 first (most common for markdown)
-            var content: String?
-
-            if let str = String(data: data, encoding: .utf8) {
-                content = str
-            }
-            // Then try Windows encodings (common for files from Windows)
-            else if let str = String(data: data, encoding: .windowsCP1252) {
-                content = str
-            }
-            // Then ISO Latin-1
-            else if let str = String(data: data, encoding: .isoLatin1) {
-                content = str
-            }
-            // Then Mac Roman
-            else if let str = String(data: data, encoding: .macOSRoman) {
-                content = str
-            }
-            // UTF-16 only if file starts with BOM
-            else if data.count >= 2 && (data[0] == 0xFF && data[1] == 0xFE || data[0] == 0xFE && data[1] == 0xFF) {
-                content = String(data: data, encoding: .utf16)
-            }
-            // Last resort: lossy UTF-8
-            else {
-                content = String(decoding: data, as: UTF8.self)
-            }
-
-            guard let fileContent = content else {
-                throw NSError(domain: "DocumentManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to decode file with any supported encoding"])
-            }
+            let (fileContent, encoding) = decodeFileData(data)
 
             var document = MarkdownDocument(url: url, content: fileContent)
+            document.detectedEncoding = encoding
             document.bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
             document.directoryBookmarkData = directoryBookmark
             openDocuments.append(document)
@@ -157,27 +149,12 @@ class DocumentManager: ObservableObject {
             return
         }
 
-        // Try encodings in order
-        var content: String?
-        if let str = String(data: data, encoding: .utf8) {
-            content = str
-        } else if let str = String(data: data, encoding: .windowsCP1252) {
-            content = str
-        } else if let str = String(data: data, encoding: .isoLatin1) {
-            content = str
-        } else {
-            content = String(decoding: data, as: UTF8.self)
-        }
+        let (fileContent, encoding) = decodeFileData(data)
 
-        guard let fileContent = content else {
-            alertManager.showFileLoadError(url: document.url, error: NSError(domain: "DocumentManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to decode file"]))
-            return
-        }
-
-        // Update the document in the array
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             fileWatchers[document.id]?.ignoreNextChange = true
-            let newDocument = MarkdownDocument(id: document.id, url: document.url, content: fileContent)
+            var newDocument = MarkdownDocument(id: document.id, url: document.url, content: fileContent)
+            newDocument.detectedEncoding = encoding
             openDocuments[index] = newDocument
         }
     }
@@ -547,6 +524,7 @@ struct MarkdownDocument: Identifiable {
     var isDirty: Bool = false
     var bookmarkData: Data?
     var directoryBookmarkData: Data?
+    var detectedEncoding: String = "UTF-8"
 
     init(url: URL, content: String) {
         self.id = UUID()

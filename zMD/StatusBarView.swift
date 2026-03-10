@@ -50,7 +50,7 @@ struct StatusBarView: View {
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
-                    Text("UTF-8")
+                    Text(document.detectedEncoding)
                         .font(.system(size: 11))
                         .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 }

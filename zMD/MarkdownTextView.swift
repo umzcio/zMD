@@ -51,9 +51,14 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.textContainer?.containerSize = NSSize(width: 800, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = false
 
+        // Enable link clicking
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.delegate = context.coordinator
+
         // Store reference for coordinator
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
+        context.coordinator.baseURL = baseURL
         context.coordinator.onScrollPositionChanged = onScrollPositionChanged
         context.coordinator.onMatchCountChanged = onMatchCountChanged
         context.coordinator.onScrollPercentChanged = onScrollPercentChanged
@@ -171,9 +176,10 @@ struct MarkdownTextView: NSViewRepresentable {
         Coordinator()
     }
 
-    class Coordinator {
+    class Coordinator: NSObject, NSTextViewDelegate {
         var textView: NSTextView?
         var scrollView: NSScrollView?
+        var baseURL: URL?
         var headingRanges: [String: NSRange] = [:]
         var lastContent: String?
         var lastSearchText: String?
@@ -237,6 +243,39 @@ struct MarkdownTextView: NSViewRepresentable {
             let clampedPosition = min(position, maxScroll)
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: clampedPosition))
             scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
+        // MARK: - Link Handling
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            let url: URL?
+            if let linkURL = link as? URL {
+                url = linkURL
+            } else if let linkString = link as? String {
+                url = URL(string: linkString)
+            } else {
+                return false
+            }
+
+            guard let url = url else { return false }
+
+            // Handle relative .md links by opening as a new tab
+            if ["md", "markdown"].contains(url.pathExtension.lowercased()),
+               let base = baseURL?.deletingLastPathComponent() {
+                let resolved = base.appendingPathComponent(url.relativeString)
+                if FileManager.default.fileExists(atPath: resolved.path) {
+                    DocumentManager.shared.loadDocument(from: resolved)
+                    return true
+                }
+            }
+
+            // Open external URLs in default browser
+            if url.scheme == "http" || url.scheme == "https" || url.scheme == "mailto" {
+                NSWorkspace.shared.open(url)
+                return true
+            }
+
+            return false
         }
 
         // MARK: - Search Methods

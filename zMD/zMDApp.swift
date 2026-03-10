@@ -2,9 +2,9 @@ import SwiftUI
 
 @main
 struct zMDApp: App {
-    @StateObject private var documentManager = DocumentManager.shared
-    @StateObject private var settings = SettingsManager.shared
-    @StateObject private var folderManager = FolderManager.shared
+    @ObservedObject private var documentManager = DocumentManager.shared
+    @ObservedObject private var settings = SettingsManager.shared
+    @ObservedObject private var folderManager = FolderManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var showingHelp = false
 
