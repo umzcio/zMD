@@ -87,8 +87,8 @@ struct MarkdownTextView: NSViewRepresentable {
         let matchIndexChanged = context.coordinator.lastMatchIndex != currentMatchIndex
         let zoomChanged = context.coordinator.lastZoomLevel != zoomLevel
 
-        // Build attributed string from markdown (when content, search, or zoom changes)
-        if contentChanged || searchChanged || zoomChanged {
+        // Full rebuild when content or zoom changes
+        if contentChanged || zoomChanged {
             context.coordinator.lastZoomLevel = zoomLevel
             let (attributedString, headingRanges) = buildAttributedString()
             textView.textStorage?.setAttributedString(attributedString)
@@ -107,10 +107,8 @@ struct MarkdownTextView: NSViewRepresentable {
             if contentChanged {
                 DispatchQueue.main.async {
                     if initialScrollPosition > 10 && searchText.isEmpty {
-                        // Restore saved position
                         context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
                     } else if searchText.isEmpty {
-                        // Scroll to top for new documents
                         scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
                         scrollView.reflectScrolledClipView(scrollView.contentView)
                     }
@@ -122,6 +120,28 @@ struct MarkdownTextView: NSViewRepresentable {
                 DispatchQueue.main.async {
                     context.coordinator.scrollToMatch(at: currentMatchIndex, in: textView)
                 }
+            }
+        }
+        // Lightweight search update — no full rebuild needed
+        else if searchChanged {
+            context.coordinator.lastSearchText = searchText
+
+            // Clear old highlighting
+            if let storage = textView.textStorage {
+                storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
+            }
+
+            if !searchText.isEmpty {
+                context.coordinator.findMatchRanges(for: searchText, in: textView)
+                context.coordinator.updateMatchHighlighting(currentIndex: currentMatchIndex, in: textView, searchText: searchText)
+                if !context.coordinator.matchRanges.isEmpty {
+                    DispatchQueue.main.async {
+                        context.coordinator.scrollToMatch(at: currentMatchIndex, in: textView)
+                    }
+                }
+            } else {
+                context.coordinator.matchRanges = []
+                context.coordinator.onMatchCountChanged?(0)
             }
         }
 
@@ -168,9 +188,19 @@ struct MarkdownTextView: NSViewRepresentable {
         private var scrollDebounceTimer: Timer?
         private var syncDebounceTimer: Timer?
         // Image cache shared across renders
-        static var imageCache: [String: NSImage] = [:]
+        static var imageCache: NSCache<NSString, NSImage> = {
+            let cache = NSCache<NSString, NSImage>()
+            cache.countLimit = 100
+            cache.totalCostLimit = 100 * 1024 * 1024
+            return cache
+        }()
         // Diagram/math cache
-        static var diagramCache: [String: NSImage] = [:]
+        static var diagramCache: NSCache<NSString, NSImage> = {
+            let cache = NSCache<NSString, NSImage>()
+            cache.countLimit = 100
+            cache.totalCostLimit = 100 * 1024 * 1024
+            return cache
+        }()
 
         func scrollToHeading(id: String, in textView: NSTextView) {
             guard let range = headingRanges[id],
@@ -363,8 +393,9 @@ struct MarkdownTextView: NSViewRepresentable {
         let result = NSMutableAttributedString()
         let lines = content.components(separatedBy: .newlines)
         var i = 0
-        var listItems: [(level: Int, text: String)] = []
+        var listItems: [(level: Int, text: String, isOrdered: Bool)] = []
         var headingRanges: [String: NSRange] = [:]
+        var paragraphLines: [String] = []
 
         let baseFont = fontStyle.nsFont(size: 16 * zoomLevel)
         let defaultAttributes: [NSAttributedString.Key: Any] = [
@@ -400,8 +431,25 @@ struct MarkdownTextView: NSViewRepresentable {
                 listItems = []
             }
 
+            // Flush accumulated paragraph on block-level elements or empty lines
+            let lineIsPlainText = !line.isEmpty && !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).hasPrefix("|") && !line.hasPrefix("> ") && !isListLine(line) && !line.hasPrefix("```") && !isHorizontalRule(line) && !isHTMLLine(line) && line.trimmingCharacters(in: .whitespaces) != "$$" && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil && !line.trimmingCharacters(in: .whitespaces).isEmpty
+            if !lineIsPlainText && !paragraphLines.isEmpty {
+                appendParagraph(text: paragraphLines.joined(separator: " "), to: result)
+                paragraphLines = []
+            }
+
             // Headings
-            if line.hasPrefix("#### ") {
+            if line.hasPrefix("###### ") {
+                let text = String(line.dropFirst(7))
+                let range = NSRange(location: result.length, length: 0)
+                appendHeading(text: text, level: 6, to: result)
+                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
+            } else if line.hasPrefix("##### ") {
+                let text = String(line.dropFirst(6))
+                let range = NSRange(location: result.length, length: 0)
+                appendHeading(text: text, level: 5, to: result)
+                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
+            } else if line.hasPrefix("#### ") {
                 let text = String(line.dropFirst(5))
                 let range = NSRange(location: result.length, length: 0)
                 appendHeading(text: text, level: 4, to: result)
@@ -491,6 +539,10 @@ struct MarkdownTextView: NSViewRepresentable {
             }
             // Empty line
             else if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if !paragraphLines.isEmpty {
+                    appendParagraph(text: paragraphLines.joined(separator: " "), to: result)
+                    paragraphLines = []
+                }
                 if !listItems.isEmpty {
                     appendList(items: listItems, to: result)
                     listItems = []
@@ -501,12 +553,40 @@ struct MarkdownTextView: NSViewRepresentable {
             else if line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) != nil {
                 appendImage(line: line, to: result)
             }
-            // Regular paragraph
+            // HTML block (inline HTML passthrough)
+            else if isHTMLLine(line) {
+                var htmlLines: [String] = [line]
+                i += 1
+                // Collect consecutive HTML or non-empty lines that are part of the block
+                while i < lines.count {
+                    let nextLine = lines[i]
+                    if nextLine.trimmingCharacters(in: .whitespaces).isEmpty {
+                        // Empty line ends an HTML block only if all tags are closed
+                        let joined = htmlLines.joined(separator: "\n")
+                        if isHTMLBalanced(joined) {
+                            break
+                        }
+                        htmlLines.append(nextLine)
+                    } else {
+                        htmlLines.append(nextLine)
+                    }
+                    i += 1
+                }
+                let htmlBlock = htmlLines.joined(separator: "\n")
+                appendHTMLBlock(html: htmlBlock, to: result)
+                i -= 1
+            }
+            // Regular paragraph (accumulate consecutive lines)
             else if !line.isEmpty {
-                appendParagraph(text: line, to: result)
+                paragraphLines.append(line)
             }
 
             i += 1
+        }
+
+        // Flush remaining accumulated paragraph
+        if !paragraphLines.isEmpty {
+            appendParagraph(text: paragraphLines.joined(separator: " "), to: result)
         }
 
         // Add remaining list items
@@ -523,7 +603,7 @@ struct MarkdownTextView: NSViewRepresentable {
     // MARK: - Append Methods
 
     private func appendHeading(text: String, level: Int, to result: NSMutableAttributedString) {
-        let sizes: [Int: CGFloat] = [1: 28, 2: 24, 3: 20, 4: 18]
+        let sizes: [Int: CGFloat] = [1: 28, 2: 24, 3: 20, 4: 18, 5: 16, 6: 15]
         let size = (sizes[level] ?? 16) * zoomLevel
         let font = fontStyle.nsFont(size: size).withWeight(.semibold)
 
@@ -532,7 +612,9 @@ struct MarkdownTextView: NSViewRepresentable {
             1: NSColor.controlAccentColor,
             2: NSColor.controlAccentColor.withAlphaComponent(0.8),
             3: NSColor.textColor,
-            4: NSColor.secondaryLabelColor
+            4: NSColor.secondaryLabelColor,
+            5: NSColor.secondaryLabelColor,
+            6: NSColor.secondaryLabelColor
         ]
         let color = headingColors[level] ?? NSColor.textColor
 
@@ -581,10 +663,13 @@ struct MarkdownTextView: NSViewRepresentable {
         result.append(NSAttributedString(string: "\n"))
     }
 
-    private func appendList(items: [(level: Int, text: String)], to result: NSMutableAttributedString) {
+    private func appendList(items: [(level: Int, text: String, isOrdered: Bool)], to result: NSMutableAttributedString) {
         let font = fontStyle.nsFont(size: 16 * zoomLevel)
 
-        for (level, text) in items {
+        // Track ordered list counters per nesting level
+        var orderedCounters: [Int: Int] = [:]
+
+        for (level, text, isOrdered) in items {
             // Calculate indentation based on nesting level
             let baseIndent: CGFloat = 16
             let levelIndent: CGFloat = CGFloat(level) * 20
@@ -601,20 +686,28 @@ struct MarkdownTextView: NSViewRepresentable {
                 .paragraphStyle: paragraphStyle
             ]
 
-            // Determine bullet style based on nesting level
-            let bullets = ["•", "◦", "▪", "▹"]
-            let bullet = bullets[min(level, bullets.count - 1)]
-
-            var bulletPrefix = "\(bullet)  "
+            var bulletPrefix: String
             var itemText = text
 
             // Check for task list items
             if text.hasPrefix("[ ] ") {
                 bulletPrefix = "☐  "
                 itemText = String(text.dropFirst(4))
+                orderedCounters[level] = nil
             } else if text.hasPrefix("[x] ") || text.hasPrefix("[X] ") {
                 bulletPrefix = "☑  "
                 itemText = String(text.dropFirst(4))
+                orderedCounters[level] = nil
+            } else if isOrdered {
+                let counter = (orderedCounters[level] ?? 0) + 1
+                orderedCounters[level] = counter
+                bulletPrefix = "\(counter).  "
+            } else {
+                // Determine bullet style based on nesting level
+                let bullets = ["•", "◦", "▪", "▹"]
+                let bullet = bullets[min(level, bullets.count - 1)]
+                bulletPrefix = "\(bullet)  "
+                orderedCounters[level] = nil
             }
 
             let bulletColor = NSColor.controlAccentColor.withAlphaComponent(0.7)
@@ -693,8 +786,11 @@ struct MarkdownTextView: NSViewRepresentable {
     private func appendCodeBlock(code: String, language: String? = nil, to result: NSMutableAttributedString) {
         // Warp-style code block: dark background, rounded corners feel, language label
 
-        // Code block background color - darker than normal background
-        let codeBackground = NSColor(calibratedWhite: 0.12, alpha: 1.0)
+        // Code block background color - adapt to current appearance
+        let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let codeBackground = isDarkMode
+            ? NSColor(calibratedWhite: 0.12, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.95, alpha: 1.0)
 
         // Top border with padding
         let topBorder = "  ╭" + String(repeating: "─", count: 76) + "╮\n"
@@ -883,7 +979,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     private func loadImage(path: String) -> NSImage? {
         // Check cache first
-        if let cached = Coordinator.imageCache[path] {
+        if let cached = Coordinator.imageCache.object(forKey: path as NSString) {
             return cached
         }
 
@@ -893,7 +989,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 DispatchQueue.global(qos: .userInitiated).async {
                     guard let image = NSImage(contentsOf: url) else { return }
                     DispatchQueue.main.async {
-                        Coordinator.imageCache[path] = image
+                        Coordinator.imageCache.setObject(image, forKey: path as NSString)
                         // Trigger re-render by posting notification (content hasn't changed,
                         // but the view should rebuild to include the now-cached image)
                     }
@@ -932,7 +1028,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         if let url = resolvedURL, let image = NSImage(contentsOf: url) {
-            Coordinator.imageCache[path] = image
+            Coordinator.imageCache.setObject(image, forKey: path as NSString)
             return image
         }
 
@@ -943,7 +1039,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     private func appendMermaidBlock(code: String, to result: NSMutableAttributedString) {
         let cacheKey = "mermaid-" + code
-        if let cached = Coordinator.diagramCache[cacheKey] {
+        if let cached = Coordinator.diagramCache.object(forKey: cacheKey as NSString) {
             // Embed cached image
             let attachment = NSTextAttachment()
             let maxWidth: CGFloat = 700
@@ -977,7 +1073,7 @@ struct MarkdownTextView: NSViewRepresentable {
             Task { @MainActor in
                 WebRenderer.shared.renderMermaid(code) { image in
                     guard let image = image else { return }
-                    Coordinator.diagramCache[cacheKey] = image
+                    Coordinator.diagramCache.setObject(image, forKey: cacheKey as NSString)
                     NotificationCenter.default.post(name: .diagramRendered, object: nil)
                 }
             }
@@ -986,7 +1082,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     private func appendDisplayMath(latex: String, to result: NSMutableAttributedString) {
         let cacheKey = "math-display-" + latex
-        if let cached = Coordinator.diagramCache[cacheKey] {
+        if let cached = Coordinator.diagramCache.object(forKey: cacheKey as NSString) {
             let attachment = NSTextAttachment()
             attachment.image = cached
             result.append(NSAttributedString(string: "\n"))
@@ -1006,10 +1102,123 @@ struct MarkdownTextView: NSViewRepresentable {
             Task { @MainActor in
                 WebRenderer.shared.renderMath(latex, displayMode: true) { image in
                     guard let image = image else { return }
-                    Coordinator.diagramCache[cacheKey] = image
+                    Coordinator.diagramCache.setObject(image, forKey: cacheKey as NSString)
                     NotificationCenter.default.post(name: .diagramRendered, object: nil)
                 }
             }
+        }
+    }
+
+    // MARK: - HTML Block Support
+
+    private static let htmlBlockTags: Set<String> = [
+        "div", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "table", "thead", "tbody", "tr", "th", "td",
+        "ul", "ol", "li", "dl", "dt", "dd",
+        "pre", "blockquote", "section", "article", "nav",
+        "header", "footer", "main", "aside", "figure",
+        "figcaption", "details", "summary", "hr", "br", "img", "a",
+        "strong", "em", "b", "i", "u", "s", "sub", "sup", "span",
+        "center", "caption", "colgroup", "col"
+    ]
+
+    private func isHTMLLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("<") else { return false }
+        // Extract tag name from opening or closing tag
+        let pattern = #"^</?([a-zA-Z][a-zA-Z0-9]*)"#
+        guard let match = trimmed.range(of: pattern, options: .regularExpression) else { return false }
+        let tagContent = trimmed[match].dropFirst(trimmed.hasPrefix("</") ? 2 : 1)
+        let tagName = String(tagContent).lowercased()
+        return Self.htmlBlockTags.contains(tagName)
+    }
+
+    private func isHTMLBalanced(_ html: String) -> Bool {
+        // Simple check: count opening vs closing tags for block-level elements
+        let pattern = #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
+        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+        var depth = 0
+        let selfClosing: Set<String> = ["br", "hr", "img", "input", "meta", "link", "col"]
+        for match in matches {
+            guard let tagRange = Range(match.range(at: 2), in: html) else { continue }
+            let tag = String(html[tagRange]).lowercased()
+            if selfClosing.contains(tag) { continue }
+            // Check if self-closing syntax (ends with />)
+            if let fullRange = Range(match.range, in: html) {
+                let fullTag = String(html[fullRange])
+                if fullTag.hasSuffix("/>") { continue }
+            }
+            if let slashRange = Range(match.range(at: 1), in: html), !html[slashRange].isEmpty {
+                depth -= 1
+            } else {
+                depth += 1
+            }
+        }
+        return depth <= 0
+    }
+
+    private func appendHTMLBlock(html: String, to result: NSMutableAttributedString) {
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let textColor = isDark ? "#e0e0e0" : "#1a1a1a"
+        let bgColor = isDark ? "#1e1e1e" : "#ffffff"
+        let linkColor = isDark ? "#6cb4ee" : "#0066cc"
+        let fontSize = 16 * zoomLevel
+
+        // Resolve relative image src paths to absolute file paths
+        let baseDir = baseURL?.deletingLastPathComponent()
+        var resolvedHTML = html
+        if let baseDir = baseDir {
+            let imgPattern = #"(<img\s[^>]*src\s*=\s*")([^"]+)("[^>]*>)"#
+            if let regex = try? NSRegularExpression(pattern: imgPattern, options: .caseInsensitive) {
+                let nsHTML = resolvedHTML as NSString
+                let matches = regex.matches(in: resolvedHTML, range: NSRange(location: 0, length: nsHTML.length)).reversed()
+                for match in matches {
+                    guard match.numberOfRanges >= 4 else { continue }
+                    let srcRange = match.range(at: 2)
+                    let src = nsHTML.substring(with: srcRange)
+                    // Skip URLs that are already absolute
+                    if src.hasPrefix("http://") || src.hasPrefix("https://") || src.hasPrefix("file://") { continue }
+                    let resolved = baseDir.appendingPathComponent(src)
+                    if FileManager.default.fileExists(atPath: resolved.path) {
+                        resolvedHTML = (resolvedHTML as NSString).replacingCharacters(in: srcRange, with: resolved.absoluteString)
+                    }
+                }
+            }
+        }
+
+        // Wrap HTML with styling that matches the app theme
+        let styledHTML = """
+        <html><head><style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+               font-size: \(fontSize)px; color: \(textColor); background: \(bgColor);
+               line-height: 1.5; margin: 0; padding: 0; }
+        a { color: \(linkColor); }
+        img { max-width: 100%; height: auto; }
+        h1, h2, h3, h4, h5, h6 { margin-top: 0.5em; margin-bottom: 0.3em; }
+        p { margin: 0.3em 0; }
+        </style></head><body>\(resolvedHTML)</body></html>
+        """
+
+        guard let data = styledHTML.data(using: .utf8),
+              let attributed = NSAttributedString(
+                html: data,
+                baseURL: baseDir ?? URL(fileURLWithPath: "/"),
+                documentAttributes: nil
+              ) else {
+            // Fallback: render as plain text
+            let font = fontStyle.nsFont(size: fontSize)
+            result.append(NSAttributedString(string: html + "\n", attributes: [
+                .font: font,
+                .foregroundColor: NSColor.textColor
+            ]))
+            return
+        }
+
+        result.append(attributed)
+        // Ensure trailing newline
+        if !attributed.string.hasSuffix("\n") {
+            result.append(NSAttributedString(string: "\n"))
         }
     }
 
@@ -1118,7 +1327,7 @@ struct MarkdownTextView: NSViewRepresentable {
             let latex = string.substring(with: contentRange)
             let cacheKey = "math-inline-" + latex
 
-            if let cached = Coordinator.diagramCache[cacheKey] {
+            if let cached = Coordinator.diagramCache.object(forKey: cacheKey as NSString) {
                 // Replace with image attachment
                 let attachment = NSTextAttachment()
                 attachment.image = cached
@@ -1135,7 +1344,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 Task { @MainActor in
                     WebRenderer.shared.renderMath(latex, displayMode: false) { image in
                         guard let image = image else { return }
-                        Coordinator.diagramCache[cacheKey] = image
+                        Coordinator.diagramCache.setObject(image, forKey: cacheKey as NSString)
                         NotificationCenter.default.post(name: .diagramRendered, object: nil)
                     }
                 }
@@ -1186,7 +1395,7 @@ struct MarkdownTextView: NSViewRepresentable {
                trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
-    private func extractListItemText(_ line: String) -> (level: Int, text: String) {
+    private func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool) {
         // Count leading spaces/tabs to determine nesting level
         var level = 0
         var index = line.startIndex
@@ -1207,12 +1416,12 @@ struct MarkdownTextView: NSViewRepresentable {
         let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
 
         if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-            return (nestLevel, String(trimmed.dropFirst(2)))
+            return (nestLevel, String(trimmed.dropFirst(2)), false)
         }
         if let match = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-            return (nestLevel, String(trimmed[match.upperBound...]))
+            return (nestLevel, String(trimmed[match.upperBound...]), true)
         }
-        return (nestLevel, trimmed)
+        return (nestLevel, trimmed, false)
     }
 
     private func isHorizontalRule(_ line: String) -> Bool {

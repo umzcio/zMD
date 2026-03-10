@@ -340,6 +340,7 @@ class DocumentManager: ObservableObject {
 
         do {
             try document.content.write(to: resolvedURL, atomically: true, encoding: .utf8)
+            if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
             openDocuments[index].isDirty = false
 
             // Resume file watcher, ignoring this change
@@ -348,7 +349,10 @@ class DocumentManager: ObservableObject {
 
             ToastManager.shared.show("File saved", style: .success)
         } catch {
-            // Fall back to NSSavePanel
+            // Release security scope before falling back to NSSavePanel
+            if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
+
+            // Fall back to NSSavePanel (gets its own sandbox access)
             let savePanel = NSSavePanel()
             savePanel.nameFieldStringValue = document.url.lastPathComponent
             savePanel.directoryURL = document.url.deletingLastPathComponent()
@@ -365,10 +369,6 @@ class DocumentManager: ObservableObject {
                     self?.alertManager.showError("Save Failed", message: error.localizedDescription)
                 }
             }
-        }
-
-        if accessGranted {
-            resolvedURL.stopAccessingSecurityScopedResource()
         }
     }
 

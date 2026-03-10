@@ -96,6 +96,12 @@ class SyntaxHighlighter {
         "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "CAST", "CONVERT"
     ])
 
+    // MARK: - Appearance Detection
+
+    private var isDarkMode: Bool {
+        NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
     // MARK: - Public API
 
     func highlight(code: String, language: String?) -> NSAttributedString {
@@ -285,12 +291,24 @@ class SyntaxHighlighter {
 
     /// Highlight tree/directory structure output (like from `tree` command or code structure diagrams)
     private func highlightTree(_ result: NSMutableAttributedString) {
-        // Define bright colors for tree output - Warp-style
-        let fileColor = NSColor(red: 0.4, green: 0.9, blue: 0.4, alpha: 1.0)  // Bright green for files
-        let labelColor = NSColor(red: 0.9, green: 0.9, blue: 0.4, alpha: 1.0) // Yellow for labels
-        let treeCharColor = NSColor(white: 0.5, alpha: 1.0)  // Medium gray for tree chars
-        let actionColor = NSColor(red: 0.4, green: 0.9, blue: 0.9, alpha: 1.0) // Cyan for keywords
-        let arrowColor = NSColor(red: 0.9, green: 0.5, blue: 0.7, alpha: 1.0)  // Pink for arrows
+        let dark = isDarkMode
+
+        // Define appearance-aware colors for tree output
+        let fileColor = dark
+            ? NSColor(red: 0.4, green: 0.9, blue: 0.4, alpha: 1.0)   // Bright green for dark mode
+            : NSColor(red: 0.15, green: 0.55, blue: 0.15, alpha: 1.0) // Dark green for light mode
+        let labelColor = dark
+            ? NSColor(red: 0.9, green: 0.9, blue: 0.4, alpha: 1.0)    // Yellow for dark mode
+            : NSColor(red: 0.6, green: 0.5, blue: 0.0, alpha: 1.0)    // Dark yellow/brown for light mode
+        let treeCharColor = dark
+            ? NSColor(white: 0.5, alpha: 1.0)                          // Medium gray for dark mode
+            : NSColor(white: 0.45, alpha: 1.0)                         // Slightly darker gray for light mode
+        let actionColor = dark
+            ? NSColor(red: 0.4, green: 0.9, blue: 0.9, alpha: 1.0)    // Cyan for dark mode
+            : NSColor(red: 0.0, green: 0.5, blue: 0.5, alpha: 1.0)    // Dark cyan for light mode
+        let arrowColor = dark
+            ? NSColor(red: 0.9, green: 0.5, blue: 0.7, alpha: 1.0)    // Pink for dark mode
+            : NSColor(red: 0.7, green: 0.2, blue: 0.4, alpha: 1.0)    // Dark pink for light mode
 
         // 1. Highlight tree drawing characters (using alternation for Unicode safety)
         highlightPattern("├──|└──|│|─|├|└", in: result, color: treeCharColor)

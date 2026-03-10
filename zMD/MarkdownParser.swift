@@ -14,8 +14,10 @@ class MarkdownParser {
         case heading2(String)
         case heading3(String)
         case heading4(String)
+        case heading5(String)
+        case heading6(String)
         case paragraph(String)
-        case list(items: [String])
+        case list(items: [String], ordered: Bool)
         case codeBlock(code: String, language: String?)
         case mermaidBlock(code: String)
         case displayMath(latex: String)
@@ -23,6 +25,7 @@ class MarkdownParser {
         case image(alt: String, path: String)
         case horizontalRule
         case blockquote(String)
+        case htmlBlock(String)
 
         var id: String {
             switch self {
@@ -30,8 +33,10 @@ class MarkdownParser {
             case .heading2(let text): return "h2-\(text.hashValue)"
             case .heading3(let text): return "h3-\(text.hashValue)"
             case .heading4(let text): return "h4-\(text.hashValue)"
+            case .heading5(let text): return "h5-\(text.hashValue)"
+            case .heading6(let text): return "h6-\(text.hashValue)"
             case .paragraph(let text): return "p-\(text.hashValue)"
-            case .list(let items): return "list-\(items.joined().hashValue)"
+            case .list(let items, let ordered): return "list-\(ordered ? "ol" : "ul")-\(items.joined().hashValue)"
             case .codeBlock(let code, _): return "code-\(code.hashValue)"
             case .mermaidBlock(let code): return "mermaid-\(code.hashValue)"
             case .displayMath(let latex): return "math-\(latex.hashValue)"
@@ -39,15 +44,17 @@ class MarkdownParser {
             case .image(let alt, let path): return "img-\(alt.hashValue)-\(path.hashValue)"
             case .horizontalRule: return "hr-\(UUID().uuidString)"
             case .blockquote(let text): return "quote-\(text.hashValue)"
+            case .htmlBlock(let html): return "html-\(html.hashValue)"
             }
         }
 
         var textContent: String {
             switch self {
             case .heading1(let text), .heading2(let text), .heading3(let text),
-                 .heading4(let text), .paragraph(let text), .blockquote(let text):
+                 .heading4(let text), .heading5(let text), .heading6(let text),
+                 .paragraph(let text), .blockquote(let text):
                 return text
-            case .list(let items):
+            case .list(let items, _):
                 return items.joined(separator: "\n")
             case .codeBlock(let code, _):
                 return code
@@ -61,12 +68,14 @@ class MarkdownParser {
                 return alt
             case .horizontalRule:
                 return ""
+            case .htmlBlock(let html):
+                return html
             }
         }
 
         var isHeading: Bool {
             switch self {
-            case .heading1, .heading2, .heading3, .heading4:
+            case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
                 return true
             default:
                 return false
@@ -79,6 +88,8 @@ class MarkdownParser {
             case .heading2: return 2
             case .heading3: return 3
             case .heading4: return 4
+            case .heading5: return 5
+            case .heading6: return 6
             default: return nil
             }
         }
@@ -92,14 +103,27 @@ class MarkdownParser {
         let lines = markdown.components(separatedBy: .newlines)
         var i = 0
         var listItems: [String] = []
+        var currentListOrdered: Bool = false
+        var paragraphLines: [String] = []
 
         while i < lines.count {
             let line = lines[i]
 
-            // End list if we hit a non-list item
+            // End list if we hit a non-list item, or if list type changes
             if !isListLine(line) && !listItems.isEmpty {
-                elements.append(.list(items: listItems))
+                elements.append(.list(items: listItems, ordered: currentListOrdered))
                 listItems = []
+            } else if isListLine(line) && !listItems.isEmpty && isOrderedListLine(line) != currentListOrdered {
+                elements.append(.list(items: listItems, ordered: currentListOrdered))
+                listItems = []
+                currentListOrdered = isOrderedListLine(line)
+            }
+
+            // Flush accumulated paragraph if we hit a block-level element
+            let isPlainText = !line.isEmpty && !line.hasPrefix("#") && !line.hasPrefix("|") && !line.hasPrefix("> ") && !isListLine(line) && !line.hasPrefix("```") && !isHorizontalRule(line) && !isHTMLLine(line) && line.trimmingCharacters(in: .whitespaces) != "$$" && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil && !line.trimmingCharacters(in: .whitespaces).isEmpty
+            if !isPlainText && !paragraphLines.isEmpty {
+                elements.append(.paragraph(paragraphLines.joined(separator: " ")))
+                paragraphLines = []
             }
 
             // Horizontal rule (---, ___, ***)
@@ -110,7 +134,11 @@ class MarkdownParser {
             }
 
             // Headings
-            if line.hasPrefix("#### ") {
+            if line.hasPrefix("###### ") {
+                elements.append(.heading6(String(line.dropFirst(7))))
+            } else if line.hasPrefix("##### ") {
+                elements.append(.heading5(String(line.dropFirst(6))))
+            } else if line.hasPrefix("#### ") {
                 elements.append(.heading4(String(line.dropFirst(5))))
             } else if line.hasPrefix("### ") {
                 elements.append(.heading3(String(line.dropFirst(4))))
@@ -151,6 +179,9 @@ class MarkdownParser {
             }
             // Bullet/task lists
             else if isListLine(line) {
+                if listItems.isEmpty {
+                    currentListOrdered = isOrderedListLine(line)
+                }
                 let itemText = extractListItemText(line)
                 listItems.append(itemText)
             }
@@ -191,8 +222,12 @@ class MarkdownParser {
             }
             // Empty line
             else if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if !paragraphLines.isEmpty {
+                    elements.append(.paragraph(paragraphLines.joined(separator: " ")))
+                    paragraphLines = []
+                }
                 if !listItems.isEmpty {
-                    elements.append(.list(items: listItems))
+                    elements.append(.list(items: listItems, ordered: currentListOrdered))
                     listItems = []
                 }
             }
@@ -206,17 +241,40 @@ class MarkdownParser {
                     elements.append(.image(alt: String(alt), path: String(path)))
                 }
             }
-            // Regular paragraph
+            // HTML block
+            else if isHTMLLine(line) {
+                var htmlLines: [String] = [line]
+                i += 1
+                while i < lines.count {
+                    let nextLine = lines[i]
+                    if nextLine.trimmingCharacters(in: .whitespaces).isEmpty {
+                        let joined = htmlLines.joined(separator: "\n")
+                        if isHTMLBalanced(joined) { break }
+                        htmlLines.append(nextLine)
+                    } else {
+                        htmlLines.append(nextLine)
+                    }
+                    i += 1
+                }
+                elements.append(.htmlBlock(htmlLines.joined(separator: "\n")))
+                i -= 1
+            }
+            // Regular paragraph (accumulate consecutive lines)
             else if !line.isEmpty {
-                elements.append(.paragraph(line))
+                paragraphLines.append(line)
             }
 
             i += 1
         }
 
+        // Flush remaining accumulated paragraph
+        if !paragraphLines.isEmpty {
+            elements.append(.paragraph(paragraphLines.joined(separator: " ")))
+        }
+
         // Add any remaining list items
         if !listItems.isEmpty {
-            elements.append(.list(items: listItems))
+            elements.append(.list(items: listItems, ordered: currentListOrdered))
         }
 
         return elements
@@ -227,6 +285,10 @@ class MarkdownParser {
     private func isListLine(_ line: String) -> Bool {
         return line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") ||
                line.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
+    }
+
+    private func isOrderedListLine(_ line: String) -> Bool {
+        return line.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
     private func extractListItemText(_ line: String) -> String {
@@ -242,6 +304,50 @@ class MarkdownParser {
     private func isHorizontalRule(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil
+    }
+
+    private static let htmlBlockTags: Set<String> = [
+        "div", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "table", "thead", "tbody", "tr", "th", "td",
+        "ul", "ol", "li", "dl", "dt", "dd",
+        "pre", "blockquote", "section", "article", "nav",
+        "header", "footer", "main", "aside", "figure",
+        "figcaption", "details", "summary", "hr", "br", "img", "a",
+        "strong", "em", "b", "i", "u", "s", "sub", "sup", "span",
+        "center", "caption", "colgroup", "col"
+    ]
+
+    private func isHTMLLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("<") else { return false }
+        let pattern = #"^</?([a-zA-Z][a-zA-Z0-9]*)"#
+        guard let match = trimmed.range(of: pattern, options: .regularExpression) else { return false }
+        let tagContent = trimmed[match].dropFirst(trimmed.hasPrefix("</") ? 2 : 1)
+        let tagName = String(tagContent).lowercased()
+        return Self.htmlBlockTags.contains(tagName)
+    }
+
+    private func isHTMLBalanced(_ html: String) -> Bool {
+        let pattern = #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
+        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+        var depth = 0
+        let selfClosing: Set<String> = ["br", "hr", "img", "input", "meta", "link", "col"]
+        for match in matches {
+            guard let tagRange = Range(match.range(at: 2), in: html) else { continue }
+            let tag = String(html[tagRange]).lowercased()
+            if selfClosing.contains(tag) { continue }
+            if let fullRange = Range(match.range, in: html) {
+                let fullTag = String(html[fullRange])
+                if fullTag.hasSuffix("/>") { continue }
+            }
+            if let slashRange = Range(match.range(at: 1), in: html), !html[slashRange].isEmpty {
+                depth -= 1
+            } else {
+                depth += 1
+            }
+        }
+        return depth <= 0
     }
 
     private func isTableSeparator(_ line: String) -> Bool {
@@ -422,10 +528,15 @@ class MarkdownParser {
             return "<h3>\(formatInlineHTML(text))</h3>\n"
         case .heading4(let text):
             return "<h4>\(formatInlineHTML(text))</h4>\n"
+        case .heading5(let text):
+            return "<h5>\(formatInlineHTML(text))</h5>\n"
+        case .heading6(let text):
+            return "<h6>\(formatInlineHTML(text))</h6>\n"
         case .paragraph(let text):
             return "<p>\(formatInlineHTML(text))</p>\n"
-        case .list(let items):
-            var html = "<ul>\n"
+        case .list(let items, let ordered):
+            let tag = ordered ? "ol" : "ul"
+            var html = "<\(tag)>\n"
             for item in items {
                 if item.hasPrefix("[ ] ") {
                     html += "<li>☐ \(formatInlineHTML(String(item.dropFirst(4))))</li>\n"
@@ -435,7 +546,7 @@ class MarkdownParser {
                     html += "<li>\(formatInlineHTML(item))</li>\n"
                 }
             }
-            html += "</ul>\n"
+            html += "</\(tag)>\n"
             return html
         case .codeBlock(let code, _):
             return "<pre><code>\(escapeHTML(code))</code></pre>\n"
@@ -461,6 +572,8 @@ class MarkdownParser {
             return "<hr>\n"
         case .blockquote(let text):
             return "<blockquote>\(formatInlineHTML(text))</blockquote>\n"
+        case .htmlBlock(let html):
+            return html + "\n"
         }
     }
 
@@ -548,7 +661,7 @@ class MarkdownParser {
                     }
                 }
 
-                if level > 0 && level <= 4 {
+                if level > 0 && level <= 6 {
                     let text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
                     headings.append((id: "heading-\(index)", level: level, text: text, lineIndex: index))
                 }

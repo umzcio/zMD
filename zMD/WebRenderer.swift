@@ -11,9 +11,20 @@ class WebRenderer: NSObject {
     private var katexWebView: WKWebView?
     private var mermaidReady = false
     private var katexReady = false
-    private var imageCache: [String: NSImage] = [:]
+    private var imageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 100
+        cache.totalCostLimit = 100 * 1024 * 1024
+        return cache
+    }()
     private var pendingMermaid: [(String, (NSImage?) -> Void)] = []
     private var pendingKatex: [(String, Bool, (NSImage?) -> Void)] = []
+
+    // Render queues to prevent concurrent requests from overwriting completions
+    private var mermaidRenderQueue: [(code: String, key: String, completion: (NSImage?) -> Void)] = []
+    private var isMermaidRendering = false
+    private var katexRenderQueue: [(latex: String, displayMode: Bool, key: String, completion: (NSImage?) -> Void)] = []
+    private var isKatexRendering = false
 
     private override init() {
         super.init()
@@ -27,14 +38,14 @@ class WebRenderer: NSObject {
     }
 
     func getCachedImage(for input: String, prefix: String) -> NSImage? {
-        return imageCache[cacheKey(for: input, prefix: prefix)]
+        return imageCache.object(forKey: cacheKey(for: input, prefix: prefix) as NSString)
     }
 
     // MARK: - Mermaid
 
     func renderMermaid(_ code: String, completion: @escaping (NSImage?) -> Void) {
         let key = cacheKey(for: code, prefix: "mermaid-")
-        if let cached = imageCache[key] {
+        if let cached = imageCache.object(forKey: key as NSString) {
             completion(cached)
             return
         }
@@ -123,26 +134,41 @@ class WebRenderer: NSObject {
     }
 
     private func executeMermaidRender(code: String, key: String, completion: @escaping (NSImage?) -> Void) {
+        mermaidRenderQueue.append((code: code, key: key, completion: completion))
+        processNextMermaidRender()
+    }
+
+    private func processNextMermaidRender() {
+        guard !isMermaidRendering, !mermaidRenderQueue.isEmpty else { return }
         guard let webView = mermaidWebView else {
-            completion(nil)
+            // Drain queue with nil
+            let queue = mermaidRenderQueue
+            mermaidRenderQueue = []
+            queue.forEach { $0.completion(nil) }
             return
         }
 
-        let escapedCode = code.replacingOccurrences(of: "\\", with: "\\\\")
+        isMermaidRendering = true
+        let item = mermaidRenderQueue.removeFirst()
+
+        let escapedCode = item.code.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "`", with: "\\`")
             .replacingOccurrences(of: "\n", with: "\\n")
 
-        // Store completion for callback
         self.activeMermaidCompletion = { [weak self] image in
             if let image = image {
-                self?.imageCache[key] = image
+                self?.imageCache.setObject(image, forKey: item.key as NSString)
             }
-            completion(image)
+            item.completion(image)
+            self?.isMermaidRendering = false
+            self?.processNextMermaidRender()
         }
 
-        webView.evaluateJavaScript("renderMermaid(`\(escapedCode)`)") { _, error in
+        webView.evaluateJavaScript("renderMermaid(`\(escapedCode)`)") { [weak self] _, error in
             if error != nil {
-                completion(nil)
+                item.completion(nil)
+                self?.isMermaidRendering = false
+                self?.processNextMermaidRender()
             }
         }
     }
@@ -153,7 +179,7 @@ class WebRenderer: NSObject {
 
     func renderMath(_ latex: String, displayMode: Bool, completion: @escaping (NSImage?) -> Void) {
         let key = cacheKey(for: latex + (displayMode ? "-display" : "-inline"), prefix: "math-")
-        if let cached = imageCache[key] {
+        if let cached = imageCache.object(forKey: key as NSString) {
             completion(cached)
             return
         }
@@ -245,25 +271,40 @@ class WebRenderer: NSObject {
     }
 
     private func executeKatexRender(latex: String, displayMode: Bool, key: String, completion: @escaping (NSImage?) -> Void) {
+        katexRenderQueue.append((latex: latex, displayMode: displayMode, key: key, completion: completion))
+        processNextKatexRender()
+    }
+
+    private func processNextKatexRender() {
+        guard !isKatexRendering, !katexRenderQueue.isEmpty else { return }
         guard let webView = katexWebView else {
-            completion(nil)
+            let queue = katexRenderQueue
+            katexRenderQueue = []
+            queue.forEach { $0.completion(nil) }
             return
         }
 
-        let escapedLatex = latex.replacingOccurrences(of: "\\", with: "\\\\")
+        isKatexRendering = true
+        let item = katexRenderQueue.removeFirst()
+
+        let escapedLatex = item.latex.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
             .replacingOccurrences(of: "\n", with: "\\n")
 
         self.activeKatexCompletion = { [weak self] image in
             if let image = image {
-                self?.imageCache[key] = image
+                self?.imageCache.setObject(image, forKey: item.key as NSString)
             }
-            completion(image)
+            item.completion(image)
+            self?.isKatexRendering = false
+            self?.processNextKatexRender()
         }
 
-        webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(displayMode))") { _, error in
+        webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(item.displayMode))") { [weak self] _, error in
             if error != nil {
-                completion(nil)
+                item.completion(nil)
+                self?.isKatexRendering = false
+                self?.processNextKatexRender()
             }
         }
     }
