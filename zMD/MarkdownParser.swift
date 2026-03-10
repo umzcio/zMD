@@ -17,7 +17,8 @@ class MarkdownParser {
         case heading5(String)
         case heading6(String)
         case paragraph(String)
-        case list(items: [String], ordered: Bool)
+        case frontmatter(lines: [String])
+        case list(items: [(level: Int, text: String, isOrdered: Bool)])
         case codeBlock(code: String, language: String?)
         case mermaidBlock(code: String)
         case displayMath(latex: String)
@@ -36,13 +37,14 @@ class MarkdownParser {
             case .heading5(let text): return "h5-\(text.hashValue)"
             case .heading6(let text): return "h6-\(text.hashValue)"
             case .paragraph(let text): return "p-\(text.hashValue)"
-            case .list(let items, let ordered): return "list-\(ordered ? "ol" : "ul")-\(items.joined().hashValue)"
+            case .frontmatter(let lines): return "fm-\(lines.joined().hashValue)"
+            case .list(let items): return "list-\(items.map { "\($0.level)\($0.text)\($0.isOrdered)" }.joined().hashValue)"
             case .codeBlock(let code, _): return "code-\(code.hashValue)"
             case .mermaidBlock(let code): return "mermaid-\(code.hashValue)"
             case .displayMath(let latex): return "math-\(latex.hashValue)"
             case .table(let rows): return "table-\(rows.flatMap { $0 }.joined().hashValue)"
             case .image(let alt, let path): return "img-\(alt.hashValue)-\(path.hashValue)"
-            case .horizontalRule: return "hr-\(UUID().uuidString)"
+            case .horizontalRule: return "hr"
             case .blockquote(let text): return "quote-\(text.hashValue)"
             case .htmlBlock(let html): return "html-\(html.hashValue)"
             }
@@ -54,8 +56,10 @@ class MarkdownParser {
                  .heading4(let text), .heading5(let text), .heading6(let text),
                  .paragraph(let text), .blockquote(let text):
                 return text
-            case .list(let items, _):
-                return items.joined(separator: "\n")
+            case .frontmatter(let lines):
+                return lines.joined(separator: "\n")
+            case .list(let items):
+                return items.map(\.text).joined(separator: "\n")
             case .codeBlock(let code, _):
                 return code
             case .mermaidBlock(let code):
@@ -102,25 +106,47 @@ class MarkdownParser {
         var elements: [Element] = []
         let lines = markdown.components(separatedBy: .newlines)
         var i = 0
-        var listItems: [String] = []
-        var currentListOrdered: Bool = false
+        var listItems: [(level: Int, text: String, isOrdered: Bool)] = []
         var paragraphLines: [String] = []
+
+        // Check for YAML frontmatter at start of document
+        if lines.first == "---" {
+            var frontmatterLines: [String] = []
+            i = 1
+            while i < lines.count && lines[i] != "---" {
+                frontmatterLines.append(lines[i])
+                i += 1
+            }
+            if i < lines.count && lines[i] == "---" {
+                elements.append(.frontmatter(lines: frontmatterLines))
+                i += 1
+            } else {
+                // Incomplete frontmatter, treat as regular content
+                i = 0
+            }
+        }
 
         while i < lines.count {
             let line = lines[i]
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
 
-            // End list if we hit a non-list item, or if list type changes
+            // End list if we hit a non-list item
             if !isListLine(line) && !listItems.isEmpty {
-                elements.append(.list(items: listItems, ordered: currentListOrdered))
+                elements.append(.list(items: listItems))
                 listItems = []
-            } else if isListLine(line) && !listItems.isEmpty && isOrderedListLine(line) != currentListOrdered {
-                elements.append(.list(items: listItems, ordered: currentListOrdered))
-                listItems = []
-                currentListOrdered = isOrderedListLine(line)
             }
 
             // Flush accumulated paragraph if we hit a block-level element
-            let isPlainText = !line.isEmpty && !line.hasPrefix("#") && !line.hasPrefix("|") && !line.hasPrefix("> ") && !isListLine(line) && !line.hasPrefix("```") && !isHorizontalRule(line) && !isHTMLLine(line) && line.trimmingCharacters(in: .whitespaces) != "$$" && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil && !line.trimmingCharacters(in: .whitespaces).isEmpty
+            let isPlainText = !line.isEmpty && !trimmedLine.isEmpty
+                && !line.hasPrefix("#")
+                && !trimmedLine.hasPrefix("|")
+                && !line.hasPrefix("> ")
+                && !isListLine(line)
+                && !line.hasPrefix("```")
+                && !isHorizontalRule(line)
+                && !isHTMLLine(line)
+                && trimmedLine != "$$"
+                && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil
             if !isPlainText && !paragraphLines.isEmpty {
                 elements.append(.paragraph(paragraphLines.joined(separator: " ")))
                 paragraphLines = []
@@ -147,11 +173,11 @@ class MarkdownParser {
             } else if line.hasPrefix("# ") {
                 elements.append(.heading1(String(line.dropFirst(2))))
             }
-            // Table
-            else if line.hasPrefix("|") && line.hasSuffix("|") {
+            // Table (supports leading whitespace)
+            else if trimmedLine.hasPrefix("|") && trimmedLine.hasSuffix("|") {
                 var tableRows: [[String]] = []
 
-                while i < lines.count && lines[i].hasPrefix("|") {
+                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
                     let currentLine = lines[i].trimmingCharacters(in: .whitespaces)
 
                     // Skip separator row (contains dashes)
@@ -177,16 +203,13 @@ class MarkdownParser {
                 }
                 i -= 1 // Adjust because we'll increment at the end of the loop
             }
-            // Bullet/task lists
+            // List items (supports nesting via indentation)
             else if isListLine(line) {
-                if listItems.isEmpty {
-                    currentListOrdered = isOrderedListLine(line)
-                }
-                let itemText = extractListItemText(line)
-                listItems.append(itemText)
+                let item = extractListItemText(line)
+                listItems.append(item)
             }
             // Display math $$...$$
-            else if line.trimmingCharacters(in: .whitespaces) == "$$" {
+            else if trimmedLine == "$$" {
                 var mathLines: [String] = []
                 i += 1
                 while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces) != "$$" {
@@ -221,13 +244,13 @@ class MarkdownParser {
                 i -= 1 // Adjust because we'll increment at the end
             }
             // Empty line
-            else if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            else if trimmedLine.isEmpty {
                 if !paragraphLines.isEmpty {
                     elements.append(.paragraph(paragraphLines.joined(separator: " ")))
                     paragraphLines = []
                 }
                 if !listItems.isEmpty {
-                    elements.append(.list(items: listItems, ordered: currentListOrdered))
+                    elements.append(.list(items: listItems))
                     listItems = []
                 }
             }
@@ -274,7 +297,7 @@ class MarkdownParser {
 
         // Add any remaining list items
         if !listItems.isEmpty {
-            elements.append(.list(items: listItems, ordered: currentListOrdered))
+            elements.append(.list(items: listItems))
         }
 
         return elements
@@ -282,26 +305,47 @@ class MarkdownParser {
 
     // MARK: - Helper Methods
 
-    private func isListLine(_ line: String) -> Bool {
-        return line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") ||
-               line.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
+    func isListLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+        return trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") ||
+               trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
     private func isOrderedListLine(_ line: String) -> Bool {
-        return line.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
+        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+        return trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
-    private func extractListItemText(_ line: String) -> String {
-        if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
-            return String(line.dropFirst(2))
+    func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool) {
+        // Count leading spaces/tabs to determine nesting level
+        var level = 0
+        var index = line.startIndex
+        while index < line.endIndex {
+            let char = line[index]
+            if char == " " {
+                level += 1
+            } else if char == "\t" {
+                level += 4  // Treat tab as 4 spaces
+            } else {
+                break
+            }
+            index = line.index(after: index)
         }
-        if let match = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-            return String(line[match.upperBound...])
+        // Convert spaces to level (every 2 spaces = 1 level)
+        let nestLevel = level / 2
+
+        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
+            return (nestLevel, String(trimmed.dropFirst(2)), false)
         }
-        return line
+        if let match = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+            return (nestLevel, String(trimmed[match.upperBound...]), true)
+        }
+        return (nestLevel, trimmed, false)
     }
 
-    private func isHorizontalRule(_ line: String) -> Bool {
+    func isHorizontalRule(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil
     }
@@ -317,7 +361,7 @@ class MarkdownParser {
         "center", "caption", "colgroup", "col"
     ]
 
-    private func isHTMLLine(_ line: String) -> Bool {
+    func isHTMLLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.hasPrefix("<") else { return false }
         let pattern = #"^</?([a-zA-Z][a-zA-Z0-9]*)"#
@@ -327,7 +371,7 @@ class MarkdownParser {
         return Self.htmlBlockTags.contains(tagName)
     }
 
-    private func isHTMLBalanced(_ html: String) -> Bool {
+    func isHTMLBalanced(_ html: String) -> Bool {
         let pattern = #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
         let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
@@ -350,7 +394,7 @@ class MarkdownParser {
         return depth <= 0
     }
 
-    private func isTableSeparator(_ line: String) -> Bool {
+    func isTableSeparator(_ line: String) -> Bool {
         // A table separator contains mostly dashes, pipes, and colons
         let withoutPipes = line.replacingOccurrences(of: "|", with: "")
         let withoutDashes = withoutPipes.replacingOccurrences(of: "-", with: "")
@@ -496,6 +540,21 @@ class MarkdownParser {
                         border-top: 1px solid #999;
                         margin: 18pt 0;
                     }
+                    .frontmatter {
+                        background-color: #f8f8f8;
+                        border: 1px solid #ddd;
+                        padding: 8pt;
+                        margin-bottom: 16pt;
+                        font-size: 10pt;
+                    }
+                    .frontmatter table {
+                        border: none;
+                        margin: 0;
+                    }
+                    .frontmatter td {
+                        border: none;
+                        padding: 2pt 6pt;
+                    }
                 </style>
             """
         }
@@ -534,19 +593,35 @@ class MarkdownParser {
             return "<h6>\(formatInlineHTML(text))</h6>\n"
         case .paragraph(let text):
             return "<p>\(formatInlineHTML(text))</p>\n"
-        case .list(let items, let ordered):
-            let tag = ordered ? "ol" : "ul"
-            var html = "<\(tag)>\n"
-            for item in items {
-                if item.hasPrefix("[ ] ") {
-                    html += "<li>☐ \(formatInlineHTML(String(item.dropFirst(4))))</li>\n"
-                } else if item.hasPrefix("[x] ") || item.hasPrefix("[X] ") {
-                    html += "<li>☑ \(formatInlineHTML(String(item.dropFirst(4))))</li>\n"
+        case .frontmatter(let lines):
+            var html = "<div class=\"frontmatter\"><table>\n"
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { continue }
+                if let colonIndex = trimmed.firstIndex(of: ":") {
+                    let key = String(trimmed[..<colonIndex]).trimmingCharacters(in: .whitespaces)
+                    let value = String(trimmed[trimmed.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+                    html += "<tr><td><strong>\(escapeHTML(key))</strong></td><td>\(formatInlineHTML(value))</td></tr>\n"
                 } else {
-                    html += "<li>\(formatInlineHTML(item))</li>\n"
+                    html += "<tr><td colspan=\"2\">\(formatInlineHTML(trimmed))</td></tr>\n"
                 }
             }
-            html += "</\(tag)>\n"
+            html += "</table></div>\n"
+            return html
+        case .list(let items):
+            let firstTag = (items.first?.isOrdered ?? false) ? "ol" : "ul"
+            var html = "<\(firstTag)>\n"
+            for item in items {
+                let style = item.level > 0 ? " style=\"margin-left: \(item.level * 20)px\"" : ""
+                if item.text.hasPrefix("[ ] ") {
+                    html += "<li\(style)>☐ \(formatInlineHTML(String(item.text.dropFirst(4))))</li>\n"
+                } else if item.text.hasPrefix("[x] ") || item.text.hasPrefix("[X] ") {
+                    html += "<li\(style)>☑ \(formatInlineHTML(String(item.text.dropFirst(4))))</li>\n"
+                } else {
+                    html += "<li\(style)>\(formatInlineHTML(item.text))</li>\n"
+                }
+            }
+            html += "</\(firstTag)>\n"
             return html
         case .codeBlock(let code, _):
             return "<pre><code>\(escapeHTML(code))</code></pre>\n"

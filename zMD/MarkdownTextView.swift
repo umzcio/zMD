@@ -95,7 +95,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // Full rebuild when content or zoom changes
         if contentChanged || zoomChanged {
             context.coordinator.lastZoomLevel = zoomLevel
-            let (attributedString, headingRanges) = buildAttributedString()
+            let (attributedString, headingRanges) = buildAttributedString(coordinator: context.coordinator)
             textView.textStorage?.setAttributedString(attributedString)
             context.coordinator.headingRanges = headingRanges
             context.coordinator.lastContent = content
@@ -207,6 +207,9 @@ struct MarkdownTextView: NSViewRepresentable {
             cache.totalCostLimit = 100 * 1024 * 1024
             return cache
         }()
+        // Element-level rendering cache for incremental updates
+        var elementCache: [String: NSAttributedString] = [:]
+        var lastZoomKey: String = ""
 
         func scrollToHeading(id: String, in textView: NSTextView) {
             guard let range = headingRanges[id],
@@ -369,8 +372,9 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         @objc func diagramDidRender() {
-            // Force rebuild by clearing lastContent so next SwiftUI update triggers re-render
+            // Force rebuild by clearing lastContent and element cache
             lastContent = nil
+            elementCache.removeAll()
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
@@ -428,215 +432,71 @@ struct MarkdownTextView: NSViewRepresentable {
 
     // MARK: - Build Attributed String
 
-    private func buildAttributedString() -> (NSAttributedString, [String: NSRange]) {
+    private func buildAttributedString(coordinator: Coordinator) -> (NSAttributedString, [String: NSRange]) {
+        let parser = MarkdownParser.shared
+        let elements = parser.parse(content)
+        let headings = parser.extractHeadings(content)
         let result = NSMutableAttributedString()
-        let lines = content.components(separatedBy: .newlines)
-        var i = 0
-        var listItems: [(level: Int, text: String, isOrdered: Bool)] = []
         var headingRanges: [String: NSRange] = [:]
-        var paragraphLines: [String] = []
+        var headingIndex = 0
 
-        let baseFont = fontStyle.nsFont(size: 16 * zoomLevel)
-        let defaultAttributes: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .foregroundColor: NSColor.textColor,
-            .paragraphStyle: defaultParagraphStyle()
-        ]
+        // Manage element cache — invalidate on zoom or font change
+        let zoomKey = "\(zoomLevel)-\(fontStyle.rawValue)"
+        let cacheValid = coordinator.lastZoomKey == zoomKey
+        if !cacheValid {
+            coordinator.elementCache.removeAll()
+            coordinator.lastZoomKey = zoomKey
+        }
 
-        // Check for YAML frontmatter at start of document
-        if lines.first == "---" {
-            var frontmatterLines: [String] = []
-            i = 1
-            while i < lines.count && lines[i] != "---" {
-                frontmatterLines.append(lines[i])
-                i += 1
-            }
-            if i < lines.count && lines[i] == "---" {
-                // Found complete frontmatter block
-                appendFrontmatter(lines: frontmatterLines, to: result)
-                i += 1  // Skip closing ---
+        for element in elements {
+            let startPos = result.length
+
+            // Use cached fragment if available, otherwise render and cache
+            if cacheValid, let cached = coordinator.elementCache[element.id] {
+                result.append(cached)
             } else {
-                // Incomplete frontmatter, treat as regular content
-                i = 0
+                renderElement(element, to: result)
+                let endPos = result.length
+                if endPos > startPos {
+                    let fragment = result.attributedSubstring(from: NSRange(location: startPos, length: endPos - startPos))
+                    coordinator.elementCache[element.id] = fragment
+                }
+            }
+
+            // Track heading ranges for outline navigation
+            if element.isHeading, headingIndex < headings.count {
+                headingRanges[headings[headingIndex].id] = NSRange(location: startPos, length: result.length - startPos)
+                headingIndex += 1
             }
         }
 
-        while i < lines.count {
-            let line = lines[i]
-
-            // End list if we hit a non-list item
-            if !isListLine(line) && !listItems.isEmpty {
-                appendList(items: listItems, to: result)
-                listItems = []
-            }
-
-            // Flush accumulated paragraph on block-level elements or empty lines
-            let lineIsPlainText = !line.isEmpty && !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).hasPrefix("|") && !line.hasPrefix("> ") && !isListLine(line) && !line.hasPrefix("```") && !isHorizontalRule(line) && !isHTMLLine(line) && line.trimmingCharacters(in: .whitespaces) != "$$" && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil && !line.trimmingCharacters(in: .whitespaces).isEmpty
-            if !lineIsPlainText && !paragraphLines.isEmpty {
-                appendParagraph(text: paragraphLines.joined(separator: " "), to: result)
-                paragraphLines = []
-            }
-
-            // Headings
-            if line.hasPrefix("###### ") {
-                let text = String(line.dropFirst(7))
-                let range = NSRange(location: result.length, length: 0)
-                appendHeading(text: text, level: 6, to: result)
-                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
-            } else if line.hasPrefix("##### ") {
-                let text = String(line.dropFirst(6))
-                let range = NSRange(location: result.length, length: 0)
-                appendHeading(text: text, level: 5, to: result)
-                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
-            } else if line.hasPrefix("#### ") {
-                let text = String(line.dropFirst(5))
-                let range = NSRange(location: result.length, length: 0)
-                appendHeading(text: text, level: 4, to: result)
-                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
-            } else if line.hasPrefix("### ") {
-                let text = String(line.dropFirst(4))
-                let range = NSRange(location: result.length, length: 0)
-                appendHeading(text: text, level: 3, to: result)
-                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
-            } else if line.hasPrefix("## ") {
-                let text = String(line.dropFirst(3))
-                let range = NSRange(location: result.length, length: 0)
-                appendHeading(text: text, level: 2, to: result)
-                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
-            } else if line.hasPrefix("# ") {
-                let text = String(line.dropFirst(2))
-                let range = NSRange(location: result.length, length: 0)
-                appendHeading(text: text, level: 1, to: result)
-                headingRanges["heading-\(i)"] = NSRange(location: range.location, length: result.length - range.location)
-            }
-            // Horizontal rule
-            else if isHorizontalRule(line) {
-                appendHorizontalRule(to: result)
-            }
-            // Table
-            else if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") && line.trimmingCharacters(in: .whitespaces).hasSuffix("|") {
-                var tableRows: [[String]] = []
-                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
-                    let currentLine = lines[i].trimmingCharacters(in: .whitespaces)
-                    if !isTableSeparator(currentLine) {
-                        let cells = currentLine
-                            .split(separator: "|")
-                            .map { $0.trimmingCharacters(in: .whitespaces) }
-                            .filter { !$0.isEmpty }
-                        if !cells.isEmpty {
-                            tableRows.append(cells)
-                        }
-                    }
-                    i += 1
-                }
-                if !tableRows.isEmpty {
-                    appendTable(rows: tableRows, to: result)
-                }
-                i -= 1
-            }
-            // Blockquote
-            else if line.hasPrefix("> ") {
-                var quoteLines: [String] = []
-                while i < lines.count && lines[i].hasPrefix("> ") {
-                    quoteLines.append(String(lines[i].dropFirst(2)))
-                    i += 1
-                }
-                appendBlockquote(text: quoteLines.joined(separator: "\n"), to: result)
-                i -= 1
-            }
-            // List items (supports nesting via indentation)
-            else if isListLine(line) {
-                let item = extractListItemText(line)
-                listItems.append(item)
-            }
-            // Display math $$...$$
-            else if line.trimmingCharacters(in: .whitespaces) == "$$" {
-                var mathLines: [String] = []
-                i += 1
-                while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces) != "$$" {
-                    mathLines.append(lines[i])
-                    i += 1
-                }
-                appendDisplayMath(latex: mathLines.joined(separator: "\n"), to: result)
-            }
-            // Code block with optional language
-            else if line.hasPrefix("```") {
-                // Extract language identifier (e.g., ```swift -> "swift")
-                let language = line.count > 3 ? String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces) : nil
-                var codeLines: [String] = []
-                i += 1
-                while i < lines.count && !lines[i].hasPrefix("```") {
-                    codeLines.append(lines[i])
-                    i += 1
-                }
-                // Mermaid diagram rendering
-                if language?.lowercased() == "mermaid" {
-                    appendMermaidBlock(code: codeLines.joined(separator: "\n"), to: result)
-                } else {
-                    appendCodeBlock(code: codeLines.joined(separator: "\n"), language: language, to: result)
-                }
-            }
-            // Empty line
-            else if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                if !paragraphLines.isEmpty {
-                    appendParagraph(text: paragraphLines.joined(separator: " "), to: result)
-                    paragraphLines = []
-                }
-                if !listItems.isEmpty {
-                    appendList(items: listItems, to: result)
-                    listItems = []
-                }
-                result.append(NSAttributedString(string: "\n", attributes: defaultAttributes))
-            }
-            // Image (show alt text or placeholder)
-            else if line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) != nil {
-                appendImage(line: line, to: result)
-            }
-            // HTML block (inline HTML passthrough)
-            else if isHTMLLine(line) {
-                var htmlLines: [String] = [line]
-                i += 1
-                // Collect consecutive HTML or non-empty lines that are part of the block
-                while i < lines.count {
-                    let nextLine = lines[i]
-                    if nextLine.trimmingCharacters(in: .whitespaces).isEmpty {
-                        // Empty line ends an HTML block only if all tags are closed
-                        let joined = htmlLines.joined(separator: "\n")
-                        if isHTMLBalanced(joined) {
-                            break
-                        }
-                        htmlLines.append(nextLine)
-                    } else {
-                        htmlLines.append(nextLine)
-                    }
-                    i += 1
-                }
-                let htmlBlock = htmlLines.joined(separator: "\n")
-                appendHTMLBlock(html: htmlBlock, to: result)
-                i -= 1
-            }
-            // Regular paragraph (accumulate consecutive lines)
-            else if !line.isEmpty {
-                paragraphLines.append(line)
-            }
-
-            i += 1
-        }
-
-        // Flush remaining accumulated paragraph
-        if !paragraphLines.isEmpty {
-            appendParagraph(text: paragraphLines.joined(separator: " "), to: result)
-        }
-
-        // Add remaining list items
-        if !listItems.isEmpty {
-            appendList(items: listItems, to: result)
-        }
-
-        // Apply search highlighting
+        // Apply search highlighting (not cached — depends on current search state)
         applySearchHighlighting(to: result)
 
         return (result, headingRanges)
+    }
+
+    /// Dispatch a parsed element to the appropriate append method
+    private func renderElement(_ element: MarkdownParser.Element, to result: NSMutableAttributedString) {
+        switch element {
+        case .heading1(let text): appendHeading(text: text, level: 1, to: result)
+        case .heading2(let text): appendHeading(text: text, level: 2, to: result)
+        case .heading3(let text): appendHeading(text: text, level: 3, to: result)
+        case .heading4(let text): appendHeading(text: text, level: 4, to: result)
+        case .heading5(let text): appendHeading(text: text, level: 5, to: result)
+        case .heading6(let text): appendHeading(text: text, level: 6, to: result)
+        case .paragraph(let text): appendParagraph(text: text, to: result)
+        case .frontmatter(let lines): appendFrontmatter(lines: lines, to: result)
+        case .list(let items): appendList(items: items, to: result)
+        case .codeBlock(let code, let language): appendCodeBlock(code: code, language: language, to: result)
+        case .mermaidBlock(let code): appendMermaidBlock(code: code, to: result)
+        case .displayMath(let latex): appendDisplayMath(latex: latex, to: result)
+        case .table(let rows): appendTable(rows: rows, to: result)
+        case .image(let alt, let path): appendImage(alt: alt, path: path, to: result)
+        case .horizontalRule: appendHorizontalRule(to: result)
+        case .blockquote(let text): appendBlockquote(text: text, to: result)
+        case .htmlBlock(let html): appendHTMLBlock(html: html, to: result)
+        }
     }
 
     // MARK: - Append Methods
@@ -981,38 +841,27 @@ struct MarkdownTextView: NSViewRepresentable {
         result.append(ruleStr)
     }
 
-    private func appendImage(line: String, to result: NSMutableAttributedString) {
-        // Extract alt text and path
-        if let match = line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) {
-            let matchedString = String(line[match])
-            if let altRange = matchedString.range(of: #"\[([^\]]*)\]"#, options: .regularExpression),
-               let pathRange = matchedString.range(of: #"\(([^\)]+)\)"#, options: .regularExpression) {
-                let alt = String(matchedString[altRange].dropFirst().dropLast())
-                let path = String(matchedString[pathRange].dropFirst().dropLast())
+    private func appendImage(alt: String, path: String, to result: NSMutableAttributedString) {
+        if let image = loadImage(path: path) {
+            let attachment = NSTextAttachment()
+            let maxWidth: CGFloat = 700
+            let scale = min(1.0, maxWidth / image.size.width)
+            let newSize = NSSize(width: image.size.width * scale, height: image.size.height * scale)
 
-                // Try to load and embed the image
-                if let image = loadImage(path: path) {
-                    let attachment = NSTextAttachment()
-                    let maxWidth: CGFloat = 700
-                    let scale = min(1.0, maxWidth / image.size.width)
-                    let newSize = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+            image.size = newSize
+            attachment.image = image
 
-                    image.size = newSize
-                    attachment.image = image
-
-                    let imageString = NSAttributedString(attachment: attachment)
-                    result.append(NSAttributedString(string: "\n"))
-                    result.append(imageString)
-                    result.append(NSAttributedString(string: "\n\n"))
-                } else {
-                    // Show placeholder for missing image
-                    let attributes: [NSAttributedString.Key: Any] = [
-                        .font: fontStyle.nsFont(size: 14 * zoomLevel),
-                        .foregroundColor: NSColor.secondaryLabelColor
-                    ]
-                    result.append(NSAttributedString(string: "[Image: \(alt.isEmpty ? path : alt)]\n", attributes: attributes))
-                }
-            }
+            let imageString = NSAttributedString(attachment: attachment)
+            result.append(NSAttributedString(string: "\n"))
+            result.append(imageString)
+            result.append(NSAttributedString(string: "\n\n"))
+        } else {
+            // Show placeholder for missing image
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: fontStyle.nsFont(size: 14 * zoomLevel),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+            result.append(NSAttributedString(string: "[Image: \(alt.isEmpty ? path : alt)]\n", attributes: attributes))
         }
     }
 
@@ -1149,53 +998,6 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     // MARK: - HTML Block Support
-
-    private static let htmlBlockTags: Set<String> = [
-        "div", "p", "h1", "h2", "h3", "h4", "h5", "h6",
-        "table", "thead", "tbody", "tr", "th", "td",
-        "ul", "ol", "li", "dl", "dt", "dd",
-        "pre", "blockquote", "section", "article", "nav",
-        "header", "footer", "main", "aside", "figure",
-        "figcaption", "details", "summary", "hr", "br", "img", "a",
-        "strong", "em", "b", "i", "u", "s", "sub", "sup", "span",
-        "center", "caption", "colgroup", "col"
-    ]
-
-    private func isHTMLLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("<") else { return false }
-        // Extract tag name from opening or closing tag
-        let pattern = #"^</?([a-zA-Z][a-zA-Z0-9]*)"#
-        guard let match = trimmed.range(of: pattern, options: .regularExpression) else { return false }
-        let tagContent = trimmed[match].dropFirst(trimmed.hasPrefix("</") ? 2 : 1)
-        let tagName = String(tagContent).lowercased()
-        return Self.htmlBlockTags.contains(tagName)
-    }
-
-    private func isHTMLBalanced(_ html: String) -> Bool {
-        // Simple check: count opening vs closing tags for block-level elements
-        let pattern = #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
-        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
-        var depth = 0
-        let selfClosing: Set<String> = ["br", "hr", "img", "input", "meta", "link", "col"]
-        for match in matches {
-            guard let tagRange = Range(match.range(at: 2), in: html) else { continue }
-            let tag = String(html[tagRange]).lowercased()
-            if selfClosing.contains(tag) { continue }
-            // Check if self-closing syntax (ends with />)
-            if let fullRange = Range(match.range, in: html) {
-                let fullTag = String(html[fullRange])
-                if fullTag.hasSuffix("/>") { continue }
-            }
-            if let slashRange = Range(match.range(at: 1), in: html), !html[slashRange].isEmpty {
-                depth -= 1
-            } else {
-                depth += 1
-            }
-        }
-        return depth <= 0
-    }
 
     private func appendHTMLBlock(html: String, to result: NSMutableAttributedString) {
         let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -1428,53 +1230,6 @@ struct MarkdownTextView: NSViewRepresentable {
         return style
     }
 
-    private func isListLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        return trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") ||
-               trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
-    }
-
-    private func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool) {
-        // Count leading spaces/tabs to determine nesting level
-        var level = 0
-        var index = line.startIndex
-        while index < line.endIndex {
-            let char = line[index]
-            if char == " " {
-                level += 1
-            } else if char == "\t" {
-                level += 4  // Treat tab as 4 spaces
-            } else {
-                break
-            }
-            index = line.index(after: index)
-        }
-        // Convert spaces to level (every 2-4 spaces = 1 level)
-        let nestLevel = level / 2
-
-        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-
-        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-            return (nestLevel, String(trimmed.dropFirst(2)), false)
-        }
-        if let match = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-            return (nestLevel, String(trimmed[match.upperBound...]), true)
-        }
-        return (nestLevel, trimmed, false)
-    }
-
-    private func isHorizontalRule(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil
-    }
-
-    private func isTableSeparator(_ line: String) -> Bool {
-        let withoutPipes = line.replacingOccurrences(of: "|", with: "")
-        let withoutDashes = withoutPipes.replacingOccurrences(of: "-", with: "")
-        let withoutColons = withoutDashes.replacingOccurrences(of: ":", with: "")
-        let withoutSpaces = withoutColons.trimmingCharacters(in: .whitespaces)
-        return withoutSpaces.isEmpty && line.contains("-")
-    }
 }
 
 // MARK: - NSFont Extensions
