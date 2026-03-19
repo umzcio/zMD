@@ -165,7 +165,7 @@ struct AboutTab: View {
 
             Spacer()
 
-            Text("Made with care in Montana")
+            Text("Made with care by UMZCIO")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary.opacity(0.5))
                 .padding(.bottom, 12)
