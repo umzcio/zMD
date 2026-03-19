@@ -131,10 +131,11 @@ class UpdateManager: ObservableObject {
         // Mount the DMG
         let mountProcess = Process()
         mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-        mountProcess.arguments = ["attach", stableDMGPath.path, "-nobrowse", "-quiet", "-plist"]
+        mountProcess.arguments = ["attach", stableDMGPath.path, "-nobrowse", "-plist"]
 
         let pipe = Pipe()
         mountProcess.standardOutput = pipe
+        mountProcess.standardError = FileHandle.nullDevice
 
         do {
             try mountProcess.run()
