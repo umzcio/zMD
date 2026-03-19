@@ -65,6 +65,13 @@ struct zMDApp: App {
                 }
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    updateManager.checkForUpdates()
+                }
+                .disabled(updateManager.isChecking)
+            }
+
             // Remove the default Close Window command to prevent ⌘W from closing the window
             CommandGroup(replacing: .appTermination) {
                 Button("Quit zMD") {
@@ -270,16 +277,14 @@ struct zMDApp: App {
                     SettingsManager.shared.resetZoom()
                 }
                 .keyboardShortcut("0", modifiers: .command)
-            }
 
-            CommandGroup(replacing: .toolbar) {
+                Divider()
+
                 Button("Refresh") {
                     documentManager.refreshCurrentDocument()
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
-
-                Divider()
 
                 Button("Resume File Watching") {
                     documentManager.resumeFileWatching()
@@ -345,13 +350,6 @@ struct zMDApp: App {
                     showingHelp = true
                 }
                 .keyboardShortcut("?", modifiers: .command)
-
-                Divider()
-
-                Button("Check for Updates...") {
-                    updateManager.checkForUpdates()
-                }
-                .disabled(updateManager.isChecking)
             }
         }
 

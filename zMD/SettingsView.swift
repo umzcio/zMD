@@ -2,139 +2,173 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings = SettingsManager.shared
-    @Environment(\.dismiss) var dismiss
+    @ObservedObject var documentManager = DocumentManager.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Settings")
-                    .font(.system(size: 20, weight: .semibold))
-                Spacer()
-
-                // Hidden button for ESC key support
-                Button("") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .opacity(0)
-                    .frame(width: 0, height: 0)
-            }
-            .padding()
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
-                    // Appearance Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Appearance")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.secondary)
-
-                        VStack(spacing: 12) {
-                            // Light/Dark Mode Toggle
-                            HStack {
-                                Text("Theme")
-                                    .font(.system(size: 14))
-                                Spacer()
-                                Picker("", selection: $settings.colorScheme) {
-                                    Text("System").tag(nil as ColorScheme?)
-                                    Text("Light").tag(ColorScheme.light as ColorScheme?)
-                                    Text("Dark").tag(ColorScheme.dark as ColorScheme?)
-                                }
-                                .pickerStyle(.segmented)
-                                .frame(width: 240)
-                            }
-                        }
-                        .padding()
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .cornerRadius(8)
-                    }
-
-                    // Editor Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Editor")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.secondary)
-
-                        VStack(spacing: 12) {
-                            HStack {
-                                Text("Auto-save files")
-                                    .font(.system(size: 14))
-                                Spacer()
-                                Toggle("", isOn: Binding(
-                                    get: { DocumentManager.shared.autoSaveEnabled },
-                                    set: { DocumentManager.shared.autoSaveEnabled = $0 }
-                                ))
-                                .toggleStyle(.switch)
-                            }
-                        }
-                        .padding()
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .cornerRadius(8)
-                    }
-
-                    // Font Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Font")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.secondary)
-
-                        VStack(spacing: 8) {
-                            ForEach(SettingsManager.FontStyle.allCases, id: \.self) { fontStyle in
-                                FontStyleOption(
-                                    fontStyle: fontStyle,
-                                    isSelected: settings.fontStyle == fontStyle
-                                ) {
-                                    settings.fontStyle = fontStyle
-                                }
-                            }
-                        }
-                        .padding()
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .cornerRadius(8)
-                    }
+        TabView {
+            GeneralSettingsTab(settings: settings, documentManager: documentManager)
+                .tabItem {
+                    Label("General", systemImage: "gearshape")
                 }
-                .padding()
-            }
+
+            AppearanceSettingsTab(settings: settings)
+                .tabItem {
+                    Label("Appearance", systemImage: "paintbrush")
+                }
+
+            AboutTab()
+                .tabItem {
+                    Label("About", systemImage: "info.circle")
+                }
         }
-        .frame(width: 600, height: 480)
+        .frame(width: 480, height: 340)
     }
 }
 
-struct FontStyleOption: View {
-    let fontStyle: SettingsManager.FontStyle
-    let isSelected: Bool
-    let action: () -> Void
+// MARK: - General
+
+struct GeneralSettingsTab: View {
+    @ObservedObject var settings: SettingsManager
+    @ObservedObject var documentManager: DocumentManager
 
     var body: some View {
-        Button(action: action) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(fontStyle.displayName)
-                        .font(fontStyle.font(size: 14))
-                        .foregroundColor(.primary)
+        Form {
+            Section("Editor") {
+                Toggle("Auto-save files", isOn: Binding(
+                    get: { documentManager.autoSaveEnabled },
+                    set: { documentManager.autoSaveEnabled = $0 }
+                ))
 
-                    Text("The quick brown fox jumps over the lazy dog")
-                        .font(fontStyle.font(size: 12))
-                        .foregroundColor(.secondary)
+                Toggle("Scroll sync in split view", isOn: Binding(
+                    get: { documentManager.isScrollSyncEnabled },
+                    set: { documentManager.isScrollSyncEnabled = $0 }
+                ))
+            }
+
+            Section("Default View") {
+                Picker("Mode", selection: Binding(
+                    get: { documentManager.viewMode },
+                    set: { documentManager.viewMode = $0 }
+                )) {
+                    Text("Preview").tag(ViewMode.preview)
+                    Text("Source").tag(ViewMode.source)
+                    Text("Split").tag(ViewMode.split)
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+        .formStyle(.grouped)
+        .scrollDisabled(true)
+    }
+}
+
+// MARK: - Appearance
+
+struct AppearanceSettingsTab: View {
+    @ObservedObject var settings: SettingsManager
+
+    var body: some View {
+        Form {
+            Section("Theme") {
+                Picker("Appearance", selection: $settings.colorScheme) {
+                    Text("System").tag(nil as ColorScheme?)
+                    Text("Light").tag(ColorScheme.light as ColorScheme?)
+                    Text("Dark").tag(ColorScheme.dark as ColorScheme?)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section("Font") {
+                Picker("Style", selection: $settings.fontStyle) {
+                    ForEach(SettingsManager.FontStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
                 }
 
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.accentColor)
-                        .font(.system(size: 16))
+                HStack {
+                    Text("Preview")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("The quick brown fox jumps over the lazy dog")
+                        .font(settings.fontStyle.font(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
             }
-            .padding(12)
-            .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
-            .cornerRadius(6)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
-            )
+
+            Section("Zoom") {
+                HStack {
+                    Button {
+                        settings.zoomOut()
+                    } label: {
+                        Image(systemName: "minus.magnifyingglass")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(settings.zoomLevel <= 0.5)
+
+                    Spacer()
+
+                    Text("\(Int(settings.zoomLevel * 100))%")
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .frame(width: 50)
+
+                    Spacer()
+
+                    Button {
+                        settings.zoomIn()
+                    } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(settings.zoomLevel >= 2.0)
+                }
+
+                if settings.zoomLevel != 1.0 {
+                    Button("Reset to 100%") {
+                        settings.resetZoom()
+                    }
+                    .font(.system(size: 12))
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .formStyle(.grouped)
+        .scrollDisabled(true)
+    }
+}
+
+// MARK: - About
+
+struct AboutTab: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer()
+
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 80, height: 80)
+
+            Text("zMD")
+                .font(.system(size: 20, weight: .semibold))
+
+            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+
+            Text("A lightweight markdown viewer for macOS")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+
+            Button("Check for Updates...") {
+                UpdateManager.shared.checkForUpdates()
+            }
+            .disabled(UpdateManager.shared.isChecking)
+
+            Spacer()
+
+            Text("Made with care in Montana")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary.opacity(0.5))
+                .padding(.bottom, 12)
+        }
     }
 }
