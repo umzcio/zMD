@@ -61,7 +61,11 @@ struct zMDApp: App {
                     }
                     Button("Later", role: .cancel) {}
                 } message: {
-                    Text("zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).\n\n\(updateManager.releaseNotes)")
+                    if updateManager.releaseNotes.isEmpty {
+                        Text("zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).")
+                    } else {
+                        Text("zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).\n\n\(updateManager.releaseNotes)")
+                    }
                 }
         }
         .commands {

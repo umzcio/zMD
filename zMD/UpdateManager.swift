@@ -55,7 +55,8 @@ class UpdateManager: ObservableObject {
                 }
 
                 let remoteVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
-                let body = json["body"] as? String ?? ""
+                let rawBody = json["body"] as? String ?? ""
+                let body = self.stripMarkdown(rawBody)
 
                 // Find DMG asset
                 var dmgURL: URL?
@@ -241,5 +242,18 @@ class UpdateManager: ObservableObject {
             if r < c { return false }
         }
         return false
+    }
+
+    private func stripMarkdown(_ text: String) -> String {
+        var result = text
+        // Remove headings
+        result = result.replacingOccurrences(of: "(?m)^#{1,6}\\s*", with: "", options: .regularExpression)
+        // Remove bold/italic markers
+        result = result.replacingOccurrences(of: "\\*{1,3}(.+?)\\*{1,3}", with: "$1", options: .regularExpression)
+        // Remove bullet markers
+        result = result.replacingOccurrences(of: "(?m)^\\s*[-*]\\s+", with: "- ", options: .regularExpression)
+        // Collapse multiple blank lines
+        result = result.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
