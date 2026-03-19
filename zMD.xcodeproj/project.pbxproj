@@ -37,6 +37,7 @@
 		F1E2D3C4B5A6079801234567 /* StatusBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6078901234567 /* StatusBarView.swift */; };
 		F2E3D4C5B6A7089012345678 /* ToastManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D5E6F7089012345678 /* ToastManager.swift */; };
 		F3E4D5C6B7A8090123456789 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3B4C5D6E7F8090123456789 /* CommandPaletteView.swift */; };
+		U4F5E6D7C8B9A00112233445 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -71,6 +72,7 @@
 		A1B2C3D4E5F6078901234567 /* StatusBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarView.swift; sourceTree = "<group>"; };
 		A2B3C4D5E6F7089012345678 /* ToastManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastManager.swift; sourceTree = "<group>"; };
 		A3B4C5D6E7F8090123456789 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
+		U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -126,7 +128,8 @@
 				B1C2D3E4F5A6B70801020305 /* DirectoryWatcher.swift */,
 				B1C2D3E4F5A6B70801020306 /* FolderManager.swift */,
 				B1C2D3E4F5A6B70801020307 /* FolderSidebarView.swift */,
-				4647E1ABB7480F258C457C59 /* WebRenderer.swift */,);
+				4647E1ABB7480F258C457C59 /* WebRenderer.swift */,
+				U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */,);
 			path = zMD;
 			sourceTree = "<group>";
 		};
@@ -236,7 +239,8 @@ A1111111 /* zMD.app */,
 				C1D2E3F4A5B6C70801020305 /* DirectoryWatcher.swift in Sources */,
 				C1D2E3F4A5B6C70801020306 /* FolderManager.swift in Sources */,
 				C1D2E3F4A5B6C70801020307 /* FolderSidebarView.swift in Sources */,
-				BD144ED0929DCB16BE557ADC /* WebRenderer.swift in Sources */,);
+				BD144ED0929DCB16BE557ADC /* WebRenderer.swift in Sources */,
+				U4F5E6D7C8B9A00112233445 /* UpdateManager.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
@@ -370,11 +374,12 @@ A1111111 /* zMD.app */,
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = zMD/zMD.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5JJ6G6A84S;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -403,11 +408,12 @@ A1111111 /* zMD.app */,
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = zMD/zMD.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5JJ6G6A84S;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;

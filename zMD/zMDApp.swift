@@ -5,6 +5,7 @@ struct zMDApp: App {
     @ObservedObject private var documentManager = DocumentManager.shared
     @ObservedObject private var settings = SettingsManager.shared
     @ObservedObject private var folderManager = FolderManager.shared
+    @ObservedObject private var updateManager = UpdateManager.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var showingHelp = false
 
@@ -46,6 +47,21 @@ struct zMDApp: App {
                 .sheet(isPresented: $showingHelp) {
                     HelpView()
                         .preferredColorScheme(settings.colorScheme)
+                }
+                .alert("Update Available", isPresented: $updateManager.showingUpdateAlert) {
+                    if updateManager.downloadURL != nil {
+                        Button("Download & Install") {
+                            updateManager.downloadAndInstall()
+                        }
+                    }
+                    Button("View on GitHub") {
+                        if let url = URL(string: "https://github.com/umzcio/zMD/releases/latest") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    Button("Later", role: .cancel) {}
+                } message: {
+                    Text("zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).\n\n\(updateManager.releaseNotes)")
                 }
         }
         .commands {
@@ -329,6 +345,13 @@ struct zMDApp: App {
                     showingHelp = true
                 }
                 .keyboardShortcut("?", modifiers: .command)
+
+                Divider()
+
+                Button("Check for Updates...") {
+                    updateManager.checkForUpdates()
+                }
+                .disabled(updateManager.isChecking)
             }
         }
 
