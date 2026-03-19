@@ -354,11 +354,31 @@ struct WelcomeView: View {
             // Recent files
             if !documentManager.recentFileURLs.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("RECENT FILES")
-                        .font(.system(size: 10, weight: .semibold))
+                    HStack {
+                        Text("RECENT FILES")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+
+                        Spacer()
+
+                        Button("Clear") {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                documentManager.clearRecentFiles()
+                            }
+                        }
+                        .font(.system(size: 10))
                         .foregroundColor(Color(NSColor.tertiaryLabelColor))
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 6)
+                        .buttonStyle(.plain)
+                        .onHover { hovering in
+                            if hovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
 
                     ForEach(documentManager.recentFileURLs.prefix(5), id: \.path) { url in
                         Button(action: {
