@@ -38,6 +38,11 @@
 		F2E3D4C5B6A7089012345678 /* ToastManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D5E6F7089012345678 /* ToastManager.swift */; };
 		F3E4D5C6B7A8090123456789 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3B4C5D6E7F8090123456789 /* CommandPaletteView.swift */; };
 		U4F5E6D7C8B9A00112233445 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */; };
+		EA058625B2C23482DC475936 /* EditorTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FB0C61CAA422942B133D0F /* EditorTextView.swift */; };
+		942EB0109B76449EB8C6FBF8 /* MultiCursorController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36F9B31C79602364A4A43BE /* MultiCursorController.swift */; };
+		4987A0138C65DEF40879D814 /* LineNumberGutter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58E49A190E3788C8930965D /* LineNumberGutter.swift */; };
+		3297275B1BF8697ADFFD1F05 /* MarkdownToolbarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E98BC2A82B061C62DF83B82 /* MarkdownToolbarView.swift */; };
+		FAD1ED55FFD8ACC66802BC3E /* MinimapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE9957878B9A42255F3208D /* MinimapView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -73,6 +78,11 @@
 		A2B3C4D5E6F7089012345678 /* ToastManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastManager.swift; sourceTree = "<group>"; };
 		A3B4C5D6E7F8090123456789 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
 		U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManager.swift; sourceTree = "<group>"; };
+		B9FB0C61CAA422942B133D0F /* EditorTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextView.swift; sourceTree = "<group>"; };
+		D36F9B31C79602364A4A43BE /* MultiCursorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiCursorController.swift; sourceTree = "<group>"; };
+		D58E49A190E3788C8930965D /* LineNumberGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineNumberGutter.swift; sourceTree = "<group>"; };
+		6E98BC2A82B061C62DF83B82 /* MarkdownToolbarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownToolbarView.swift; sourceTree = "<group>"; };
+		3DE9957878B9A42255F3208D /* MinimapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimapView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,7 +139,12 @@
 				B1C2D3E4F5A6B70801020306 /* FolderManager.swift */,
 				B1C2D3E4F5A6B70801020307 /* FolderSidebarView.swift */,
 				4647E1ABB7480F258C457C59 /* WebRenderer.swift */,
-				U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */,);
+				U4F5E6D7C8B9A00112233440 /* UpdateManager.swift */,
+				B9FB0C61CAA422942B133D0F /* EditorTextView.swift */,
+				D36F9B31C79602364A4A43BE /* MultiCursorController.swift */,
+				D58E49A190E3788C8930965D /* LineNumberGutter.swift */,
+				6E98BC2A82B061C62DF83B82 /* MarkdownToolbarView.swift */,
+				3DE9957878B9A42255F3208D /* MinimapView.swift */,);
 			path = zMD;
 			sourceTree = "<group>";
 		};
@@ -240,7 +255,12 @@ A1111111 /* zMD.app */,
 				C1D2E3F4A5B6C70801020306 /* FolderManager.swift in Sources */,
 				C1D2E3F4A5B6C70801020307 /* FolderSidebarView.swift in Sources */,
 				BD144ED0929DCB16BE557ADC /* WebRenderer.swift in Sources */,
-				U4F5E6D7C8B9A00112233445 /* UpdateManager.swift in Sources */,);
+				U4F5E6D7C8B9A00112233445 /* UpdateManager.swift in Sources */,
+				EA058625B2C23482DC475936 /* EditorTextView.swift in Sources */,
+				942EB0109B76449EB8C6FBF8 /* MultiCursorController.swift in Sources */,
+				4987A0138C65DEF40879D814 /* LineNumberGutter.swift in Sources */,
+				3297275B1BF8697ADFFD1F05 /* MarkdownToolbarView.swift in Sources */,
+				FAD1ED55FFD8ACC66802BC3E /* MinimapView.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
@@ -394,7 +414,7 @@ A1111111 /* zMD.app */,
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -428,7 +448,7 @@ A1111111 /* zMD.app */,
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

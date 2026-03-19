@@ -21,7 +21,7 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 480, height: 340)
+        .frame(width: 480, height: 480)
     }
 }
 
@@ -43,6 +43,20 @@ struct GeneralSettingsTab: View {
                     get: { documentManager.isScrollSyncEnabled },
                     set: { documentManager.isScrollSyncEnabled = $0 }
                 ))
+
+                Toggle("Auto-close brackets & quotes", isOn: $settings.autoCloseBrackets)
+
+                Picker("Tab width", selection: $settings.tabWidth) {
+                    Text("2 spaces").tag(2)
+                    Text("4 spaces").tag(4)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section("Source Editor") {
+                Toggle("Show line numbers", isOn: $settings.showLineNumbers)
+                Toggle("Show minimap", isOn: $settings.showMinimap)
+                Toggle("Show editor toolbar", isOn: $settings.showEditorToolbar)
             }
 
             Section("Default View") {

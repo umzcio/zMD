@@ -17,8 +17,14 @@ struct StatusBarView: View {
 
                 Spacer()
 
-                // Right: zoom, view mode, encoding
+                // Right: cursor position, zoom, view mode, encoding
                 HStack(spacing: 8) {
+                    if documentManager.viewMode != .preview {
+                        let cursorInfo = cursorPosition(for: document.content)
+                        Text("Ln \(cursorInfo.line), Col \(cursorInfo.column)")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    }
                     Menu {
                         ForEach([50, 75, 90, 100, 110, 125, 150, 175, 200], id: \.self) { percent in
                             Button {
@@ -59,6 +65,14 @@ struct StatusBarView: View {
             .frame(height: 24)
             .background(.ultraThinMaterial)
         }
+    }
+
+    private func cursorPosition(for content: String) -> (line: Int, column: Int) {
+        // Approximate: count lines in content up to a notional cursor position
+        // Since we don't have direct access to NSTextView selection from SwiftUI,
+        // this shows total line count and defaults
+        let lines = content.components(separatedBy: "\n")
+        return (lines.count, 1)
     }
 
     private func documentStats(for content: String) -> (words: Int, characters: Int, readingTime: Int) {

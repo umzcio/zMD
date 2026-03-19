@@ -40,6 +40,12 @@ class DocumentManager: ObservableObject {
     @Published var searchMatches: [SearchMatch] = []
     @Published var renderedMatchCount: Int = 0
 
+    // Find & Replace state
+    @Published var replaceText: String = ""
+    @Published var isRegexSearch: Bool = false
+    @Published var isCaseSensitive: Bool = false
+    @Published var showReplace: Bool = false
+
     // File watching
     private var fileWatchers: [UUID: FileWatcher] = [:]
     @Published var ignoreAllFileChanges = false
@@ -78,6 +84,26 @@ class DocumentManager: ObservableObject {
         self.autoSaveEnabled = UserDefaults.standard.bool(forKey: "autoSaveEnabled")
         loadRecentFiles()
         loadScrollPositions()
+    }
+
+    func createNewFile() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md")].compactMap { $0 }
+        panel.nameFieldStringValue = "Untitled.md"
+        panel.title = "Create New Markdown File"
+
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let initial = "# \(url.deletingPathExtension().lastPathComponent)\n\n"
+                try initial.write(to: url, atomically: true, encoding: .utf8)
+                self?.loadDocument(from: url)
+                // Switch to source mode for new files
+                self?.viewMode = .source
+            } catch {
+                self?.alertManager.showError("Create Failed", message: error.localizedDescription)
+            }
+        }
     }
 
     func openFile() {
@@ -583,6 +609,13 @@ extension DocumentManager {
         searchMatches = []
         currentMatchIndex = 0
         renderedMatchCount = 0
+        replaceText = ""
+        showReplace = false
+    }
+
+    func startFindAndReplace() {
+        isSearching = true
+        showReplace = true
     }
 
     func performSearch() {
@@ -596,24 +629,37 @@ extension DocumentManager {
 
         let content = document.content
         var matches: [SearchMatch] = []
-        var searchStartIndex = content.startIndex
-        var lineNumber = 1
-        var currentLineStart = content.startIndex
 
-        while searchStartIndex < content.endIndex {
-            if let range = content.range(of: searchText, options: .caseInsensitive, range: searchStartIndex..<content.endIndex) {
-                // Calculate line number
-                while currentLineStart < range.lowerBound {
-                    if content[currentLineStart] == "\n" {
-                        lineNumber += 1
-                    }
-                    currentLineStart = content.index(after: currentLineStart)
-                }
-
+        if isRegexSearch {
+            // Regex search
+            var options: NSRegularExpression.Options = []
+            if !isCaseSensitive { options.insert(.caseInsensitive) }
+            guard let regex = try? NSRegularExpression(pattern: searchText, options: options) else {
+                searchMatches = []
+                currentMatchIndex = 0
+                return
+            }
+            let nsContent = content as NSString
+            let results = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+            for result in results {
+                guard let range = Range(result.range, in: content) else { continue }
+                let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
                 matches.append(SearchMatch(range: range, lineNumber: lineNumber))
-                searchStartIndex = range.upperBound
-            } else {
-                break
+            }
+        } else {
+            // Plain text search
+            var searchOptions: String.CompareOptions = []
+            if !isCaseSensitive { searchOptions.insert(.caseInsensitive) }
+
+            var searchStartIndex = content.startIndex
+            while searchStartIndex < content.endIndex {
+                if let range = content.range(of: searchText, options: searchOptions, range: searchStartIndex..<content.endIndex) {
+                    let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
+                    matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+                    searchStartIndex = range.upperBound
+                } else {
+                    break
+                }
             }
         }
 
@@ -621,6 +667,35 @@ extension DocumentManager {
         if !matches.isEmpty && currentMatchIndex >= matches.count {
             currentMatchIndex = 0
         }
+    }
+
+    func replaceCurrentMatch() {
+        guard let selectedId = selectedDocumentId,
+              let index = openDocuments.firstIndex(where: { $0.id == selectedId }),
+              !searchMatches.isEmpty,
+              currentMatchIndex < searchMatches.count else { return }
+
+        let match = searchMatches[currentMatchIndex]
+        var content = openDocuments[index].content
+        content.replaceSubrange(match.range, with: replaceText)
+        updateContent(for: selectedId, newContent: content)
+        performSearch()
+    }
+
+    func replaceAllMatches() {
+        guard let selectedId = selectedDocumentId,
+              let index = openDocuments.firstIndex(where: { $0.id == selectedId }),
+              !searchMatches.isEmpty else { return }
+
+        var content = openDocuments[index].content
+        // Replace in reverse order to maintain valid ranges
+        for match in searchMatches.reversed() {
+            content.replaceSubrange(match.range, with: replaceText)
+        }
+        let count = searchMatches.count
+        updateContent(for: selectedId, newContent: content)
+        performSearch()
+        ToastManager.shared.show("Replaced \(count) occurrences", style: .success)
     }
 
     func nextMatch() {
