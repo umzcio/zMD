@@ -15,8 +15,23 @@ class UpdateManager: ObservableObject {
     @Published var isDownloading = false
     @Published var downloadProgress: Double = 0
 
+    private let lastCheckKey = "lastUpdateCheckDate"
+    private let checkIntervalHours: Double = 24
+
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    /// Auto-check on launch (silent, once per 24h)
+    func checkOnLaunchIfNeeded() {
+        let lastCheck = UserDefaults.standard.double(forKey: lastCheckKey)
+        let now = Date().timeIntervalSince1970
+        let hoursSinceLastCheck = (now - lastCheck) / 3600
+
+        if lastCheck == 0 || hoursSinceLastCheck >= checkIntervalHours {
+            UserDefaults.standard.set(now, forKey: lastCheckKey)
+            checkForUpdates(silent: true)
+        }
     }
 
     func checkForUpdates(silent: Bool = false) {

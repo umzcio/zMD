@@ -43,6 +43,9 @@ struct zMDApp: App {
                     }
                     // Restore last-opened folder
                     folderManager.restoreFolder()
+
+                    // Auto-check for updates (silent, once per 24h)
+                    updateManager.checkOnLaunchIfNeeded()
                 }
                 .sheet(isPresented: $showingHelp) {
                     HelpView()
@@ -50,7 +53,7 @@ struct zMDApp: App {
                 }
                 .alert("Update Available", isPresented: $updateManager.showingUpdateAlert) {
                     if updateManager.downloadURL != nil {
-                        Button("Download & Install") {
+                        Button("Update Now") {
                             updateManager.downloadAndInstall()
                         }
                     }
@@ -61,10 +64,11 @@ struct zMDApp: App {
                     }
                     Button("Later", role: .cancel) {}
                 } message: {
+                    let base = "zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).\n\nUpdate Now will download, install to /Applications, and relaunch automatically."
                     if updateManager.releaseNotes.isEmpty {
-                        Text("zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).")
+                        Text(base)
                     } else {
-                        Text("zMD \(updateManager.latestVersion) is available (you have \(updateManager.currentVersion)).\n\n\(updateManager.releaseNotes)")
+                        Text(base + "\n\n\(updateManager.releaseNotes)")
                     }
                 }
         }
