@@ -27,22 +27,39 @@ struct ContentView: View {
 
                     // Search bar
                     if documentManager.isSearching && !documentManager.isFocusModeActive {
-                        SearchBar(
-                            searchText: $documentManager.searchText,
-                            isSearching: $documentManager.isSearching,
-                            currentMatch: documentManager.renderedMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
-                            totalMatches: documentManager.renderedMatchCount,
-                            onSearch: { },
-                            onNext: {
-                                documentManager.nextMatch()
-                            },
-                            onPrevious: {
-                                documentManager.previousMatch()
-                            },
-                            onClose: {
-                                documentManager.endSearch()
+                        Group {
+                            if documentManager.showReplace && documentManager.viewMode != .preview {
+                                SearchBar(
+                                    searchText: $documentManager.searchText,
+                                    isSearching: $documentManager.isSearching,
+                                    currentMatch: documentManager.renderedMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
+                                    totalMatches: documentManager.renderedMatchCount,
+                                    onSearch: { },
+                                    onNext: { documentManager.nextMatch() },
+                                    onPrevious: { documentManager.previousMatch() },
+                                    onClose: { documentManager.endSearch() },
+                                    showReplace: true,
+                                    replaceText: $documentManager.replaceText,
+                                    isRegex: documentManager.isRegexSearch,
+                                    isCaseSensitive: documentManager.isCaseSensitive,
+                                    onToggleRegex: { documentManager.isRegexSearch.toggle(); documentManager.performSearch() },
+                                    onToggleCaseSensitive: { documentManager.isCaseSensitive.toggle(); documentManager.performSearch() },
+                                    onReplace: { documentManager.replaceCurrentMatch() },
+                                    onReplaceAll: { documentManager.replaceAllMatches() }
+                                )
+                            } else {
+                                SearchBar(
+                                    searchText: $documentManager.searchText,
+                                    isSearching: $documentManager.isSearching,
+                                    currentMatch: documentManager.renderedMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
+                                    totalMatches: documentManager.renderedMatchCount,
+                                    onSearch: { },
+                                    onNext: { documentManager.nextMatch() },
+                                    onPrevious: { documentManager.previousMatch() },
+                                    onClose: { documentManager.endSearch() }
+                                )
                             }
-                        )
+                        }
                         .padding(8)
                         .transition(.move(edge: .top).combined(with: .opacity))
 
@@ -300,29 +317,50 @@ struct WelcomeView: View {
                 .opacity(showSubtitle ? 1 : 0)
                 .offset(y: showSubtitle ? 0 : 8)
 
-            // Button
-            Button(action: {
-                documentManager.openFile()
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 14))
-                    Text("Open Markdown File")
-                        .font(.system(size: 14, weight: .medium))
+            // Buttons
+            HStack(spacing: 12) {
+                Button(action: {
+                    documentManager.createNewFile()
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.badge.plus")
+                            .font(.system(size: 14))
+                        Text("New File")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.accentColor.opacity(0.6), lineWidth: 1.5)
+                    )
+                    .foregroundColor(.accentColor)
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(buttonHovered ? Color.accentColor : Color.accentColor.opacity(0.85))
-                )
-                .foregroundColor(.white)
-                .scaleEffect(buttonHovered ? 1.03 : 1.0)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    buttonHovered = hovering
+                .buttonStyle(PlainButtonStyle())
+
+                Button(action: {
+                    documentManager.openFile()
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 14))
+                        Text("Open File")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(buttonHovered ? Color.accentColor : Color.accentColor.opacity(0.85))
+                    )
+                    .foregroundColor(.white)
+                    .scaleEffect(buttonHovered ? 1.03 : 1.0)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        buttonHovered = hovering
+                    }
                 }
             }
             .opacity(showButton ? 1 : 0)
@@ -581,11 +619,23 @@ extension ContentView {
         case .preview:
             markdownPreview(for: document)
         case .source:
-            sourceEditor(for: document)
+            VStack(spacing: 0) {
+                if SettingsManager.shared.showEditorToolbar {
+                    MarkdownToolbarView()
+                    Divider()
+                }
+                sourceEditor(for: document)
+            }
         case .split:
-            HSplitView {
-                syncedSourceEditor(for: document)
-                syncedPreview(for: document)
+            VStack(spacing: 0) {
+                if SettingsManager.shared.showEditorToolbar {
+                    MarkdownToolbarView()
+                    Divider()
+                }
+                HSplitView {
+                    syncedSourceEditor(for: document)
+                    syncedPreview(for: document)
+                }
             }
         }
     }

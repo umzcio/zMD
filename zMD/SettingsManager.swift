@@ -21,6 +21,27 @@ class SettingsManager: ObservableObject {
         }
     }
 
+    // Editor settings
+    @Published var tabWidth: Int {
+        didSet { UserDefaults.standard.set(tabWidth, forKey: "tabWidth") }
+    }
+
+    @Published var autoCloseBrackets: Bool {
+        didSet { UserDefaults.standard.set(autoCloseBrackets, forKey: "autoCloseBrackets") }
+    }
+
+    @Published var showEditorToolbar: Bool {
+        didSet { UserDefaults.standard.set(showEditorToolbar, forKey: "showEditorToolbar") }
+    }
+
+    @Published var showMinimap: Bool {
+        didSet { UserDefaults.standard.set(showMinimap, forKey: "showMinimap") }
+    }
+
+    @Published var showLineNumbers: Bool {
+        didSet { UserDefaults.standard.set(showLineNumbers, forKey: "showLineNumbers") }
+    }
+
     func zoomIn() {
         zoomLevel = min(2.0, (zoomLevel * 10 + 1).rounded() / 10)
     }
@@ -71,5 +92,21 @@ class SettingsManager: ObservableObject {
         default:
             self.colorScheme = nil
         }
+
+        // Editor settings
+        let savedTabWidth = UserDefaults.standard.integer(forKey: "tabWidth")
+        self.tabWidth = savedTabWidth > 0 ? savedTabWidth : 4
+
+        self.autoCloseBrackets = UserDefaults.standard.object(forKey: "autoCloseBrackets") == nil
+            ? true : UserDefaults.standard.bool(forKey: "autoCloseBrackets")
+
+        self.showEditorToolbar = UserDefaults.standard.object(forKey: "showEditorToolbar") == nil
+            ? true : UserDefaults.standard.bool(forKey: "showEditorToolbar")
+
+        self.showMinimap = UserDefaults.standard.object(forKey: "showMinimap") == nil
+            ? true : UserDefaults.standard.bool(forKey: "showMinimap")
+
+        self.showLineNumbers = UserDefaults.standard.object(forKey: "showLineNumbers") == nil
+            ? true : UserDefaults.standard.bool(forKey: "showLineNumbers")
     }
 }

@@ -73,6 +73,9 @@ struct zMDApp: App {
                 }
         }
         .commands {
+            FormatCommands()
+        }
+        .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...") {
                     updateManager.checkForUpdates()
@@ -89,6 +92,11 @@ struct zMDApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
+                Button("New File...") {
+                    documentManager.createNewFile()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
                 Button("Open...") {
                     documentManager.openFile()
                 }
@@ -264,6 +272,20 @@ struct zMDApp: App {
 
                 Divider()
 
+                Button(SettingsManager.shared.showLineNumbers ? "Hide Line Numbers" : "Show Line Numbers") {
+                    SettingsManager.shared.showLineNumbers.toggle()
+                }
+
+                Button(SettingsManager.shared.showMinimap ? "Hide Minimap" : "Show Minimap") {
+                    SettingsManager.shared.showMinimap.toggle()
+                }
+
+                Button(SettingsManager.shared.showEditorToolbar ? "Hide Editor Toolbar" : "Show Editor Toolbar") {
+                    SettingsManager.shared.showEditorToolbar.toggle()
+                }
+
+                Divider()
+
                 Button("Command Palette...") {
                     NotificationCenter.default.post(name: .showCommandPalette, object: nil)
                 }
@@ -339,6 +361,12 @@ struct zMDApp: App {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
 
+                Button("Find and Replace...") {
+                    documentManager.startFindAndReplace()
+                }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+                .disabled(documentManager.openDocuments.isEmpty || documentManager.viewMode == .preview)
+
                 Button("Find Next") {
                     documentManager.nextMatch()
                 }
@@ -364,6 +392,59 @@ struct zMDApp: App {
         Settings {
             SettingsView()
                 .preferredColorScheme(settings.colorScheme)
+        }
+    }
+}
+
+// MARK: - Format Menu Commands
+
+struct FormatCommands: Commands {
+    var body: some Commands {
+        CommandMenu("Format") {
+            Button("Bold") {
+                NotificationCenter.default.post(name: .editorFormatBold, object: nil)
+            }
+            .keyboardShortcut("b", modifiers: .command)
+
+            Button("Italic") {
+                NotificationCenter.default.post(name: .editorFormatItalic, object: nil)
+            }
+            .keyboardShortcut("i", modifiers: .command)
+
+            Button("Strikethrough") {
+                NotificationCenter.default.post(name: .editorFormatStrikethrough, object: nil)
+            }
+            .keyboardShortcut("x", modifiers: [.command, .shift])
+
+            Button("Inline Code") {
+                NotificationCenter.default.post(name: .editorFormatInlineCode, object: nil)
+            }
+            .keyboardShortcut("k", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Insert Link") {
+                NotificationCenter.default.post(name: .editorInsertLink, object: nil)
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
+
+            Button("Insert Image") {
+                NotificationCenter.default.post(name: .editorInsertImage, object: nil)
+            }
+
+            Divider()
+
+            Button("Toggle Heading") {
+                NotificationCenter.default.post(name: .editorToggleHeading, object: nil)
+            }
+
+            Button("Code Block") {
+                NotificationCenter.default.post(name: .editorFormatCodeBlock, object: nil)
+            }
+
+            Button("Horizontal Rule") {
+                NotificationCenter.default.post(name: .editorInsertHR, object: nil)
+            }
         }
     }
 }

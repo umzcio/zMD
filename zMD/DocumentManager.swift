@@ -40,6 +40,12 @@ class DocumentManager: ObservableObject {
     @Published var searchMatches: [SearchMatch] = []
     @Published var renderedMatchCount: Int = 0
 
+    // Find & Replace state
+    @Published var replaceText: String = ""
+    @Published var isRegexSearch: Bool = false
+    @Published var isCaseSensitive: Bool = false
+    @Published var showReplace: Bool = false
+
     // File watching
     private var fileWatchers: [UUID: FileWatcher] = [:]
     @Published var ignoreAllFileChanges = false
@@ -78,6 +84,22 @@ class DocumentManager: ObservableObject {
         self.autoSaveEnabled = UserDefaults.standard.bool(forKey: "autoSaveEnabled")
         loadRecentFiles()
         loadScrollPositions()
+    }
+
+    private var untitledCounter = 0
+
+    func createNewFile() {
+        untitledCounter += 1
+        let name = untitledCounter == 1 ? "Untitled.md" : "Untitled \(untitledCounter).md"
+        // Use a temporary URL as placeholder — file doesn't exist on disk yet
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+
+        var document = MarkdownDocument(url: tempURL, content: "")
+        document.isUntitled = true
+        document.isDirty = true
+        openDocuments.append(document)
+        selectedDocumentId = document.id
+        viewMode = .source
     }
 
     func openFile() {
@@ -290,8 +312,8 @@ class DocumentManager: ObservableObject {
         // Pause file watcher during editing
         fileWatchers[documentId]?.pause()
 
-        // Schedule auto-save if enabled
-        if autoSaveEnabled {
+        // Schedule auto-save if enabled (skip for untitled files)
+        if autoSaveEnabled && !(openDocuments[index].isUntitled) {
             autoSaveTimer?.invalidate()
             autoSaveTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 self?.saveDocument(id: documentId)
@@ -302,6 +324,31 @@ class DocumentManager: ObservableObject {
     func saveDocument(id: UUID) {
         guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
         let document = openDocuments[index]
+
+        // Untitled documents need a save dialog first
+        if document.isUntitled {
+            let savePanel = NSSavePanel()
+            savePanel.allowedContentTypes = [UTType(filenameExtension: "md")].compactMap { $0 }
+            savePanel.nameFieldStringValue = document.url.lastPathComponent
+            savePanel.begin { [weak self] response in
+                guard response == .OK, let newURL = savePanel.url else { return }
+                guard let self = self,
+                      let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else { return }
+                do {
+                    try self.openDocuments[idx].content.write(to: newURL, atomically: true, encoding: .utf8)
+                    self.openDocuments[idx].url = newURL
+                    self.openDocuments[idx].isUntitled = false
+                    self.openDocuments[idx].isDirty = false
+                    self.openDocuments[idx].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    self.startWatchingFile(for: self.openDocuments[idx])
+                    self.addToRecentFiles(url: newURL)
+                    ToastManager.shared.show("File saved", style: .success)
+                } catch {
+                    self.alertManager.showError("Save Failed", message: error.localizedDescription)
+                }
+            }
+            return
+        }
 
         // Try using bookmark data for security-scoped access
         var accessGranted = false
@@ -522,6 +569,7 @@ struct MarkdownDocument: Identifiable {
     var url: URL
     var content: String
     var isDirty: Bool = false
+    var isUntitled: Bool = false
     var bookmarkData: Data?
     var directoryBookmarkData: Data?
     var detectedEncoding: String = "UTF-8"
@@ -583,6 +631,13 @@ extension DocumentManager {
         searchMatches = []
         currentMatchIndex = 0
         renderedMatchCount = 0
+        replaceText = ""
+        showReplace = false
+    }
+
+    func startFindAndReplace() {
+        isSearching = true
+        showReplace = true
     }
 
     func performSearch() {
@@ -596,24 +651,37 @@ extension DocumentManager {
 
         let content = document.content
         var matches: [SearchMatch] = []
-        var searchStartIndex = content.startIndex
-        var lineNumber = 1
-        var currentLineStart = content.startIndex
 
-        while searchStartIndex < content.endIndex {
-            if let range = content.range(of: searchText, options: .caseInsensitive, range: searchStartIndex..<content.endIndex) {
-                // Calculate line number
-                while currentLineStart < range.lowerBound {
-                    if content[currentLineStart] == "\n" {
-                        lineNumber += 1
-                    }
-                    currentLineStart = content.index(after: currentLineStart)
-                }
-
+        if isRegexSearch {
+            // Regex search
+            var options: NSRegularExpression.Options = []
+            if !isCaseSensitive { options.insert(.caseInsensitive) }
+            guard let regex = try? NSRegularExpression(pattern: searchText, options: options) else {
+                searchMatches = []
+                currentMatchIndex = 0
+                return
+            }
+            let nsContent = content as NSString
+            let results = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+            for result in results {
+                guard let range = Range(result.range, in: content) else { continue }
+                let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
                 matches.append(SearchMatch(range: range, lineNumber: lineNumber))
-                searchStartIndex = range.upperBound
-            } else {
-                break
+            }
+        } else {
+            // Plain text search
+            var searchOptions: String.CompareOptions = []
+            if !isCaseSensitive { searchOptions.insert(.caseInsensitive) }
+
+            var searchStartIndex = content.startIndex
+            while searchStartIndex < content.endIndex {
+                if let range = content.range(of: searchText, options: searchOptions, range: searchStartIndex..<content.endIndex) {
+                    let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
+                    matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+                    searchStartIndex = range.upperBound
+                } else {
+                    break
+                }
             }
         }
 
@@ -621,6 +689,35 @@ extension DocumentManager {
         if !matches.isEmpty && currentMatchIndex >= matches.count {
             currentMatchIndex = 0
         }
+    }
+
+    func replaceCurrentMatch() {
+        guard let selectedId = selectedDocumentId,
+              let index = openDocuments.firstIndex(where: { $0.id == selectedId }),
+              !searchMatches.isEmpty,
+              currentMatchIndex < searchMatches.count else { return }
+
+        let match = searchMatches[currentMatchIndex]
+        var content = openDocuments[index].content
+        content.replaceSubrange(match.range, with: replaceText)
+        updateContent(for: selectedId, newContent: content)
+        performSearch()
+    }
+
+    func replaceAllMatches() {
+        guard let selectedId = selectedDocumentId,
+              let index = openDocuments.firstIndex(where: { $0.id == selectedId }),
+              !searchMatches.isEmpty else { return }
+
+        var content = openDocuments[index].content
+        // Replace in reverse order to maintain valid ranges
+        for match in searchMatches.reversed() {
+            content.replaceSubrange(match.range, with: replaceText)
+        }
+        let count = searchMatches.count
+        updateContent(for: selectedId, newContent: content)
+        performSearch()
+        ToastManager.shared.show("Replaced \(count) occurrences", style: .success)
     }
 
     func nextMatch() {

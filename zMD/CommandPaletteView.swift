@@ -36,6 +36,9 @@ class CommandRegistry {
 
         return [
             // File
+            CommandAction(name: "New File", category: .file, shortcut: "\u{2318}N", icon: "doc.badge.plus", isEnabled: { true }) {
+                documentManager.createNewFile()
+            },
             CommandAction(name: "Open File", category: .file, shortcut: "\u{2318}O", icon: "doc", isEnabled: { true }) {
                 documentManager.openFile()
             },
@@ -96,9 +99,41 @@ class CommandRegistry {
                 SettingsManager.shared.resetZoom()
             },
 
-            // Edit
+            // Edit / Format
             CommandAction(name: "Find", category: .edit, shortcut: "\u{2318}F", icon: "magnifyingglass", isEnabled: hasDoc) {
                 documentManager.startSearch()
+            },
+            CommandAction(name: "Find and Replace", category: .edit, shortcut: "\u{2318}\u{2325}F", icon: "arrow.triangle.swap", isEnabled: { hasDoc() && documentManager.viewMode != .preview }) {
+                documentManager.startFindAndReplace()
+            },
+            CommandAction(name: "Toggle Bold", category: .edit, shortcut: "\u{2318}B", icon: "bold", isEnabled: { documentManager.viewMode != .preview }) {
+                NotificationCenter.default.post(name: .editorFormatBold, object: nil)
+            },
+            CommandAction(name: "Toggle Italic", category: .edit, shortcut: "\u{2318}I", icon: "italic", isEnabled: { documentManager.viewMode != .preview }) {
+                NotificationCenter.default.post(name: .editorFormatItalic, object: nil)
+            },
+            CommandAction(name: "Toggle Strikethrough", category: .edit, shortcut: "\u{2318}\u{21E7}X", icon: "strikethrough", isEnabled: { documentManager.viewMode != .preview }) {
+                NotificationCenter.default.post(name: .editorFormatStrikethrough, object: nil)
+            },
+            CommandAction(name: "Toggle Inline Code", category: .edit, shortcut: "\u{2318}\u{21E7}K", icon: "chevron.left.forwardslash.chevron.right", isEnabled: { documentManager.viewMode != .preview }) {
+                NotificationCenter.default.post(name: .editorFormatInlineCode, object: nil)
+            },
+            CommandAction(name: "Insert Link", category: .edit, shortcut: "\u{2318}\u{21E7}L", icon: "link", isEnabled: { documentManager.viewMode != .preview }) {
+                NotificationCenter.default.post(name: .editorInsertLink, object: nil)
+            },
+            CommandAction(name: "Insert Image", category: .edit, shortcut: nil, icon: "photo", isEnabled: { documentManager.viewMode != .preview }) {
+                NotificationCenter.default.post(name: .editorInsertImage, object: nil)
+            },
+
+            // View toggles
+            CommandAction(name: "Toggle Line Numbers", category: .view, shortcut: nil, icon: "list.number", isEnabled: { true }) {
+                SettingsManager.shared.showLineNumbers.toggle()
+            },
+            CommandAction(name: "Toggle Minimap", category: .view, shortcut: nil, icon: "sidebar.right", isEnabled: { true }) {
+                SettingsManager.shared.showMinimap.toggle()
+            },
+            CommandAction(name: "Toggle Editor Toolbar", category: .view, shortcut: nil, icon: "rectangle.topthird.inset.filled", isEnabled: { true }) {
+                SettingsManager.shared.showEditorToolbar.toggle()
             },
 
             // Export
