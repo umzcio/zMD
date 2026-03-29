@@ -142,7 +142,7 @@ class MarkdownParser {
                 && !trimmedLine.hasPrefix("|")
                 && !line.hasPrefix("> ")
                 && !isListLine(line)
-                && !line.hasPrefix("```")
+                && !trimmedLine.hasPrefix("```")
                 && !isHorizontalRule(line)
                 && !isHTMLLine(line)
                 && trimmedLine != "$$"
@@ -218,12 +218,13 @@ class MarkdownParser {
                 }
                 elements.append(.displayMath(latex: mathLines.joined(separator: "\n")))
             }
-            // Code block
-            else if line.hasPrefix("```") {
-                let language = line.count > 3 ? String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces) : nil
+            // Code block (supports indented fences)
+            else if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let language = trimmed.count > 3 ? String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces) : nil
                 var codeLines: [String] = []
                 i += 1
-                while i < lines.count && !lines[i].hasPrefix("```") {
+                while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                     codeLines.append(lines[i])
                     i += 1
                 }
