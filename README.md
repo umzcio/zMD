@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="zMD/Assets.xcassets/AppIcon.appiconset/256.png" alt="zMD" width="160" />
+  <img src="img/zMarkdown.png" alt="zMD" />
 </p>
 
 <p align="center">
