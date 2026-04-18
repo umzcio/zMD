@@ -80,15 +80,23 @@ class FileWatcher {
     private func handleFileChange() {
         guard !isPaused else { return }
 
+        // Capture event mask before anything else — the source may emit only one event per cycle.
+        let events = dispatchSource?.data ?? []
+        let inodeChanged = events.contains(.rename) || events.contains(.delete)
+
         if ignoreNextChange {
             ignoreNextChange = false
             lastModificationDate = getModificationDate()
+            if inodeChanged { restartIfFileExists() }
             return
         }
 
         // Check if the modification date actually changed
         let currentModDate = getModificationDate()
-        guard currentModDate != lastModificationDate else { return }
+        guard currentModDate != lastModificationDate else {
+            if inodeChanged { restartIfFileExists() }
+            return
+        }
 
         lastModificationDate = currentModDate
 
@@ -99,6 +107,18 @@ class FileWatcher {
         }
 
         delegate?.fileWatcher(self, fileDidChange: url)
+
+        // DispatchSourceFileSystemObject is bound to an inode, not a path. Editors that save via
+        // atomic-rename (vim, VSCode, TextMate) write to a temp file then rename-over the target;
+        // our original fd is now attached to an orphaned inode and would never see subsequent edits.
+        // Re-open the watch on the same URL so future writes to the new inode keep firing.
+        if inodeChanged { restartIfFileExists() }
+    }
+
+    private func restartIfFileExists() {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        stopWatching()
+        startWatching()
     }
 
     private func getModificationDate() -> Date? {

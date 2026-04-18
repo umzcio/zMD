@@ -4,9 +4,9 @@ struct OutlineView: View {
     let content: String
     @Binding var selectedHeadingId: String?
 
-    private var headings: [OutlineItem] {
-        OutlineItem.extractHeadings(from: content)
-    }
+    /// Cached outline so we don't re-parse the entire document on every SwiftUI body evaluation.
+    /// Rebuilt only when `content` actually changes, debounced by SwiftUI's natural update cadence.
+    @State private var headings: [OutlineItem] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -45,6 +45,17 @@ struct OutlineView: View {
         }
         .frame(width: 250)
         .background(.ultraThinMaterial)
+        .onAppear { rebuildOutline() }
+        .onChange(of: content) { _ in rebuildOutline() }
+    }
+
+    private func rebuildOutline() {
+        // Delegate to MarkdownParser so the outline uses the same stable slug IDs as the
+        // preview renderer's heading ranges — click targets stay accurate after edits above,
+        // and `#` lines inside fenced code blocks do not appear as phantom entries.
+        headings = MarkdownParser.shared.extractHeadings(content).map {
+            OutlineItem(id: $0.id, level: $0.level, text: $0.text)
+        }
     }
 }
 
@@ -52,33 +63,6 @@ struct OutlineItem: Identifiable {
     let id: String
     let level: Int
     let text: String
-
-    static func extractHeadings(from markdown: String) -> [OutlineItem] {
-        var items: [OutlineItem] = []
-        let lines = markdown.components(separatedBy: .newlines)
-
-        for (index, line) in lines.enumerated() {
-            if line.hasPrefix("#") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                var level = 0
-
-                for char in trimmed {
-                    if char == "#" {
-                        level += 1
-                    } else {
-                        break
-                    }
-                }
-
-                if level > 0 {
-                    let text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
-                    items.append(OutlineItem(id: "heading-\(index)", level: level, text: text))
-                }
-            }
-        }
-
-        return items
-    }
 }
 
 struct OutlineItemView: View {

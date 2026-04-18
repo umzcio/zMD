@@ -290,10 +290,9 @@ struct CommandPaletteOverlay: View {
         let cmd = filteredCommands[selectedIndex]
         guard cmd.isEnabled() else { return }
         isPresented = false
-        // Slight delay to allow dismiss animation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            cmd.action()
-        }
+        // Execute immediately — the 100ms dismiss-animation delay was fragile (the overlay is
+        // a SwiftUI conditional; NSSavePanels and other modal side-effects don't need the pause).
+        cmd.action()
     }
 }
 
@@ -422,6 +421,13 @@ struct CommandPaletteTextField: NSViewRepresentable {
             }
             if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
                 parent.onEscape()
+                return true
+            }
+            // Tab focus trap — keep keyboard focus in the palette search field instead of
+            // letting Tab move focus out to the underlying window chrome (where subsequent
+            // typing is lost while the palette is still visually on screen).
+            if commandSelector == #selector(NSResponder.insertTab(_:))
+                || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
                 return true
             }
             return false

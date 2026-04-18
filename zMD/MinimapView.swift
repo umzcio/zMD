@@ -27,6 +27,10 @@ class MinimapView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        debounceTimer?.invalidate()
+    }
+
     func invalidateContent() {
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in

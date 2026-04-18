@@ -1,60 +1,26 @@
 import SwiftUI
 import AppKit
 
-/// Centralized alert management for zMD 2.0
-/// Replaces silent failures with user-visible error messages
-class AlertManager: ObservableObject {
+/// Centralized alert management for zMD.
+/// Wraps NSAlert for app-modal confirmation and error dialogs.
+/// Previously also exposed a `@Published currentAlert` + `AlertViewModifier` / `withAlertManager()`
+/// pipeline for SwiftUI-native alerts that no code actually consumed — that surface was removed
+/// during the audit cleanup. All user-facing alerts now flow through `showNSAlert`.
+class AlertManager {
     static let shared = AlertManager()
 
-    @Published var currentAlert: AlertInfo?
-    @Published var isShowingAlert = false
-
     private init() {}
-
-    struct AlertInfo: Identifiable {
-        let id = UUID()
-        let title: String
-        let message: String
-        let style: AlertStyle
-
-        enum AlertStyle {
-            case error
-            case warning
-            case info
-            case success
-        }
-    }
 
     // MARK: - Show Alerts
 
     func showError(_ title: String, message: String) {
         DispatchQueue.main.async {
-            self.currentAlert = AlertInfo(title: title, message: message, style: .error)
-            self.isShowingAlert = true
             self.showNSAlert(title: title, message: message, style: .critical)
-        }
-    }
-
-    func showWarning(_ title: String, message: String) {
-        DispatchQueue.main.async {
-            self.currentAlert = AlertInfo(title: title, message: message, style: .warning)
-            self.isShowingAlert = true
-            self.showNSAlert(title: title, message: message, style: .warning)
         }
     }
 
     func showInfo(_ title: String, message: String) {
         DispatchQueue.main.async {
-            self.currentAlert = AlertInfo(title: title, message: message, style: .info)
-            self.isShowingAlert = true
-            self.showNSAlert(title: title, message: message, style: .informational)
-        }
-    }
-
-    func showSuccess(_ title: String, message: String) {
-        DispatchQueue.main.async {
-            self.currentAlert = AlertInfo(title: title, message: message, style: .success)
-            self.isShowingAlert = true
             self.showNSAlert(title: title, message: message, style: .informational)
         }
     }
@@ -155,29 +121,4 @@ class AlertManager: ObservableObject {
     }
 }
 
-// MARK: - SwiftUI View Modifier for Alerts
-
-struct AlertViewModifier: ViewModifier {
-    @ObservedObject var alertManager = AlertManager.shared
-
-    func body(content: Content) -> some View {
-        content
-            .alert(
-                alertManager.currentAlert?.title ?? "Error",
-                isPresented: $alertManager.isShowingAlert,
-                presenting: alertManager.currentAlert
-            ) { _ in
-                Button("OK") {
-                    alertManager.isShowingAlert = false
-                }
-            } message: { alert in
-                Text(alert.message)
-            }
-    }
-}
-
-extension View {
-    func withAlertManager() -> some View {
-        modifier(AlertViewModifier())
-    }
-}
+// (Removed: AlertViewModifier / withAlertManager — never referenced.)

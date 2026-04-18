@@ -20,8 +20,8 @@ struct StatusBarView: View {
                 // Right: cursor position, zoom, view mode, encoding
                 HStack(spacing: 8) {
                     if documentManager.viewMode != .preview {
-                        let cursorInfo = cursorPosition(for: document.content)
-                        Text("Ln \(cursorInfo.line), Col \(cursorInfo.column)")
+                        // Real cursor position published by SourceEditorView.Coordinator.
+                        Text("Ln \(documentManager.currentCursorLine), Col \(documentManager.currentCursorColumn)")
                             .font(.system(size: 11))
                             .foregroundColor(Color(NSColor.tertiaryLabelColor))
                     }
@@ -65,14 +65,6 @@ struct StatusBarView: View {
             .frame(height: 24)
             .background(.ultraThinMaterial)
         }
-    }
-
-    private func cursorPosition(for content: String) -> (line: Int, column: Int) {
-        // Approximate: count lines in content up to a notional cursor position
-        // Since we don't have direct access to NSTextView selection from SwiftUI,
-        // this shows total line count and defaults
-        let lines = content.components(separatedBy: "\n")
-        return (lines.count, 1)
     }
 
     private func documentStats(for content: String) -> (words: Int, characters: Int, readingTime: Int) {

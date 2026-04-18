@@ -332,10 +332,11 @@ struct zMDApp: App {
                 .keyboardShortcut("w", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
 
+                // Refresh Tab is reachable via this menu for discoverability, but the ⌘R
+                // keyboard shortcut lives solely on View → Refresh to avoid duplicate binding.
                 Button("Refresh Tab") {
                     documentManager.refreshCurrentDocument()
                 }
-                .keyboardShortcut("r", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
 
                 Divider()

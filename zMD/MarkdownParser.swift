@@ -28,25 +28,33 @@ class MarkdownParser {
         case blockquote(String)
         case htmlBlock(String)
 
+        /// Content-addressed identity used as the element cache key.
+        /// MUST be collision-free across distinct content: MarkdownTextView caches NSAttributedString
+        /// by this key, so a collision would render one element's visuals in place of another's.
+        /// `String.hashValue` is 64-bit and randomized per-process — it was replaced with raw content
+        /// to eliminate birthday-collision risk on large documents.
         var id: String {
+            let unit = "\u{1F}" // separator between composite fields
             switch self {
-            case .heading1(let text): return "h1-\(text.hashValue)"
-            case .heading2(let text): return "h2-\(text.hashValue)"
-            case .heading3(let text): return "h3-\(text.hashValue)"
-            case .heading4(let text): return "h4-\(text.hashValue)"
-            case .heading5(let text): return "h5-\(text.hashValue)"
-            case .heading6(let text): return "h6-\(text.hashValue)"
-            case .paragraph(let text): return "p-\(text.hashValue)"
-            case .frontmatter(let lines): return "fm-\(lines.joined().hashValue)"
-            case .list(let items): return "list-\(items.map { "\($0.level)\($0.text)\($0.isOrdered)" }.joined().hashValue)"
-            case .codeBlock(let code, _): return "code-\(code.hashValue)"
-            case .mermaidBlock(let code): return "mermaid-\(code.hashValue)"
-            case .displayMath(let latex): return "math-\(latex.hashValue)"
-            case .table(let rows): return "table-\(rows.flatMap { $0 }.joined().hashValue)"
-            case .image(let alt, let path): return "img-\(alt.hashValue)-\(path.hashValue)"
+            case .heading1(let text): return "h1\(unit)\(text)"
+            case .heading2(let text): return "h2\(unit)\(text)"
+            case .heading3(let text): return "h3\(unit)\(text)"
+            case .heading4(let text): return "h4\(unit)\(text)"
+            case .heading5(let text): return "h5\(unit)\(text)"
+            case .heading6(let text): return "h6\(unit)\(text)"
+            case .paragraph(let text): return "p\(unit)\(text)"
+            case .frontmatter(let lines): return "fm\(unit)\(lines.joined(separator: "\n"))"
+            case .list(let items):
+                let joined = items.map { "\($0.level)\(unit)\($0.isOrdered ? "1" : "0")\(unit)\($0.text)" }.joined(separator: "\u{1E}")
+                return "list\(unit)\(joined)"
+            case .codeBlock(let code, let lang): return "code\(unit)\(lang ?? "")\(unit)\(code)"
+            case .mermaidBlock(let code): return "mermaid\(unit)\(code)"
+            case .displayMath(let latex): return "math\(unit)\(latex)"
+            case .table(let rows): return "table\(unit)\(rows.map { $0.joined(separator: "\u{1D}") }.joined(separator: "\u{1E}"))"
+            case .image(let alt, let path): return "img\(unit)\(alt)\(unit)\(path)"
             case .horizontalRule: return "hr"
-            case .blockquote(let text): return "quote-\(text.hashValue)"
-            case .htmlBlock(let html): return "html-\(html.hashValue)"
+            case .blockquote(let text): return "quote\(unit)\(text)"
+            case .htmlBlock(let html): return "html\(unit)\(html)"
             }
         }
 
@@ -159,19 +167,20 @@ class MarkdownParser {
                 continue
             }
 
-            // Headings
-            if line.hasPrefix("###### ") {
-                elements.append(.heading6(String(line.dropFirst(7))))
-            } else if line.hasPrefix("##### ") {
-                elements.append(.heading5(String(line.dropFirst(6))))
-            } else if line.hasPrefix("#### ") {
-                elements.append(.heading4(String(line.dropFirst(5))))
-            } else if line.hasPrefix("### ") {
-                elements.append(.heading3(String(line.dropFirst(4))))
-            } else if line.hasPrefix("## ") {
-                elements.append(.heading2(String(line.dropFirst(3))))
-            } else if line.hasPrefix("# ") {
-                elements.append(.heading1(String(line.dropFirst(2))))
+            // Headings — CommonMark allows up to 3 leading spaces before `#`.
+            // Use trimmedLine so indented headings like "  ## Foo" parse correctly.
+            if trimmedLine.hasPrefix("###### ") {
+                elements.append(.heading6(String(trimmedLine.dropFirst(7))))
+            } else if trimmedLine.hasPrefix("##### ") {
+                elements.append(.heading5(String(trimmedLine.dropFirst(6))))
+            } else if trimmedLine.hasPrefix("#### ") {
+                elements.append(.heading4(String(trimmedLine.dropFirst(5))))
+            } else if trimmedLine.hasPrefix("### ") {
+                elements.append(.heading3(String(trimmedLine.dropFirst(4))))
+            } else if trimmedLine.hasPrefix("## ") {
+                elements.append(.heading2(String(trimmedLine.dropFirst(3))))
+            } else if trimmedLine.hasPrefix("# ") {
+                elements.append(.heading1(String(trimmedLine.dropFirst(2))))
             }
             // Table (supports leading whitespace)
             else if trimmedLine.hasPrefix("|") && trimmedLine.hasSuffix("|") {
@@ -186,10 +195,14 @@ class MarkdownParser {
                         continue
                     }
 
-                    let cells = currentLine
-                        .split(separator: "|")
+                    // Split by pipe while preserving interior empty cells (e.g. "| a |  | c |" has 3 columns).
+                    // `split(separator:omittingEmptySubsequences:)` with false keeps them; then we
+                    // strip only the leading/trailing empties that come from the outer pipes.
+                    var cells = currentLine
+                        .split(separator: "|", omittingEmptySubsequences: false)
                         .map { $0.trimmingCharacters(in: .whitespaces) }
-                        .filter { !$0.isEmpty }
+                    if currentLine.hasPrefix("|"), cells.first == "" { cells.removeFirst() }
+                    if currentLine.hasSuffix("|"), cells.last == "" { cells.removeLast() }
 
                     if !cells.isEmpty {
                         tableRows.append(cells)
@@ -218,20 +231,29 @@ class MarkdownParser {
                 }
                 elements.append(.displayMath(latex: mathLines.joined(separator: "\n")))
             }
-            // Code block (supports indented fences)
-            else if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                let language = trimmed.count > 3 ? String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces) : nil
+            // Code block (supports indented fences). CommonMark requires the closing fence to have
+            // at least as many backticks as the opening fence — so ````swift blocks aren't closed
+            // prematurely by a three-backtick line embedded in the code.
+            else if trimmedLine.hasPrefix("```") {
+                let trimmed = trimmedLine
+                let openLen = trimmed.prefix { $0 == "`" }.count
+                let language = trimmed.count > openLen ? String(trimmed.dropFirst(openLen)).trimmingCharacters(in: .whitespaces) : ""
                 var codeLines: [String] = []
                 i += 1
-                while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                while i < lines.count {
+                    let candidate = lines[i].trimmingCharacters(in: .whitespaces)
+                    let closeLen = candidate.prefix { $0 == "`" }.count
+                    if closeLen >= openLen && candidate.allSatisfy({ $0 == "`" }) {
+                        break
+                    }
                     codeLines.append(lines[i])
                     i += 1
                 }
-                if language?.lowercased() == "mermaid" {
+                let normalizedLang = language.isEmpty ? nil : language
+                if normalizedLang?.lowercased() == "mermaid" {
                     elements.append(.mermaidBlock(code: codeLines.joined(separator: "\n")))
                 } else {
-                    elements.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: language.flatMap { $0.isEmpty ? nil : $0 }))
+                    elements.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: normalizedLang))
                 }
             }
             // Blockquote
@@ -265,23 +287,24 @@ class MarkdownParser {
                     elements.append(.image(alt: String(alt), path: String(path)))
                 }
             }
-            // HTML block
+            // HTML block — close as soon as tags balance, including mid-line self-closing single-liners.
+            // Previously the balance check only ran on blank lines, so a balanced one-line tag like
+            // `<div>x</div>` would swallow every paragraph up to the next blank line.
             else if isHTMLLine(line) {
                 var htmlLines: [String] = [line]
-                i += 1
-                while i < lines.count {
-                    let nextLine = lines[i]
-                    if nextLine.trimmingCharacters(in: .whitespaces).isEmpty {
-                        let joined = htmlLines.joined(separator: "\n")
-                        if isHTMLBalanced(joined) { break }
-                        htmlLines.append(nextLine)
-                    } else {
-                        htmlLines.append(nextLine)
-                    }
+                if isHTMLBalanced(line) {
+                    elements.append(.htmlBlock(line))
+                } else {
                     i += 1
+                    while i < lines.count {
+                        htmlLines.append(lines[i])
+                        if isHTMLBalanced(htmlLines.joined(separator: "\n")) {
+                            break
+                        }
+                        i += 1
+                    }
+                    elements.append(.htmlBlock(htmlLines.joined(separator: "\n")))
                 }
-                elements.append(.htmlBlock(htmlLines.joined(separator: "\n")))
-                i -= 1
             }
             // Regular paragraph (accumulate consecutive lines)
             else if !line.isEmpty {
@@ -421,14 +444,14 @@ class MarkdownParser {
         """
 
         if hasMermaid {
-            html += "\n    <script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>"
+            html += "\n    <script src=\"\(CDN.mermaidJS)\"></script>"
             html += "\n    <script>mermaid.initialize({startOnLoad: true});</script>"
         }
 
         if hasMath {
-            html += "\n    <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css\">"
-            html += "\n    <script src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js\"></script>"
-            html += "\n    <script src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js\"></script>"
+            html += "\n    <link rel=\"stylesheet\" href=\"\(CDN.katexCSS)\">"
+            html += "\n    <script src=\"\(CDN.katexJS)\"></script>"
+            html += "\n    <script src=\"\(CDN.katexAutoRenderJS)\"></script>"
             html += "\n    <script>document.addEventListener('DOMContentLoaded', function() { renderMathInElement(document.body, { delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}] }); });</script>"
         }
 
@@ -719,29 +742,77 @@ class MarkdownParser {
 
     // MARK: - Outline Extraction
 
-    /// Extract headings for outline view
+    /// Convert heading text to a GitHub-style slug for stable IDs that survive edits above the heading.
+    /// - lowercased, non-alphanumerics → "-", collapsed dashes, trimmed
+    static func slugify(_ text: String) -> String {
+        let lowered = text.lowercased()
+        var slug = ""
+        var lastWasDash = false
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                slug.unicodeScalars.append(scalar)
+                lastWasDash = false
+            } else if !lastWasDash && !slug.isEmpty {
+                slug.append("-")
+                lastWasDash = true
+            }
+        }
+        if slug.hasSuffix("-") { slug.removeLast() }
+        return slug.isEmpty ? "section" : slug
+    }
+
+    /// Extract headings for outline view with stable slug IDs.
+    /// Skips lines inside fenced code blocks and YAML frontmatter so shell comments like `# echo`
+    /// inside ```bash``` blocks don't appear in the outline. Duplicate slugs get a -2, -3 suffix
+    /// matching GitHub's anchor-generation convention.
     func extractHeadings(_ markdown: String) -> [(id: String, level: Int, text: String, lineIndex: Int)] {
         var headings: [(id: String, level: Int, text: String, lineIndex: Int)] = []
         let lines = markdown.components(separatedBy: .newlines)
+        var slugCounts: [String: Int] = [:]
+        var inCodeFence = false
+        var i = 0
 
-        for (index, line) in lines.enumerated() {
-            if line.hasPrefix("#") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // Skip YAML frontmatter: if the file opens with `---` and has a matching closer, jump past it.
+        if lines.first == "---" {
+            var j = 1
+            while j < lines.count && lines[j] != "---" { j += 1 }
+            if j < lines.count && lines[j] == "---" {
+                i = j + 1
+            }
+        }
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                inCodeFence.toggle()
+                i += 1
+                continue
+            }
+            if inCodeFence {
+                i += 1
+                continue
+            }
+
+            if trimmed.hasPrefix("#") {
                 var level = 0
-
                 for char in trimmed {
-                    if char == "#" {
-                        level += 1
-                    } else {
-                        break
+                    if char == "#" { level += 1 } else { break }
+                }
+                if level > 0 && level <= 6 {
+                    let headingBody = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
+                    // Heading must have whitespace between # chars and body (CommonMark requirement).
+                    if !headingBody.isEmpty && (trimmed.dropFirst(level).first == " " || trimmed.count == level) {
+                        let baseSlug = Self.slugify(headingBody)
+                        let count = (slugCounts[baseSlug] ?? 0) + 1
+                        slugCounts[baseSlug] = count
+                        let slug = count == 1 ? baseSlug : "\(baseSlug)-\(count)"
+                        headings.append((id: slug, level: level, text: headingBody, lineIndex: i))
                     }
                 }
-
-                if level > 0 && level <= 6 {
-                    let text = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
-                    headings.append((id: "heading-\(index)", level: level, text: text, lineIndex: index))
-                }
             }
+            i += 1
         }
 
         return headings

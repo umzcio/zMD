@@ -11,10 +11,18 @@ struct HelpView: View {
                 Text("zMD Help")
                     .font(.system(size: 20, weight: .semibold))
                 Spacer()
-                Button("") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .opacity(0)
-                    .frame(width: 0, height: 0)
+                // Visible, labeled close button. Previously this was an empty-title invisible
+                // button that worked for Escape but announced nothing to screen readers.
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityLabel("Close Help")
             }
             .padding()
 

@@ -14,7 +14,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-stable-c8a96e?style=flat-square" alt="Stable" />
-  <img src="https://img.shields.io/badge/version-2.2-c8a96e?style=flat-square" alt="v2.2" />
+  <img src="https://img.shields.io/badge/version-2.5-c8a96e?style=flat-square" alt="v2.5" />
   <img src="https://img.shields.io/badge/platform-macOS_13%2B-4a9eff?style=flat-square" alt="macOS 13+" />
   <img src="https://img.shields.io/badge/stack-SwiftUI%20%7C%20AppKit%20%7C%20NSTextView-34d399?style=flat-square" alt="Stack" />
 </p>
@@ -25,7 +25,7 @@
 
 zMD started as a frustration: every "lightweight" markdown editor on macOS is a 200 MB Electron bundle with a subscription page baked in. I wanted the Typora experience (live-rendered, typography-first, no visible syntax noise) without the web tech tax — something that launches instantly, respects the system, and doesn't phone home.
 
-So this is a native SwiftUI app, under 5 MB, sandboxed, built around Apple's `NSTextView` for rendering and editing. No Electron, no Tauri, no web views (except for Mermaid and LaTeX, which need a JS runtime). Typora-inspired formatting. Word-class export. Atom-style autocomplete. Free and open.
+So this is a native SwiftUI app, under 5 MB, signed and distributed as a direct `.dmg` (not via the Mac App Store, so no sandbox), built around Apple's `NSTextView` for rendering and editing. No Electron, no Tauri, no web views (except for Mermaid and LaTeX, which need a JS runtime). Typora-inspired formatting. Word-class export. Atom-style autocomplete. Free and open.
 
 If you read markdown, write markdown, or hand markdown to other humans as PDFs and Word docs, this is for you.
 
@@ -118,7 +118,7 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 | **Diagrams / Math** | Headless `WKWebView` with Mermaid + KaTeX CDN scripts |
 | **File watching** | `DispatchSourceFileSystemObject` + `FSEventStream` for directories |
 | **Persistence** | `UserDefaults` + security-scoped bookmark data |
-| **Distribution** | Signed `.app` inside a drag-to-Applications `.dmg` |
+| **Distribution** | Signed `.app` inside a drag-to-Applications `.dmg` (direct download, not Mac App Store, no sandbox) |
 | **Deployment target** | macOS 13.0+ |
 
 ---

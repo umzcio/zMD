@@ -88,6 +88,17 @@ class EditorTextView: NSTextView {
         NotificationCenter.default.removeObserver(self)
     }
 
+    // MARK: - First Responder
+
+    /// Dismiss the autocomplete panel whenever focus leaves the editor (e.g., user clicks into
+    /// another view or window deactivates). Previously the panel floated in place anchored to a
+    /// stale screen point until the user clicked inside the editor again.
+    override func resignFirstResponder() -> Bool {
+        autocomplete.dismiss()
+        htmlPrefixStart = nil
+        return super.resignFirstResponder()
+    }
+
     // MARK: - Notification Handling
 
     private func registerForNotifications() {
@@ -329,8 +340,13 @@ class EditorTextView: NSTextView {
             if let regex = try? NSRegularExpression(pattern: pattern),
                regex.firstMatch(in: trimmedLine, range: NSRange(location: 0, length: (trimmedLine as NSString).length)) != nil {
                 if let cont = continuation(trimmedLine) {
+                    // Wrap the newline + continuation prefix as a single undo step so that Cmd+Z
+                    // reverts both together instead of leaving a stray bullet behind.
+                    undoManager?.beginUndoGrouping()
+                    undoManager?.setActionName("Continue List")
                     super.insertNewline(sender)
                     insertText(indent + cont, replacementRange: selectedRange())
+                    undoManager?.endUndoGrouping()
                     return
                 } else {
                     // Empty list item — delete it and just insert newline
@@ -344,10 +360,14 @@ class EditorTextView: NSTextView {
             }
         }
 
-        // Default: auto-indent
-        super.insertNewline(sender)
+        // Default: auto-indent (also wrapped so newline + indent are one undo step)
         if !indent.isEmpty {
+            undoManager?.beginUndoGrouping()
+            super.insertNewline(sender)
             insertText(indent, replacementRange: selectedRange())
+            undoManager?.endUndoGrouping()
+        } else {
+            super.insertNewline(sender)
         }
     }
 
@@ -405,10 +425,17 @@ class EditorTextView: NSTextView {
                 return
             }
 
-            // Insert pair and place cursor between
+            // Insert pair and place cursor between. Route through shouldChangeText/replaceCharacters
+            // /didChangeText so the delegate textDidChange fires (previously `super.insertText` here
+            // bypassed our own textDidChange observers, which meant autocomplete trigger and gutter
+            // redraw silently skipped on auto-closed pairs).
             let pair = char + closing
-            super.insertText(pair, replacementRange: replacementRange)
-            setSelectedRange(NSRange(location: range.location + 1, length: 0))
+            let insertRange = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+            if shouldChangeText(in: insertRange, replacementString: pair) {
+                replaceCharacters(in: insertRange, with: pair)
+                setSelectedRange(NSRange(location: insertRange.location + 1, length: 0))
+                didChangeText()
+            }
             return
         }
 
@@ -782,9 +809,11 @@ class EditorTextView: NSTextView {
         let lineRange = text.lineRange(for: range)
         let lines = text.substring(with: lineRange)
 
-        var removedBeforeCursor = 0
-        var totalRemoved = 0
-        var cursorLineProcessed = false
+        // Track removal per line. Previously `cursorLineProcessed` flipped on the first line of
+        // the selection regardless of which line the cursor actually sat on — so a multi-line
+        // selection with the caret on a later line attributed the wrong removal to
+        // `removedBeforeCursor` and drifted the restored selection.
+        var perLineRemoved: [Int] = []
 
         let outdented = lines.components(separatedBy: "\n").map { line -> String in
             var removed = 0
@@ -801,18 +830,24 @@ class EditorTextView: NSTextView {
                     break
                 }
             }
-            if !cursorLineProcessed {
-                removedBeforeCursor = removed
-                cursorLineProcessed = true
-            }
-            totalRemoved += removed
+            perLineRemoved.append(removed)
             return result
         }.joined(separator: "\n")
 
+        // Determine which line the cursor is on relative to `lineRange` by counting newlines
+        // between `lineRange.location` and `range.location`.
+        let prefixLen = range.location - lineRange.location
+        let cursorLineIdx = (text.substring(with: NSRange(location: lineRange.location, length: prefixLen))
+            .components(separatedBy: "\n").count) - 1
+
+        let removedBeforeCursor = perLineRemoved.prefix(cursorLineIdx + 1).last ?? 0
+        let removedBeforeStart = perLineRemoved.prefix(cursorLineIdx).reduce(0, +)
+        let totalRemoved = perLineRemoved.reduce(0, +)
+
         if shouldChangeText(in: lineRange, replacementString: outdented) {
             replaceCharacters(in: lineRange, with: outdented)
-            let newStart = max(lineRange.location, range.location - removedBeforeCursor)
-            let newLength = max(0, range.length - (totalRemoved - removedBeforeCursor))
+            let newStart = max(lineRange.location, range.location - removedBeforeStart - removedBeforeCursor)
+            let newLength = max(0, range.length - (totalRemoved - removedBeforeStart - removedBeforeCursor))
             setSelectedRange(NSRange(location: newStart, length: newLength))
             didChangeText()
         }
@@ -853,50 +888,89 @@ class EditorTextView: NSTextView {
     private func insertTextAtAllCursors(_ text: String) {
         guard let textStorage = textStorage else { return }
 
-        // Collect all ranges (primary + additional), sort in reverse order
-        var allRanges = multiCursorController.additionalCursors.map { $0.range }
-        allRanges.append(selectedRange())
-        allRanges.sort { $0.location > $1.location }
+        // Collect ranges with a marker for which one is the primary. Sort descending by location so
+        // each edit happens at a position the earlier edits did not shift.
+        let primary = selectedRange()
+        var allRanges: [(range: NSRange, isPrimary: Bool)] = multiCursorController.additionalCursors.map { ($0.range, false) }
+        allRanges.append((primary, true))
+        allRanges.sort { $0.range.location > $1.range.location }
+
+        let insertedLen = (text as NSString).length
+        var mapping: [(original: NSRange, newLocation: Int)] = []
+        var newPrimaryLocation = primary.location
 
         textStorage.beginEditing()
+        undoManager?.beginUndoGrouping()
+        undoManager?.setActionName("Multi-Cursor Insert")
 
-        for range in allRanges {
-            if shouldChangeText(in: range, replacementString: text) {
-                replaceCharacters(in: range, with: text)
+        // Because we iterate descending, each edit's own new location depends only on its range's
+        // location and the insertedLen (not on later edits that sit at higher positions).
+        for entry in allRanges {
+            if shouldChangeText(in: entry.range, replacementString: text) {
+                replaceCharacters(in: entry.range, with: text)
+                let newLoc = entry.range.location + insertedLen
+                if entry.isPrimary {
+                    newPrimaryLocation = newLoc
+                } else {
+                    mapping.append((original: entry.range, newLocation: newLoc))
+                }
             }
         }
 
+        undoManager?.endUndoGrouping()
         textStorage.endEditing()
 
-        // Adjust cursor positions
-        multiCursorController.adjustAfterInsert(insertedLength: (text as NSString).length, deletedLength: allRanges.first?.length ?? 0)
+        multiCursorController.updatePositions(mapping)
+        setSelectedRange(NSRange(location: newPrimaryLocation, length: 0))
         didChangeText()
     }
 
     private func deleteAtAllCursors() {
         guard let textStorage = textStorage else { return }
 
-        var allRanges = multiCursorController.additionalCursors.map { $0.range }
-        allRanges.append(selectedRange())
-        allRanges.sort { $0.location > $1.location }
+        let primary = selectedRange()
+        var allRanges: [(range: NSRange, isPrimary: Bool)] = multiCursorController.additionalCursors.map { ($0.range, false) }
+        allRanges.append((primary, true))
+        allRanges.sort { $0.range.location > $1.range.location }
+
+        var mapping: [(original: NSRange, newLocation: Int)] = []
+        var newPrimaryLocation = primary.location
 
         textStorage.beginEditing()
+        undoManager?.beginUndoGrouping()
+        undoManager?.setActionName("Multi-Cursor Delete")
 
-        for range in allRanges {
-            if range.length > 0 {
-                if shouldChangeText(in: range, replacementString: "") {
-                    replaceCharacters(in: range, with: "")
+        for entry in allRanges {
+            var deleteRange: NSRange
+            if entry.range.length > 0 {
+                deleteRange = entry.range
+            } else if entry.range.location > 0 {
+                deleteRange = NSRange(location: entry.range.location - 1, length: 1)
+            } else {
+                // Nothing to delete at position 0
+                if entry.isPrimary {
+                    newPrimaryLocation = 0
+                } else {
+                    mapping.append((original: entry.range, newLocation: 0))
                 }
-            } else if range.location > 0 {
-                let deleteRange = NSRange(location: range.location - 1, length: 1)
-                if shouldChangeText(in: deleteRange, replacementString: "") {
-                    replaceCharacters(in: deleteRange, with: "")
+                continue
+            }
+            if shouldChangeText(in: deleteRange, replacementString: "") {
+                replaceCharacters(in: deleteRange, with: "")
+                let newLoc = deleteRange.location
+                if entry.isPrimary {
+                    newPrimaryLocation = newLoc
+                } else {
+                    mapping.append((original: entry.range, newLocation: newLoc))
                 }
             }
         }
 
+        undoManager?.endUndoGrouping()
         textStorage.endEditing()
-        multiCursorController.adjustAfterDelete()
+
+        multiCursorController.updatePositions(mapping)
+        setSelectedRange(NSRange(location: newPrimaryLocation, length: 0))
         didChangeText()
     }
 
@@ -904,39 +978,49 @@ class EditorTextView: NSTextView {
         let startPoint = convert(event.locationInWindow, from: nil)
         let startIndex = characterIndexForInsertion(at: startPoint)
 
-        // Track mouse drag
         var lastIndex = startIndex
-        while true {
-            guard let nextEvent = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { break }
-
-            let currentPoint = convert(nextEvent.locationInWindow, from: nil)
-            let currentIndex = characterIndexForInsertion(at: currentPoint)
+        // Use NSWindow.trackEvents — runs in the standard event-tracking run-loop mode, times
+        // out if events stop arriving, and cannot hang if the user releases outside the window.
+        // The previous `while true { nextEvent(matching:) }` could spin until an unrelated event
+        // arrived when the user released the mouse outside.
+        window?.trackEvents(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            timeout: Date.distantFuture.timeIntervalSinceNow,
+            mode: .eventTracking
+        ) { [weak self] nextEvent, stop in
+            guard let self = self, let nextEvent = nextEvent else {
+                stop.pointee = true
+                return
+            }
+            let currentPoint = self.convert(nextEvent.locationInWindow, from: nil)
+            let currentIndex = self.characterIndexForInsertion(at: currentPoint)
 
             if currentIndex != lastIndex {
                 lastIndex = currentIndex
-                // Build column selection across lines
-                multiCursorController.clearAll()
+                self.multiCursorController.clearAll()
 
-                guard let layoutManager = layoutManager, let textContainer = textContainer else { break }
+                if let layoutManager = self.layoutManager, let textContainer = self.textContainer {
+                    let startRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: startIndex, length: 0), in: textContainer)
+                    let endRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: currentIndex, length: 0), in: textContainer)
 
-                let startRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: startIndex, length: 0), in: textContainer)
-                let endRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: currentIndex, length: 0), in: textContainer)
+                    let minY = min(startRect.minY, endRect.minY)
+                    let maxY = max(startRect.maxY, endRect.maxY)
+                    let columnX = startRect.minX
 
-                let minY = min(startRect.minY, endRect.minY)
-                let maxY = max(startRect.maxY, endRect.maxY)
-                let columnX = startRect.minX
-
-                // Add cursor on each line within the vertical range
-                var y = minY
-                while y <= maxY {
-                    let point = NSPoint(x: columnX + textContainerInset.width, y: y + textContainerInset.height)
-                    let idx = characterIndexForInsertion(at: point)
-                    multiCursorController.addCursor(at: NSRange(location: idx, length: 0))
-                    y += layoutManager.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: 14))
+                    var y = minY
+                    let lineHeight = layoutManager.defaultLineHeight(for: self.font ?? NSFont.systemFont(ofSize: 14))
+                    while y <= maxY {
+                        let point = NSPoint(x: columnX + self.textContainerInset.width, y: y + self.textContainerInset.height)
+                        let idx = self.characterIndexForInsertion(at: point)
+                        self.multiCursorController.addCursor(at: NSRange(location: idx, length: 0))
+                        y += lineHeight
+                    }
                 }
             }
 
-            if nextEvent.type == .leftMouseUp { break }
+            if nextEvent.type == .leftMouseUp {
+                stop.pointee = true
+            }
         }
 
         setNeedsDisplay(bounds)

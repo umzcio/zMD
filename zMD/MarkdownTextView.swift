@@ -17,8 +17,13 @@ struct MarkdownTextView: NSViewRepresentable {
     let onMatchCountChanged: ((Int) -> Void)?
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
+    /// Whether the preview matcher should interpret `searchText` as a regex.
+    /// Threaded through from DocumentManager so preview highlights match the find-bar counter —
+    /// previously the preview hardcoded case-insensitive literal matching and diverged.
+    let isRegexSearch: Bool
+    let isCaseSensitive: Bool
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
@@ -33,6 +38,8 @@ struct MarkdownTextView: NSViewRepresentable {
         self.onMatchCountChanged = onMatchCountChanged
         self.onScrollPercentChanged = onScrollPercentChanged
         self.scrollToPercent = scrollToPercent
+        self.isRegexSearch = isRegexSearch
+        self.isCaseSensitive = isCaseSensitive
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -89,8 +96,14 @@ struct MarkdownTextView: NSViewRepresentable {
         // Check if content changed
         let contentChanged = context.coordinator.lastContent != content
         let searchChanged = context.coordinator.lastSearchText != searchText
+            || context.coordinator.lastIsRegex != isRegexSearch
+            || context.coordinator.lastIsCaseSensitive != isCaseSensitive
         let matchIndexChanged = context.coordinator.lastMatchIndex != currentMatchIndex
         let zoomChanged = context.coordinator.lastZoomLevel != zoomLevel
+
+        // Keep the Coordinator's mode flags in sync so a future tick can detect the NEXT toggle.
+        context.coordinator.lastIsRegex = isRegexSearch
+        context.coordinator.lastIsCaseSensitive = isCaseSensitive
 
         // Full rebuild when content or zoom changes
         if contentChanged || zoomChanged {
@@ -103,7 +116,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
             // Find and store all match ranges in the rendered text
             if !searchText.isEmpty {
-                context.coordinator.findMatchRanges(for: searchText, in: textView)
+                context.coordinator.findMatchRanges(for: searchText, isRegex: isRegexSearch, isCaseSensitive: isCaseSensitive, in: textView)
             } else {
                 context.coordinator.matchRanges = []
             }
@@ -137,7 +150,7 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             if !searchText.isEmpty {
-                context.coordinator.findMatchRanges(for: searchText, in: textView)
+                context.coordinator.findMatchRanges(for: searchText, isRegex: isRegexSearch, isCaseSensitive: isCaseSensitive, in: textView)
                 context.coordinator.updateMatchHighlighting(currentIndex: currentMatchIndex, in: textView, searchText: searchText)
                 if !context.coordinator.matchRanges.isEmpty {
                     DispatchQueue.main.async {
@@ -185,6 +198,10 @@ struct MarkdownTextView: NSViewRepresentable {
         var lastSearchText: String?
         var lastZoomLevel: CGFloat = 1.0
         var lastMatchIndex: Int = -1
+        /// Track the search-mode flags so toggling regex/case is treated like a search change and
+        /// the stale highlight backgrounds get cleared + re-applied.
+        var lastIsRegex: Bool = false
+        var lastIsCaseSensitive: Bool = false
         var matchRanges: [NSRange] = []
         var onScrollPositionChanged: ((CGFloat) -> Void)?
         var onMatchCountChanged: ((Int) -> Void)?
@@ -196,15 +213,15 @@ struct MarkdownTextView: NSViewRepresentable {
         // Image cache shared across renders
         static var imageCache: NSCache<NSString, NSImage> = {
             let cache = NSCache<NSString, NSImage>()
-            cache.countLimit = 100
-            cache.totalCostLimit = 100 * 1024 * 1024
+            cache.countLimit = Cache.imageCountLimit
+            cache.totalCostLimit = Cache.imageByteLimit
             return cache
         }()
         // Diagram/math cache
         static var diagramCache: NSCache<NSString, NSImage> = {
             let cache = NSCache<NSString, NSImage>()
-            cache.countLimit = 100
-            cache.totalCostLimit = 100 * 1024 * 1024
+            cache.countLimit = Cache.imageCountLimit
+            cache.totalCostLimit = Cache.imageByteLimit
             return cache
         }()
         // Element-level rendering cache for incremental updates
@@ -225,12 +242,17 @@ struct MarkdownTextView: NSViewRepresentable {
             let maxY = max(0, textView.frame.height - scrollView.contentView.bounds.height)
             let clampedY = min(max(0, targetY), maxY)
 
-            // Animate the scroll
-            NSAnimationContext.runAnimationGroup { context in
+            // Flag programmatic scroll so the bounds-change observer doesn't re-broadcast this
+            // motion as a user scroll event, which would rebound the source side in split mode.
+            isProgrammaticScroll = true
+
+            NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.3
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: clampedY))
-            }
+            }, completionHandler: { [weak self] in
+                self?.isProgrammaticScroll = false
+            })
             scrollView.reflectScrolledClipView(scrollView.contentView)
 
             // Briefly highlight the heading
@@ -283,7 +305,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // MARK: - Search Methods
 
-        func findMatchRanges(for searchText: String, in textView: NSTextView) {
+        func findMatchRanges(for searchText: String, isRegex: Bool, isCaseSensitive: Bool, in textView: NSTextView) {
             matchRanges = []
             guard let storage = textView.textStorage, !searchText.isEmpty else {
                 onMatchCountChanged?(0)
@@ -291,15 +313,31 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             let string = storage.string as NSString
-            var searchRange = NSRange(location: 0, length: string.length)
 
-            while searchRange.location < string.length {
-                let range = string.range(of: searchText, options: .caseInsensitive, range: searchRange)
-                guard range.location != NSNotFound else { break }
-
-                matchRanges.append(range)
-                searchRange.location = range.location + range.length
-                searchRange.length = string.length - searchRange.location
+            if isRegex {
+                var options: NSRegularExpression.Options = []
+                if !isCaseSensitive { options.insert(.caseInsensitive) }
+                guard let regex = try? NSRegularExpression(pattern: searchText, options: options) else {
+                    onMatchCountChanged?(0)
+                    return
+                }
+                let results = regex.matches(in: storage.string, range: NSRange(location: 0, length: string.length))
+                for result in results {
+                    matchRanges.append(result.range)
+                }
+            } else {
+                var stringOptions: NSString.CompareOptions = []
+                if !isCaseSensitive { stringOptions.insert(.caseInsensitive) }
+                var searchRange = NSRange(location: 0, length: string.length)
+                while searchRange.location < string.length {
+                    let range = string.range(of: searchText, options: stringOptions, range: searchRange)
+                    guard range.location != NSNotFound else { break }
+                    matchRanges.append(range)
+                    // Advance by at least one character to avoid infinite loops on zero-length matches.
+                    let advance = max(1, range.length)
+                    searchRange.location = range.location + advance
+                    searchRange.length = max(0, string.length - searchRange.location)
+                }
             }
 
             // Report match count back
@@ -426,6 +464,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         deinit {
             scrollDebounceTimer?.invalidate()
+            syncDebounceTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }
@@ -438,7 +477,13 @@ struct MarkdownTextView: NSViewRepresentable {
         let headings = parser.extractHeadings(content)
         let result = NSMutableAttributedString()
         var headingRanges: [String: NSRange] = [:]
-        var headingIndex = 0
+
+        // Pair headings to slug IDs as we encounter them in the parsed element stream.
+        // Previously this used a positional index into `headings`, which drifted whenever
+        // `extractHeadings` returned an entry that `parse()` did not (e.g., a `#` line inside a
+        // fenced code block). Now `extractHeadings` skips fenced/frontmatter, so both sequences
+        // are aligned — but we also track slug-counts here to handle duplicates defensively.
+        var parsedHeadingIndex = 0
 
         // Manage element cache — invalidate on zoom or font change
         let zoomKey = "\(zoomLevel)-\(fontStyle.rawValue)"
@@ -451,22 +496,36 @@ struct MarkdownTextView: NSViewRepresentable {
         for element in elements {
             let startPos = result.length
 
-            // Use cached fragment if available, otherwise render and cache
-            if cacheValid, let cached = coordinator.elementCache[element.id] {
+            // Elements whose appearance depends on an out-of-band async resource (remote images,
+            // Mermaid/LaTeX diagrams rendered by WebRenderer, HTML blocks converted via WebKit) must
+            // NOT be cached by content id: their first render inserts a "[Image: alt]" / "[Rendering…]"
+            // placeholder, and caching that placeholder freezes the wrong visual even after the
+            // diagramDidRender notification clears `elementCache`.
+            let skipCache: Bool
+            switch element {
+            case .image, .mermaidBlock, .displayMath, .htmlBlock:
+                skipCache = true
+            default:
+                skipCache = false
+            }
+
+            if !skipCache, cacheValid, let cached = coordinator.elementCache[element.id] {
                 result.append(cached)
             } else {
                 renderElement(element, to: result)
                 let endPos = result.length
-                if endPos > startPos {
+                if !skipCache, endPos > startPos {
                     let fragment = result.attributedSubstring(from: NSRange(location: startPos, length: endPos - startPos))
                     coordinator.elementCache[element.id] = fragment
                 }
             }
 
-            // Track heading ranges for outline navigation
-            if element.isHeading, headingIndex < headings.count {
-                headingRanges[headings[headingIndex].id] = NSRange(location: startPos, length: result.length - startPos)
-                headingIndex += 1
+            // Track heading ranges for outline navigation. extractHeadings now skips
+            // lines inside fenced code blocks, so the parsed-element heading order and the
+            // outline heading order align 1:1.
+            if element.isHeading, parsedHeadingIndex < headings.count {
+                headingRanges[headings[parsedHeadingIndex].id] = NSRange(location: startPos, length: result.length - startPos)
+                parsedHeadingIndex += 1
             }
         }
 
@@ -871,15 +930,16 @@ struct MarkdownTextView: NSViewRepresentable {
             return cached
         }
 
-        // Remote URL — return nil (placeholder) and load asynchronously
+        // Remote URL — return nil (placeholder) and load asynchronously.
+        // Posts .diagramRendered when the image lands so the preview rebuilds and the placeholder
+        // text gets replaced with the actual image. (Piggybacks on the existing diagram refresh hook.)
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
             if let url = URL(string: path) {
                 DispatchQueue.global(qos: .userInitiated).async {
                     guard let image = NSImage(contentsOf: url) else { return }
                     DispatchQueue.main.async {
                         Coordinator.imageCache.setObject(image, forKey: path as NSString)
-                        // Trigger re-render by posting notification (content hasn't changed,
-                        // but the view should rebuild to include the now-cached image)
+                        NotificationCenter.default.post(name: .diagramRendered, object: nil)
                     }
                 }
             }
@@ -1069,6 +1129,14 @@ struct MarkdownTextView: NSViewRepresentable {
         let result = NSMutableAttributedString(string: text, attributes: attributes)
         let baseFont = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 16)
 
+        // Inline code must be applied FIRST. It's atomic in CommonMark — `*x*` inside a code span
+        // is literal asterisks, not italic. Previously italic/bold ran first and ate the markers
+        // inside code spans. Ordering is: code → bold → italic → strike → link → math.
+        applyPattern(#"`(.+?)`"#, to: result, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
+            .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
+        ])
+
         // Bold **text**
         applyPattern(#"\*\*(.+?)\*\*"#, to: result, attributes: [.font: baseFont.withWeight(.bold)])
 
@@ -1077,12 +1145,6 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Strikethrough ~~text~~
         applyPattern(#"~~(.+?)~~"#, to: result, attributes: [.strikethroughStyle: NSUnderlineStyle.single.rawValue])
-
-        // Inline code `text`
-        applyPattern(#"`(.+?)`"#, to: result, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
-            .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
-        ])
 
         // Links [text](url)
         applyLinkPattern(to: result)

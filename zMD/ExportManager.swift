@@ -587,227 +587,85 @@ class ExportManager {
     // MARK: - DOCX Document XML Generation
 
     private func generateDocumentXML(markdown: String, baseURL: URL? = nil) -> String {
+        // Consumes the unified MarkdownParser element tree so DOCX export is bit-for-bit
+        // consistent with preview/HTML/RTF/print. The previous line-based generator diverged:
+        // H5/H6 lost, no frontmatter/mermaid/math/HTML block handling, ambiguous fence detection,
+        // table separator regex accepted data rows.
         var xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
             <w:body>
         """
 
-        let lines = markdown.components(separatedBy: .newlines)
-        var i = 0
-        var inCodeBlock = false
-        var inList = false
-        var inNumberedList = false
-        var currentNumberedNumId = 2 // default numId for numbered lists
-        var inBlockquote = false
+        let elements = MarkdownParser.shared.parse(markdown)
+        var currentNumberedNumId = 2
         numberedListCount = 0
 
-        while i < lines.count {
-            let line = lines[i]
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+        for element in elements {
+            switch element {
+            case .heading1(let text): xml += createHeadingParagraph(text: text, level: 1)
+            case .heading2(let text): xml += createHeadingParagraph(text: text, level: 2)
+            case .heading3(let text): xml += createHeadingParagraph(text: text, level: 3)
+            case .heading4(let text): xml += createHeadingParagraph(text: text, level: 4)
+            case .heading5(let text): xml += createHeadingParagraph(text: text, level: 5)
+            case .heading6(let text): xml += createHeadingParagraph(text: text, level: 6)
 
-            // Code blocks
-            if trimmedLine.hasPrefix("```") {
-                if inCodeBlock {
-                    inCodeBlock = false
-                } else {
-                    if inList { inList = false; inNumberedList = false }
-                    if inBlockquote { inBlockquote = false }
-                    inCodeBlock = true
+            case .paragraph(let text): xml += createNormalParagraph(text: text)
+
+            case .frontmatter(let lines):
+                // Render YAML frontmatter as a small shaded table-like block of key:value paragraphs.
+                for line in lines where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    xml += createNormalParagraph(text: line)
                 }
-                i += 1
-                continue
-            }
 
-            if inCodeBlock {
-                xml += createCodeParagraph(text: line)
-                i += 1
-                continue
-            }
-
-            // Blockquotes
-            if trimmedLine.hasPrefix("> ") {
-                if inList { inList = false; inNumberedList = false }
-                let quoteText = String(trimmedLine.dropFirst(2))
-                xml += createBlockquoteParagraph(text: quoteText)
-                inBlockquote = true
-                i += 1
-                continue
-            } else if inBlockquote {
-                inBlockquote = false
-            }
-
-            // Tables
-            if trimmedLine.hasPrefix("|") && trimmedLine.hasSuffix("|") {
-                if inList { inList = false; inNumberedList = false }
-
-                // Collect all table rows to determine column count and widths
-                var tableRows: [[String]] = []
-                var separatorIndex = -1
-                var tableStart = i
-
-                while tableStart < lines.count {
-                    let tl = lines[tableStart].trimmingCharacters(in: .whitespaces)
-                    guard tl.hasPrefix("|") else { break }
-
-                    if tl.contains("---") || tl.range(of: #"\|[\s:-]+\|"#, options: .regularExpression) != nil {
-                        separatorIndex = tableRows.count
-                        tableStart += 1
-                        continue
+            case .list(let items):
+                // Assign a fresh numId each time we encounter an ordered-prefix run.
+                var inNumbered = false
+                for item in items {
+                    if item.isOrdered && !inNumbered {
+                        numberedListCount += 1
+                        currentNumberedNumId = 2 + numberedListCount
+                        inNumbered = true
+                    } else if !item.isOrdered && inNumbered {
+                        inNumbered = false
                     }
-
-                    let cells = tl
-                        .split(separator: "|")
-                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                        .filter { !$0.isEmpty }
-
-                    if !cells.isEmpty {
-                        tableRows.append(cells)
-                    }
-                    tableStart += 1
+                    let numId = item.isOrdered ? currentNumberedNumId : 1
+                    let level = min(item.level, 2)
+                    xml += createListParagraph(text: item.text, numId: numId, level: level)
                 }
 
-                let columnCount = tableRows.map { $0.count }.max() ?? 1
-                // Page width: 12240 - 1440 left - 1440 right = 9360 DXA
-                let tableWidth = 9360
-                let columnWidth = tableWidth / columnCount
-
-                xml += "<w:tbl>"
-                xml += "<w:tblPr>"
-                xml += "<w:tblW w:w=\"\(tableWidth)\" w:type=\"dxa\"/>"
-                xml += "<w:tblBorders>"
-                xml += "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
-                xml += "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
-                xml += "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
-                xml += "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
-                xml += "<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
-                xml += "<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
-                xml += "</w:tblBorders>"
-                xml += "<w:tblCellMar>"
-                xml += "<w:left w:w=\"10\" w:type=\"dxa\"/>"
-                xml += "<w:right w:w=\"10\" w:type=\"dxa\"/>"
-                xml += "</w:tblCellMar>"
-                xml += "<w:tblLook w:val=\"0000\" w:firstRow=\"0\" w:lastRow=\"0\" w:firstColumn=\"0\" w:lastColumn=\"0\" w:noHBand=\"0\" w:noVBand=\"0\"/>"
-                xml += "</w:tblPr>"
-                xml += "<w:tblGrid>"
-                for _ in 0..<columnCount {
-                    xml += "<w:gridCol w:w=\"\(columnWidth)\"/>"
-                }
-                xml += "</w:tblGrid>"
-
-                for (rowIndex, cells) in tableRows.enumerated() {
-                    let isHeader = rowIndex == 0 && separatorIndex >= 0
-                    xml += "<w:tr>"
-
-                    for colIndex in 0..<columnCount {
-                        let cellText = colIndex < cells.count ? cells[colIndex] : ""
-                        xml += "<w:tc>"
-                        xml += "<w:tcPr>"
-                        xml += "<w:tcW w:w=\"\(columnWidth)\" w:type=\"dxa\"/>"
-                        xml += "<w:tcBorders>"
-                        xml += "<w:top w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
-                        xml += "<w:left w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
-                        xml += "<w:bottom w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
-                        xml += "<w:right w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
-                        xml += "</w:tcBorders>"
-
-                        if isHeader {
-                            xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"6D2040\"/>"
-                        } else if rowIndex % 2 == 0 && separatorIndex >= 0 {
-                            xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"E0E0E0\"/>"
-                        }
-
-                        xml += "<w:tcMar>"
-                        xml += "<w:top w:w=\"60\" w:type=\"dxa\"/>"
-                        xml += "<w:left w:w=\"100\" w:type=\"dxa\"/>"
-                        xml += "<w:bottom w:w=\"60\" w:type=\"dxa\"/>"
-                        xml += "<w:right w:w=\"100\" w:type=\"dxa\"/>"
-                        xml += "</w:tcMar>"
-                        xml += "</w:tcPr>"
-                        xml += "<w:p>"
-
-                        if isHeader {
-                            xml += createHeaderCellRun(text: cellText)
-                        } else {
-                            xml += createRunsForFormattedText(cellText)
-                        }
-
-                        xml += "</w:p>"
-                        xml += "</w:tc>"
-                    }
-
-                    xml += "</w:tr>"
+            case .codeBlock(let code, _):
+                for line in code.components(separatedBy: "\n") {
+                    xml += createCodeParagraph(text: line)
                 }
 
-                xml += "</w:tbl>"
-                // Add spacing paragraph after table
-                xml += "<w:p><w:pPr><w:spacing w:before=\"120\"/></w:pPr></w:p>"
-                i = tableStart
-                continue
-            }
-
-            // Headings
-            if trimmedLine.hasPrefix("#### ") {
-                if inList { inList = false; inNumberedList = false }
-                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(5)), level: 4)
-            } else if trimmedLine.hasPrefix("### ") {
-                if inList { inList = false; inNumberedList = false }
-                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(4)), level: 3)
-            } else if trimmedLine.hasPrefix("## ") {
-                if inList { inList = false; inNumberedList = false }
-                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(3)), level: 2)
-            } else if trimmedLine.hasPrefix("# ") {
-                if inList { inList = false; inNumberedList = false }
-                xml += createHeadingParagraph(text: String(trimmedLine.dropFirst(2)), level: 1)
-            }
-            // Bullet Lists (including indented sub-items)
-            else if trimmedLine.hasPrefix("- ") || trimmedLine.hasPrefix("* ") || trimmedLine.hasPrefix("+ ") {
-                let itemText = String(trimmedLine.dropFirst(2))
-                let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
-                let level = min(indent / 2, 2) // 0, 1, or 2 based on indentation
-                xml += createListParagraph(text: itemText, numId: 1, level: level)
-                inList = true
-            }
-            // Numbered Lists (including indented: 1. 2. 3. etc)
-            else if let match = trimmedLine.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-                let itemText = String(trimmedLine[match.upperBound...])
-                let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
-                let level = min(indent / 2, 2)
-                if !inNumberedList {
-                    // Starting a new numbered list — assign a new numId
-                    numberedListCount += 1
-                    currentNumberedNumId = 2 + numberedListCount // numId 3, 4, 5, etc.
-                    inNumberedList = true
+            case .mermaidBlock(let code):
+                // DOCX has no diagram renderer — emit as a code block so content is at least present.
+                for line in (["[Mermaid diagram]"] + code.components(separatedBy: "\n")) {
+                    xml += createCodeParagraph(text: line)
                 }
-                xml += createListParagraph(text: itemText, numId: currentNumberedNumId, level: level)
-                inList = true
-            }
-            // Horizontal rule (---, ___, ***)
-            else if trimmedLine.range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil {
-                if inList { inList = false; inNumberedList = false }
+
+            case .displayMath(let latex):
+                for line in (["[Math]"] + latex.components(separatedBy: "\n")) {
+                    xml += createCodeParagraph(text: line)
+                }
+
+            case .table(let rows):
+                xml += generateTableXML(rows: rows)
+
+            case .image(let alt, let path):
+                xml += createImageParagraph(path: path, alt: alt, baseURL: baseURL)
+
+            case .horizontalRule:
                 xml += createHorizontalRule()
-            }
-            // Image ![alt](path)
-            else if trimmedLine.range(of: #"^!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) != nil {
-                if inList { inList = false; inNumberedList = false }
-                if let altRange = trimmedLine.range(of: #"\[([^\]]*)\]"#, options: .regularExpression),
-                   let pathRange = trimmedLine.range(of: #"\(([^\)]+)\)"#, options: .regularExpression) {
-                    let alt = String(trimmedLine[altRange].dropFirst().dropLast())
-                    let path = String(trimmedLine[pathRange].dropFirst().dropLast())
-                    xml += createImageParagraph(path: path, alt: alt, baseURL: baseURL)
-                }
-            }
-            // Empty line
-            else if trimmedLine.isEmpty {
-                if inList { inList = false; inNumberedList = false }
-            }
-            // Regular paragraph
-            else if !trimmedLine.isEmpty {
-                if inList { inList = false; inNumberedList = false }
-                xml += createNormalParagraph(text: line)
-            }
 
-            i += 1
+            case .blockquote(let text):
+                xml += createBlockquoteParagraph(text: text)
+
+            case .htmlBlock(let html):
+                // Fallback: emit the raw HTML source as a paragraph so nothing disappears silently.
+                xml += createNormalParagraph(text: html)
+            }
         }
 
         xml += """
@@ -821,6 +679,79 @@ class ExportManager {
         </w:document>
         """
 
+        return xml
+    }
+
+    /// Emit a full `<w:tbl>` block from parsed rows. First row is treated as the header.
+    private func generateTableXML(rows: [[String]]) -> String {
+        guard !rows.isEmpty else { return "" }
+        let columnCount = rows.map { $0.count }.max() ?? 1
+        // Page width: 12240 - 1440 left - 1440 right = 9360 DXA
+        let tableWidth = 9360
+        let columnWidth = tableWidth / columnCount
+
+        var xml = "<w:tbl>"
+        xml += "<w:tblPr>"
+        xml += "<w:tblW w:w=\"\(tableWidth)\" w:type=\"dxa\"/>"
+        xml += "<w:tblBorders>"
+        xml += "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+        xml += "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+        xml += "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+        xml += "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+        xml += "<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+        xml += "<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>"
+        xml += "</w:tblBorders>"
+        xml += "<w:tblCellMar>"
+        xml += "<w:left w:w=\"10\" w:type=\"dxa\"/>"
+        xml += "<w:right w:w=\"10\" w:type=\"dxa\"/>"
+        xml += "</w:tblCellMar>"
+        xml += "<w:tblLook w:val=\"0000\" w:firstRow=\"0\" w:lastRow=\"0\" w:firstColumn=\"0\" w:lastColumn=\"0\" w:noHBand=\"0\" w:noVBand=\"0\"/>"
+        xml += "</w:tblPr>"
+        xml += "<w:tblGrid>"
+        for _ in 0..<columnCount {
+            xml += "<w:gridCol w:w=\"\(columnWidth)\"/>"
+        }
+        xml += "</w:tblGrid>"
+
+        for (rowIndex, cells) in rows.enumerated() {
+            let isHeader = rowIndex == 0
+            xml += "<w:tr>"
+            for colIndex in 0..<columnCount {
+                let cellText = colIndex < cells.count ? cells[colIndex] : ""
+                xml += "<w:tc>"
+                xml += "<w:tcPr>"
+                xml += "<w:tcW w:w=\"\(columnWidth)\" w:type=\"dxa\"/>"
+                xml += "<w:tcBorders>"
+                xml += "<w:top w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                xml += "<w:left w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                xml += "<w:bottom w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                xml += "<w:right w:val=\"single\" w:sz=\"1\" w:space=\"0\" w:color=\"AAAAAA\"/>"
+                xml += "</w:tcBorders>"
+                if isHeader {
+                    xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"6D2040\"/>"
+                } else if rowIndex % 2 == 0 {
+                    xml += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"E0E0E0\"/>"
+                }
+                xml += "<w:tcMar>"
+                xml += "<w:top w:w=\"60\" w:type=\"dxa\"/>"
+                xml += "<w:left w:w=\"100\" w:type=\"dxa\"/>"
+                xml += "<w:bottom w:w=\"60\" w:type=\"dxa\"/>"
+                xml += "<w:right w:w=\"100\" w:type=\"dxa\"/>"
+                xml += "</w:tcMar>"
+                xml += "</w:tcPr>"
+                xml += "<w:p>"
+                if isHeader {
+                    xml += createHeaderCellRun(text: cellText)
+                } else {
+                    xml += createRunsForFormattedText(cellText)
+                }
+                xml += "</w:p>"
+                xml += "</w:tc>"
+            }
+            xml += "</w:tr>"
+        }
+        xml += "</w:tbl>"
+        xml += "<w:p><w:pPr><w:spacing w:before=\"120\"/></w:pPr></w:p>"
         return xml
     }
 

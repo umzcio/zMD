@@ -75,7 +75,7 @@ class WebRenderer: NSObject {
         let html = """
         <!DOCTYPE html>
         <html><head>
-        <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+        <script src="\(CDN.mermaidJS)"></script>
         <style>
             body { background: white; margin: 0; padding: 16px; }
             #container { font-family: -apple-system, sans-serif; }
@@ -151,8 +151,16 @@ class WebRenderer: NSObject {
         isMermaidRendering = true
         let item = mermaidRenderQueue.removeFirst()
 
-        let escapedCode = item.code.replacingOccurrences(of: "\\", with: "\\\\")
+        // Escape for safe splicing into a JS backtick template literal:
+        // - `\\` must double to survive the JS string parser
+        // - backticks close the literal
+        // - newlines must be escaped in the string representation
+        // - `${` would trigger template-literal interpolation and evaluate arbitrary JS in the
+        //   hidden WebView if present in user markdown (defensive hardening, not an observed RCE)
+        let escapedCode = item.code
+            .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "${", with: "\\${")
             .replacingOccurrences(of: "\n", with: "\\n")
 
         self.activeMermaidCompletion = { [weak self] image in
@@ -209,8 +217,8 @@ class WebRenderer: NSObject {
         let html = """
         <!DOCTYPE html>
         <html><head>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+        <link rel="stylesheet" href="\(CDN.katexCSS)">
+        <script src="\(CDN.katexJS)"></script>
         <style>
             body { background: white; margin: 0; padding: 8px; }
             #container { font-size: 16px; color: black; }

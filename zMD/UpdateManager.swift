@@ -15,21 +15,22 @@ class UpdateManager: ObservableObject {
     @Published var isDownloading = false
     @Published var downloadProgress: Double = 0
 
-    private let lastCheckKey = "lastUpdateCheckDate"
-    private let checkIntervalHours: Double = 24
+    private let lastCheckKey = DefaultsKeys.lastUpdateCheckDate
+    private let checkIntervalHours: Double = Timing.updateCheckIntervalHours
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 
-    /// Auto-check on launch (silent, once per 24h)
+    /// Auto-check on launch (silent, once per 24h). The timestamp is now stamped only after the
+    /// request actually succeeds — previously it was stamped eagerly, so a network failure on
+    /// launch silently suppressed the next 24h of checks.
     func checkOnLaunchIfNeeded() {
         let lastCheck = UserDefaults.standard.double(forKey: lastCheckKey)
         let now = Date().timeIntervalSince1970
         let hoursSinceLastCheck = (now - lastCheck) / 3600
 
         if lastCheck == 0 || hoursSinceLastCheck >= checkIntervalHours {
-            UserDefaults.standard.set(now, forKey: lastCheckKey)
             checkForUpdates(silent: true)
         }
     }
@@ -86,6 +87,10 @@ class UpdateManager: ObservableObject {
                         }
                     }
                 }
+
+                // Only record a successful check — failures (handled above in the error/parse
+                // guards) leave the timestamp untouched so the next launch will retry.
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: self.lastCheckKey)
 
                 if self.isNewerVersion(remote: remoteVersion, current: self.currentVersion) {
                     self.latestVersion = remoteVersion
@@ -239,7 +244,14 @@ class UpdateManager: ObservableObject {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         task.arguments = ["-n", appPath]
-        try? task.run()
+        do {
+            try task.run()
+        } catch {
+            // Previously this used `try?` and then terminated anyway — so if `open` failed
+            // (missing binary, permission issue) the user was left with nothing running.
+            AlertManager.shared.showError("Relaunch Failed", message: error.localizedDescription)
+            return
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             NSApplication.shared.terminate(nil)
@@ -264,6 +276,8 @@ class UpdateManager: ObservableObject {
         var result = text
         // Remove headings
         result = result.replacingOccurrences(of: "(?m)^#{1,6}\\s*", with: "", options: .regularExpression)
+        // Collapse links [text](url) → text so release notes don't show raw URLs.
+        result = result.replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^\\)]+\\)", with: "$1", options: .regularExpression)
         // Remove bold/italic markers
         result = result.replacingOccurrences(of: "\\*{1,3}(.+?)\\*{1,3}", with: "$1", options: .regularExpression)
         // Remove bullet markers

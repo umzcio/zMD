@@ -134,10 +134,11 @@ Always access/modify documents through `DocumentManager` methods, never manipula
 
 ### Sandboxing Considerations
 
-The app runs in macOS App Sandbox (see `zMD.entitlements`):
-- File access is limited to user-selected files via `NSOpenPanel` / `NSSavePanel`
-- No network access required
-- Export functions use sandbox-safe APIs (NSAttributedString, CGContext)
+The app currently ships **un-sandboxed** (direct `.dmg` distribution, not Mac App Store). See `zMD.entitlements` — `com.apple.security.app-sandbox` is `false`. The `com.apple.security.files.user-selected.read-write` and `com.apple.security.network.client` keys are present but inert outside the sandbox.
+
+- `UpdateManager` writes the new .app bundle to `/Applications` directly — this only works outside the sandbox.
+- The security-scoped bookmark calls (`startAccessingSecurityScopedResource`, `.withSecurityScope` bookmark data) are still present in DocumentManager/FolderManager but are no-ops at runtime in the un-sandboxed configuration. They stay in place so a future sandbox re-enable is a smaller change.
+- If you ever set `app-sandbox=true`, re-test: save, rename, move, Open Recent, folder sidebar restore, drag-drop of .md files onto the window, and the auto-updater (which will break — sandbox cannot write `/Applications` or invoke `hdiutil`).
 
 ### Known Limitations
 

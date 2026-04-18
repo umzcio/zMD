@@ -7,10 +7,45 @@ struct SourceEditorView: NSViewRepresentable {
     var zoomLevel: CGFloat = 1.0
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
+    /// Callback handed the NSTextView + NSScrollView once they're constructed.
+    /// Used by the parent to wire the optional minimap (MinimapView needs live references to
+    /// both the text view and its scroll view to draw the viewport indicator).
+    var onViewsReady: ((NSTextView, NSScrollView) -> Void)?
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
+        // Build NSScrollView + EditorTextView manually so we get our NSTextView subclass with
+        // multi-cursor, auto-close brackets, snippet autocomplete, Cmd+/ comment toggle, line-move
+        // shortcuts, and thin caret. NSTextView.scrollableTextView() would hand back a vanilla
+        // NSTextView and none of that functionality would be reachable.
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = NSColor.textBackgroundColor
+
+        let contentSize = scrollView.contentSize
+        let textContainer = NSTextContainer(
+            containerSize: NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        )
+        textContainer.widthTracksTextView = true
+
+        let layoutManager = NSLayoutManager()
+        layoutManager.addTextContainer(textContainer)
+
+        let textStorage = NSTextStorage()
+        textStorage.addLayoutManager(layoutManager)
+
+        let textView = EditorTextView(
+            frame: NSRect(origin: .zero, size: contentSize),
+            textContainer: textContainer
+        )
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.minSize = NSSize(width: 0, height: contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
 
         textView.isEditable = true
         textView.isSelectable = true
@@ -20,13 +55,8 @@ struct SourceEditorView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 40, height: 30)
         textView.font = NSFont.monospacedSystemFont(ofSize: 14 * zoomLevel, weight: .regular)
         textView.textColor = NSColor.textColor
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.smartInsertDeleteEnabled = false
 
-        textView.textContainer?.widthTracksTextView = true
+        scrollView.documentView = textView
 
         // Line number gutter
         let settings = SettingsManager.shared
@@ -55,7 +85,20 @@ struct SourceEditorView: NSViewRepresentable {
         textView.string = content
         context.coordinator.applyHighlighting(to: textView)
 
+        // Hand references to the parent so it can render an optional minimap alongside us.
+        // Deferred to main-async to ensure the scroll view's layout has resolved before
+        // MinimapView reads its document/frame dimensions.
+        DispatchQueue.main.async { [weak textView, weak scrollView] in
+            if let tv = textView, let sv = scrollView {
+                self.onViewsReady?(tv, sv)
+            }
+        }
+
         return scrollView
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.teardown()
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -67,8 +110,34 @@ struct SourceEditorView: NSViewRepresentable {
 
         if context.coordinator.zoomLevel != zoomLevel {
             context.coordinator.zoomLevel = zoomLevel
-            textView.font = NSFont.monospacedSystemFont(ofSize: 14 * zoomLevel, weight: .regular)
+            let newFont = NSFont.monospacedSystemFont(ofSize: 14 * zoomLevel, weight: .regular)
+            textView.font = newFont
+            // typingAttributes must be updated explicitly so the next character typed uses the
+            // new font size — NSTextView does not always recompute from caret context after a
+            // full font override.
+            textView.typingAttributes = [
+                .font: newFont,
+                .foregroundColor: NSColor.textColor
+            ]
             context.coordinator.applyHighlighting(to: textView)
+            // Redraw gutter to pick up its new scaled font size.
+            if let gutter = scrollView.verticalRulerView {
+                gutter.needsDisplay = true
+            }
+        }
+
+        // Runtime toggle for the gutter so the setting takes effect immediately instead of
+        // requiring the editor view to be torn down and rebuilt.
+        let wantsGutter = SettingsManager.shared.showLineNumbers
+        let hasGutter = scrollView.verticalRulerView is LineNumberGutter
+        if wantsGutter && !hasGutter {
+            let gutter = LineNumberGutter(scrollView: scrollView, orientation: .verticalRuler)
+            scrollView.verticalRulerView = gutter
+            scrollView.hasVerticalRuler = true
+            scrollView.rulersVisible = true
+        } else if !wantsGutter && hasGutter {
+            scrollView.rulersVisible = false
+            scrollView.hasVerticalRuler = false
         }
 
         // Only overwrite from binding if the textView isn't the active editor —
@@ -106,105 +175,27 @@ struct SourceEditorView: NSViewRepresentable {
         init(onContentChange: ((String) -> Void)?) {
             self.onContentChange = onContentChange
             super.init()
-            registerForToolbarNotifications()
         }
 
-        private func registerForToolbarNotifications() {
-            let nc = NotificationCenter.default
-            let names: [Notification.Name] = [
-                .editorFormatBold, .editorFormatItalic, .editorFormatStrikethrough,
-                .editorFormatInlineCode, .editorFormatCodeBlock, .editorInsertLink,
-                .editorInsertImage, .editorInsertHR, .editorToggleHeading,
-                .editorInsertUnorderedList, .editorInsertOrderedList, .editorInsertTaskList,
-            ]
-            for name in names {
-                nc.addObserver(self, selector: #selector(handleToolbarAction(_:)), name: name, object: nil)
-            }
+        deinit {
+            teardown()
         }
 
-        @objc private func handleToolbarAction(_ notification: Notification) {
-            guard let textView = textView else { return }
-            let range = textView.selectedRange()
-            let text = textView.string as NSString
-
-            switch notification.name {
-            case .editorFormatBold:
-                wrapSelection("**", "**", placeholder: "bold text", in: textView)
-            case .editorFormatItalic:
-                wrapSelection("*", "*", placeholder: "italic text", in: textView)
-            case .editorFormatStrikethrough:
-                wrapSelection("~~", "~~", placeholder: "strikethrough", in: textView)
-            case .editorFormatInlineCode:
-                wrapSelection("`", "`", placeholder: "code", in: textView)
-            case .editorFormatCodeBlock:
-                let selected = range.length > 0 ? text.substring(with: range) : ""
-                let replacement = "```\n\(selected)\n```"
-                textView.insertText(replacement, replacementRange: range)
-            case .editorInsertLink:
-                if range.length > 0 {
-                    let selected = text.substring(with: range)
-                    textView.insertText("[\(selected)](url)", replacementRange: range)
-                } else {
-                    textView.insertText("[link text](url)", replacementRange: range)
-                }
-            case .editorInsertImage:
-                if range.length > 0 {
-                    let selected = text.substring(with: range)
-                    textView.insertText("![\(selected)](image-url)", replacementRange: range)
-                } else {
-                    textView.insertText("![alt text](image-url)", replacementRange: range)
-                }
-            case .editorInsertHR:
-                textView.insertText("\n---\n", replacementRange: range)
-            case .editorToggleHeading:
-                let lineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
-                let line = text.substring(with: lineRange)
-                var level = 0
-                for ch in line { if ch == "#" { level += 1 } else { break } }
-                if level == 0 {
-                    textView.insertText("# " + line, replacementRange: lineRange)
-                } else if level >= 6 {
-                    var stripped = String(line.dropFirst(level))
-                    if stripped.hasPrefix(" ") { stripped = String(stripped.dropFirst()) }
-                    textView.insertText(stripped, replacementRange: lineRange)
-                } else {
-                    textView.insertText("#" + line, replacementRange: lineRange)
-                }
-            case .editorInsertUnorderedList:
-                insertListPrefix("- ", in: textView)
-            case .editorInsertOrderedList:
-                insertListPrefix("1. ", in: textView)
-            case .editorInsertTaskList:
-                insertListPrefix("- [ ] ", in: textView)
-            default:
-                break
-            }
-        }
-
-        private func wrapSelection(_ prefix: String, _ suffix: String, placeholder: String, in textView: NSTextView) {
-            let range = textView.selectedRange()
-            if range.length > 0 {
-                let text = textView.string as NSString
-                let selected = text.substring(with: range)
-                textView.insertText(prefix + selected + suffix, replacementRange: range)
-            } else {
-                textView.insertText(prefix + placeholder + suffix, replacementRange: range)
-            }
-        }
-
-        private func insertListPrefix(_ prefix: String, in textView: NSTextView) {
-            let text = textView.string as NSString
-            let range = textView.selectedRange()
-            let lineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
-            let line = text.substring(with: lineRange)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix(prefix) {
-                let indent = String(line.prefix(while: { $0 == " " || $0 == "\t" }))
-                textView.insertText(indent + String(trimmed.dropFirst(prefix.count)), replacementRange: lineRange)
-            } else {
-                let indent = String(line.prefix(while: { $0 == " " || $0 == "\t" }))
-                textView.insertText(indent + prefix + line.trimmingCharacters(in: .whitespaces), replacementRange: lineRange)
-            }
+        /// Tear down observers, timers, and delegate references. Invoked from both `deinit` and
+        /// `dismantleNSView` so SwiftUI can release us without dangling timers firing on a zombie self.
+        /// Previously none of this was released, leaving 0.3s highlight timers and scroll observers
+        /// live after the view was destroyed.
+        func teardown() {
+            highlightTimer?.invalidate()
+            highlightTimer = nil
+            autocompleteTimer?.invalidate()
+            autocompleteTimer = nil
+            scrollDebounceTimer?.invalidate()
+            scrollDebounceTimer = nil
+            NotificationCenter.default.removeObserver(self)
+            textView?.delegate = nil
+            textView = nil
+            scrollView = nil
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
@@ -264,15 +255,79 @@ struct SourceEditorView: NSViewRepresentable {
                 self?.applyHighlighting(to: textView)
             }
 
+            // Debounced autocomplete trigger (EditorTextView only).
+            autocompleteTimer?.invalidate()
+            autocompleteTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self, weak textView] _ in
+                guard let self = self,
+                      let editor = textView as? EditorTextView else { return }
+                self.triggerAutocomplete(in: editor)
+            }
+
             // Update gutter
             if let scrollView = scrollView, let gutter = scrollView.verticalRulerView {
                 gutter.needsDisplay = true
             }
         }
 
+        /// Build completions for the word/HTML-tag at the cursor and show the panel.
+        /// Silent no-op when no prefix is eligible; never interrupts mid-word typing because the
+        /// trigger is debounced 300ms (via autocompleteTimer) after the user pauses.
+        private func triggerAutocomplete(in editor: EditorTextView) {
+            let text = editor.string as NSString
+            let cursor = editor.selectedRange().location
+            guard cursor <= text.length else { return }
+
+            // HTML tag trigger: "<" immediately before cursor → show tag list
+            if cursor > 0 {
+                let prevChar = text.substring(with: NSRange(location: cursor - 1, length: 1))
+                if prevChar == "<" {
+                    editor.showCompletions(CompletionData.htmlCompletions(prefix: ""), triggerStart: cursor)
+                    return
+                }
+            }
+
+            // Word trigger: 3+ alphanum/underscore chars
+            let wordStart = editor.findWordStart(at: cursor, in: text)
+            let prefixLen = cursor - wordStart
+            guard prefixLen >= 3 else { return }
+            let prefix = text.substring(with: NSRange(location: wordStart, length: prefixLen))
+            let items = CompletionData.completions(
+                prefix: prefix,
+                currentDocText: editor.string,
+                allDocTexts: [editor.string]
+            )
+            guard !items.isEmpty else { return }
+            editor.showCompletions(items, triggerStart: wordStart)
+        }
+
         func textViewDidChangeSelection(_ notification: Notification) {
             if let scrollView = scrollView, let gutter = scrollView.verticalRulerView {
                 gutter.needsDisplay = true
+            }
+
+            // Publish real cursor position so StatusBar shows accurate "Ln X, Col Y".
+            // Previously StatusBar computed `cursorPosition(for: content)` as (line.count, 1)
+            // which was effectively "end of file, column 1" — a visible lie.
+            if let textView = notification.object as? NSTextView {
+                let text = textView.string as NSString
+                let caret = textView.selectedRange().location
+                let clampedCaret = min(caret, text.length)
+                // line: count newlines in [0, caret)
+                var line = 1
+                var lastNewline: Int = -1
+                var i = 0
+                while i < clampedCaret {
+                    if text.character(at: i) == 0x0A {
+                        line += 1
+                        lastNewline = i
+                    }
+                    i += 1
+                }
+                let col = clampedCaret - lastNewline  // 1-based (lastNewline = -1 → col = caret + 1)
+                DispatchQueue.main.async {
+                    DocumentManager.shared.currentCursorLine = line
+                    DocumentManager.shared.currentCursorColumn = col
+                }
             }
         }
 

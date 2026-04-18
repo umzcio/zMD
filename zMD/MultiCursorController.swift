@@ -17,23 +17,17 @@ class MultiCursorController {
         additionalCursors.removeAll()
     }
 
-    func adjustAfterInsert(insertedLength: Int, deletedLength: Int) {
-        let delta = insertedLength - deletedLength
-        // Each cursor shifts by cumulative delta
-        // Since we insert in reverse order, cursors at earlier positions need adjustment
-        for i in 0..<additionalCursors.count {
-            additionalCursors[i].range = NSRange(
-                location: additionalCursors[i].range.location + delta * (additionalCursors.count - i),
-                length: 0
-            )
-        }
-    }
-
-    func adjustAfterDelete() {
-        // After deletion, adjust each cursor position down by 1 per cursor before it
-        for i in 0..<additionalCursors.count {
-            let newLoc = max(0, additionalCursors[i].range.location - (additionalCursors.count - i))
-            additionalCursors[i].range = NSRange(location: newLoc, length: 0)
+    /// Rebuild cursor locations from explicit post-edit ranges produced by the caller.
+    /// Pass the list of (original range, new location) pairs in any order. This replaces the
+    /// previous math-based `adjustAfterInsert` / `adjustAfterDelete`, which assumed cursors were
+    /// sorted and applied a single uniform delta — wrong whenever edits had differing lengths or
+    /// the primary selection was interleaved with the additional cursors.
+    func updatePositions(_ mapping: [(original: NSRange, newLocation: Int)]) {
+        additionalCursors = additionalCursors.compactMap { cursor in
+            guard let entry = mapping.first(where: { $0.original.location == cursor.range.location && $0.original.length == cursor.range.length }) else {
+                return cursor
+            }
+            return CursorState(range: NSRange(location: max(0, entry.newLocation), length: 0))
         }
     }
 }

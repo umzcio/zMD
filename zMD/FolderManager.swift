@@ -17,7 +17,7 @@ class FolderManager: ObservableObject {
 
     private var directoryWatcher: DirectoryWatcher?
     private var securityScopedAccess = false
-    private let bookmarkKey = "FolderBookmarkData"
+    private let bookmarkKey = DefaultsKeys.folderBookmark
 
     private init() {}
 
@@ -50,13 +50,35 @@ class FolderManager: ObservableObject {
         folderURL = url
         isShowingFolderSidebar = true
 
-        refreshFileTree()
+        // Initial tree scan happens off-main so opening a folder with thousands of files doesn't
+        // freeze the UI. We keep `refreshFileTree` callable synchronously for the
+        // DirectoryWatcher change callback, which we also dispatch off-main below.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, url] in
+            let tree = self?.buildTree(at: url, relativeTo: url) ?? []
+            DispatchQueue.main.async {
+                self?.fileTree = tree
+            }
+        }
 
-        // Start watching
+        // Start watching — rebuild off-main on each event too.
         directoryWatcher = DirectoryWatcher(path: url.path) { [weak self] in
-            self?.refreshFileTree()
+            self?.refreshFileTreeAsync()
         }
         directoryWatcher?.startWatching()
+    }
+
+    /// Rebuild file tree on a background queue; publish back to main.
+    /// The DirectoryWatcher fires this after its 300ms debounce, so rapid-fire external edits
+    /// produce one background rebuild each — still O(N) per event, but at least the main thread
+    /// stays responsive.
+    private func refreshFileTreeAsync() {
+        guard let folderURL = folderURL else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, folderURL] in
+            let tree = self?.buildTree(at: folderURL, relativeTo: folderURL) ?? []
+            DispatchQueue.main.async {
+                self?.fileTree = tree
+            }
+        }
     }
 
     func closeFolder() {
@@ -77,7 +99,12 @@ class FolderManager: ObservableObject {
         guard let bookmarkData = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
 
         var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { return }
+        guard let url = try? URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+            // Folder was deleted or the volume is unavailable. Drop the bookmark so we don't
+            // silently retry on every launch forever.
+            UserDefaults.standard.removeObject(forKey: bookmarkKey)
+            return
+        }
 
         if isStale {
             // Re-save bookmark

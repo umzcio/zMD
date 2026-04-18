@@ -208,7 +208,9 @@ class QuickOpenNSView: NSView {
     }
 
     private func updateFilteredResults() {
-        guard let documentManager = documentManager else {
+        // `documentManager` is read in the branches below (updateHeadingResults/updateFileResults),
+        // so a nil guard here just early-returns without doing anything else.
+        guard documentManager != nil else {
             filteredItems = []
             return
         }
@@ -288,7 +290,11 @@ class QuickOpenNSView: NSView {
             return
         }
 
-        let headings = OutlineItem.extractHeadings(from: document.content)
+        // Share the MarkdownParser outline so Quick Switcher heading IDs match the preview's
+        // click targets (stable slugs instead of line-index ids that drift on edits).
+        let headings = MarkdownParser.shared.extractHeadings(document.content).map {
+            OutlineItem(id: $0.id, level: $0.level, text: $0.text)
+        }
 
         if query.isEmpty {
             filteredItems = headings.map { heading in

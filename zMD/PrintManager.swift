@@ -45,104 +45,54 @@ class PrintManager {
     }
 
     private func buildPrintableAttributedString(from content: String) -> NSAttributedString {
+        // Route through MarkdownParser.shared so Print, PDF, HTML, DOCX, RTF, and the live
+        // preview all consume the same element tree. Previously this re-implemented markdown
+        // parsing line-by-line and diverged from the unified parser — headings capped at H4,
+        // no frontmatter support, no Mermaid/math handling, opening fence with language tag
+        // could be mis-detected as a closing fence.
         let result = NSMutableAttributedString()
-        let lines = content.components(separatedBy: .newlines)
-        var i = 0
-
-        let baseFont = NSFont.systemFont(ofSize: 11)
         let defaultAttributes: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
+            .font: NSFont.systemFont(ofSize: 11),
             .foregroundColor: NSColor.black
         ]
 
-        // Skip YAML frontmatter if present
-        if lines.first == "---" {
-            i = 1
-            while i < lines.count && lines[i] != "---" {
-                i += 1
-            }
-            if i < lines.count && lines[i] == "---" {
-                i += 1
-            } else {
-                i = 0
-            }
-        }
+        let elements = MarkdownParser.shared.parse(content)
 
-        while i < lines.count {
-            let line = lines[i]
-
-            // Headings
-            if line.hasPrefix("#### ") {
-                appendHeading(text: String(line.dropFirst(5)), level: 4, to: result)
-            } else if line.hasPrefix("### ") {
-                appendHeading(text: String(line.dropFirst(4)), level: 3, to: result)
-            } else if line.hasPrefix("## ") {
-                appendHeading(text: String(line.dropFirst(3)), level: 2, to: result)
-            } else if line.hasPrefix("# ") {
-                appendHeading(text: String(line.dropFirst(2)), level: 1, to: result)
-            }
-            // Horizontal rule
-            else if isHorizontalRule(line) {
-                appendHorizontalRule(to: result)
-            }
-            // Blockquote
-            else if line.hasPrefix("> ") {
-                var quoteLines: [String] = []
-                while i < lines.count && lines[i].hasPrefix("> ") {
-                    quoteLines.append(String(lines[i].dropFirst(2)))
-                    i += 1
+        for element in elements {
+            switch element {
+            case .heading1(let text): appendHeading(text: text, level: 1, to: result)
+            case .heading2(let text): appendHeading(text: text, level: 2, to: result)
+            case .heading3(let text): appendHeading(text: text, level: 3, to: result)
+            case .heading4(let text): appendHeading(text: text, level: 4, to: result)
+            case .heading5(let text): appendHeading(text: text, level: 4, to: result)  // print caps at 4 sizes
+            case .heading6(let text): appendHeading(text: text, level: 4, to: result)
+            case .paragraph(let text): appendParagraph(text: text, to: result)
+            case .frontmatter: break // skip in print output
+            case .list(let items):
+                for item in items {
+                    appendListItem(level: item.level, text: item.text, isOrdered: item.isOrdered, to: result)
                 }
-                appendBlockquote(text: quoteLines.joined(separator: "\n"), to: result)
-                i -= 1
+            case .codeBlock(let code, _): appendCodeBlock(code: code, to: result)
+            case .mermaidBlock(let code): appendCodeBlock(code: "[mermaid]\n" + code, to: result)
+            case .displayMath(let latex): appendCodeBlock(code: "[math]\n" + latex, to: result)
+            case .table(let rows): appendTable(rows: rows, to: result)
+            case .image(let alt, let path):
+                appendParagraph(text: "[Image: \(alt.isEmpty ? path : alt)]", to: result)
+            case .horizontalRule: appendHorizontalRule(to: result)
+            case .blockquote(let text): appendBlockquote(text: text, to: result)
+            case .htmlBlock(let html): appendParagraph(text: html, to: result)
             }
-            // List items
-            else if isListLine(line) {
-                appendListItem(line: line, to: result)
-            }
-            // Code block
-            else if line.hasPrefix("```") {
-                var codeLines: [String] = []
-                i += 1
-                while i < lines.count && !lines[i].hasPrefix("```") {
-                    codeLines.append(lines[i])
-                    i += 1
-                }
-                appendCodeBlock(code: codeLines.joined(separator: "\n"), to: result)
-            }
-            // Table
-            else if line.hasPrefix("|") && line.hasSuffix("|") {
-                var tableRows: [[String]] = []
-                while i < lines.count && lines[i].hasPrefix("|") {
-                    let currentLine = lines[i].trimmingCharacters(in: .whitespaces)
-                    if !isTableSeparator(currentLine) {
-                        let cells = currentLine
-                            .split(separator: "|")
-                            .map { $0.trimmingCharacters(in: .whitespaces) }
-                            .filter { !$0.isEmpty }
-                        if !cells.isEmpty {
-                            tableRows.append(cells)
-                        }
-                    }
-                    i += 1
-                }
-                if !tableRows.isEmpty {
-                    appendTable(rows: tableRows, to: result)
-                }
-                i -= 1
-            }
-            // Empty line
-            else if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                result.append(NSAttributedString(string: "\n", attributes: defaultAttributes))
-            }
-            // Regular paragraph
-            else if !line.isEmpty {
-                appendParagraph(text: line, to: result)
-            }
-
-            i += 1
+            result.append(NSAttributedString(string: "\n", attributes: defaultAttributes))
         }
 
         return result
+    }
+
+    private func appendListItem(level: Int, text: String, isOrdered: Bool, to result: NSMutableAttributedString) {
+        // Construct the raw line the old helper expected so bullet/indent math stays identical.
+        let indent = String(repeating: "  ", count: level)
+        let marker = isOrdered ? "1. " : "- "
+        appendListItem(line: indent + marker + text, to: result)
     }
 
     private func appendHeading(text: String, level: Int, to result: NSMutableAttributedString) {

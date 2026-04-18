@@ -216,6 +216,12 @@ class AutocompleteWindowController: NSObject {
         guard selectedIndex < items.count, let editor = editorTextView else { return }
         let item = items[selectedIndex]
 
+        // Wrap in its own undo group so Cmd+Z reverts the completion as one atomic step
+        // (it previously coalesced with the in-flight typing, eating the user's 3-char prefix).
+        editor.undoManager?.beginUndoGrouping()
+        editor.undoManager?.setActionName("Autocomplete")
+        defer { editor.undoManager?.endUndoGrouping() }
+
         if editor.shouldChangeText(in: triggerRange, replacementString: item.insertText) {
             editor.replaceCharacters(in: triggerRange, with: item.insertText)
             editor.didChangeText()

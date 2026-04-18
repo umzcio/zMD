@@ -5,7 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var folderManager: FolderManager
     @EnvironmentObject var settings: SettingsManager
-    @AppStorage("showOutline") private var showOutline = false
+    @AppStorage(DefaultsKeys.showOutline) private var showOutline = false
     @State private var selectedHeadingId: String?
     @State private var showQuickOpen = false
     @State private var showCommandPalette = false
@@ -89,8 +89,20 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.15), value: documentManager.isSearching)
             .frame(minWidth: 600, minHeight: 400)
 
-            // Focus mode exit pill
+            // Focus mode exit pill + Escape handler. Attach a hidden cancelAction button so
+            // Escape triggers `isFocusModeActive = false` without needing a local NSEvent monitor.
             if documentManager.isFocusModeActive {
+                // Invisible Escape-to-exit button; accessibility: labeled for screen readers.
+                Button("Exit Focus Mode") {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        documentManager.isFocusModeActive = false
+                    }
+                }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityLabel("Exit Focus Mode")
+
                 VStack {
                     if showFocusExitPill {
                         Button(action: {
@@ -138,11 +150,16 @@ struct ContentView: View {
         .overlay {
             ToastOverlay()
         }
-        .keyboardShortcut("o", modifiers: [.command, .shift])
+        // The `.keyboardShortcut("o", [.command, .shift])` previously attached here was dead —
+        // SwiftUI's .keyboardShortcut only binds to an interactable control (Button, MenuItem).
+        // Without a control it was never wired to anything; the real Quick Open shortcut lives
+        // on the File menu. Removed.
         .onReceive(NotificationCenter.default.publisher(for: .showQuickOpen)) { _ in
+            showCommandPalette = false
             showQuickOpen = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
+            showQuickOpen = false
             showCommandPalette = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleFocusMode)) { _ in
@@ -532,7 +549,9 @@ extension ContentView {
             },
             onMatchCountChanged: { count in
                 documentManager.setRenderedMatchCount(count)
-            }
+            },
+            isRegexSearch: documentManager.isRegexSearch,
+            isCaseSensitive: documentManager.isCaseSensitive
         )
     }
 
@@ -549,7 +568,7 @@ extension ContentView {
 
     @ViewBuilder
     func sourceEditor(for document: MarkdownDocument) -> some View {
-        SourceEditorView(
+        SourceEditorWithMinimap(
             content: sourceEditorBinding(for: document.id),
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
@@ -560,7 +579,7 @@ extension ContentView {
 
     @ViewBuilder
     func syncedSourceEditor(for document: MarkdownDocument) -> some View {
-        SourceEditorView(
+        SourceEditorWithMinimap(
             content: sourceEditorBinding(for: document.id),
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
@@ -570,7 +589,7 @@ extension ContentView {
                 guard documentManager.scrollSyncOrigin != .preview else { return }
                 documentManager.scrollSyncOrigin = .source
                 documentManager.scrollSyncPreviewPercent = percent
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Timing.scrollSyncResetDelay) {
                     if documentManager.scrollSyncOrigin == .source {
                         documentManager.scrollSyncOrigin = .none
                     }
@@ -579,7 +598,52 @@ extension ContentView {
             scrollToPercent: documentManager.isScrollSyncEnabled && documentManager.scrollSyncOrigin == .preview ? documentManager.scrollSyncSourcePercent : nil
         )
     }
+}
 
+/// Composes SourceEditorView + an optional MinimapView side panel.
+/// The minimap is gated on SettingsManager.shared.showMinimap. MinimapView needs live
+/// NSTextView/NSScrollView references to draw the viewport indicator, so we capture them
+/// via SourceEditorView's onViewsReady callback and pass them through once available.
+struct SourceEditorWithMinimap: View {
+    @Binding var content: String
+    let onContentChange: ((String) -> Void)?
+    var zoomLevel: CGFloat = 1.0
+    var onScrollPercentChanged: ((CGFloat) -> Void)?
+    var scrollToPercent: CGFloat?
+
+    @ObservedObject private var settings = SettingsManager.shared
+    @State private var capturedTextView: NSTextView?
+    @State private var capturedScrollView: NSScrollView?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SourceEditorView(
+                content: $content,
+                onContentChange: onContentChange,
+                zoomLevel: zoomLevel,
+                onScrollPercentChanged: onScrollPercentChanged,
+                scrollToPercent: scrollToPercent,
+                onViewsReady: { tv, sv in
+                    capturedTextView = tv
+                    capturedScrollView = sv
+                }
+            )
+
+            if settings.showMinimap, capturedTextView != nil {
+                MinimapViewRepresentable(
+                    textView: capturedTextView,
+                    scrollView: capturedScrollView,
+                    // Uses content.count as a cheap monotonic proxy — MinimapView debounces
+                    // its re-render internally, so false positives from count-collisions are benign.
+                    contentVersion: content.count
+                )
+                .frame(width: 80)
+            }
+        }
+    }
+}
+
+extension ContentView {
     @ViewBuilder
     func syncedPreview(for document: MarkdownDocument) -> some View {
         MarkdownTextView(
@@ -603,13 +667,15 @@ extension ContentView {
                 guard documentManager.scrollSyncOrigin != .source else { return }
                 documentManager.scrollSyncOrigin = .preview
                 documentManager.scrollSyncSourcePercent = percent
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Timing.scrollSyncResetDelay) {
                     if documentManager.scrollSyncOrigin == .preview {
                         documentManager.scrollSyncOrigin = .none
                     }
                 }
             } : nil,
-            scrollToPercent: documentManager.isScrollSyncEnabled && documentManager.scrollSyncOrigin == .source ? documentManager.scrollSyncPreviewPercent : nil
+            scrollToPercent: documentManager.isScrollSyncEnabled && documentManager.scrollSyncOrigin == .source ? documentManager.scrollSyncPreviewPercent : nil,
+            isRegexSearch: documentManager.isRegexSearch,
+            isCaseSensitive: documentManager.isCaseSensitive
         )
     }
 
