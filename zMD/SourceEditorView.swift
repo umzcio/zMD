@@ -71,7 +71,10 @@ struct SourceEditorView: NSViewRepresentable {
             context.coordinator.applyHighlighting(to: textView)
         }
 
-        if textView.string != content {
+        // Only overwrite from binding if the textView isn't the active editor —
+        // otherwise we can clobber in-flight edits during save/isDirty updates.
+        let textViewHasFocus = (textView.window?.firstResponder == textView)
+        if !textViewHasFocus && textView.string != content {
             let selectedRanges = textView.selectedRanges
             textView.string = content
             textView.selectedRanges = selectedRanges
