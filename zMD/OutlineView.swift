@@ -3,7 +3,10 @@ import SwiftUI
 struct OutlineView: View {
     let content: String
     @Binding var selectedHeadingId: String?
-    @State private var headings: [OutlineItem] = []
+
+    private var headings: [OutlineItem] {
+        OutlineItem.extractHeadings(from: content)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -25,8 +28,16 @@ struct OutlineView: View {
             // Outline items
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(headings) { item in
-                        OutlineItemView(item: item, selectedId: $selectedHeadingId)
+                    if headings.isEmpty {
+                        Text("No headings")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                    } else {
+                        ForEach(headings) { item in
+                            OutlineItemView(item: item, selectedId: $selectedHeadingId)
+                        }
                     }
                 }
                 .padding(.vertical, 8)
@@ -34,8 +45,6 @@ struct OutlineView: View {
         }
         .frame(width: 250)
         .background(.ultraThinMaterial)
-        .onAppear { headings = OutlineItem.extractHeadings(from: content) }
-        .onChange(of: content) { _ in headings = OutlineItem.extractHeadings(from: content) }
     }
 }
 
