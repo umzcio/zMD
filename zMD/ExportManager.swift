@@ -93,10 +93,14 @@ class ExportManager {
 
                         context.saveGState()
 
-                        // Set clipping region to text area
+                        // PDF origin is bottom-left; flip the CTM so our top-down
+                        // coordinates (and the flipped: true NSGraphicsContext) are
+                        // accurate. Without this, NSAttributedString renders mirrored.
+                        context.translateBy(x: 0, y: pageSize.height)
+                        context.scaleBy(x: 1, y: -1)
+
                         context.clip(to: textRect)
 
-                        // Create draw rect with offset for current page
                         let drawRect = NSRect(
                             x: textRect.minX,
                             y: textRect.minY - currentY,
