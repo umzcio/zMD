@@ -120,6 +120,13 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(showMinimap, forKey: DefaultsKeys.showMinimap) }
     }
 
+    /// Tick that bumps when the system effective appearance changes (light ↔ dark). Views
+    /// observing SettingsManager re-render and pass a fresh appearance into MarkdownTextView's
+    /// cache key so cached code-block colors get rebuilt for the new theme. Without this,
+    /// toggling system theme served stale cached colors until the next content edit (H4).
+    @Published var appearanceTick: Int = 0
+    private var appearanceObserver: NSKeyValueObservation?
+
     @Published var showLineNumbers: Bool {
         didSet { UserDefaults.standard.set(showLineNumbers, forKey: DefaultsKeys.showLineNumbers) }
     }
@@ -190,5 +197,17 @@ class SettingsManager: ObservableObject {
 
         self.showLineNumbers = UserDefaults.standard.object(forKey: DefaultsKeys.showLineNumbers) == nil
             ? true : UserDefaults.standard.bool(forKey: DefaultsKeys.showLineNumbers)
+
+        // Observe NSApp.effectiveAppearance so views observing SettingsManager re-render on
+        // system theme toggle. NSApp posts a KVO change when light ↔ dark; we just bump a tick.
+        self.appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.appearanceTick &+= 1
+            }
+        }
+    }
+
+    deinit {
+        appearanceObserver?.invalidate()
     }
 }

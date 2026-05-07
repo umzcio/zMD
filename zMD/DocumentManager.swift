@@ -84,6 +84,10 @@ class DocumentManager: ObservableObject {
 
     // Reading position memory
     private var scrollPositions: [String: CGFloat] = [:]
+    // Per-path access timestamps so eviction can be LRU rather than random. Without this,
+    // `Dictionary.keys.prefix(excess)` returned in unspecified order and could drop the user's
+    // currently-open doc when the cap was hit (M9).
+    private var scrollPositionTouched: [String: Date] = [:]
     private let scrollPositionsKey = DefaultsKeys.scrollPositions
 
     // Key aliases — centralized in DefaultsKeys so key strings live in a single place.
@@ -348,20 +352,26 @@ class DocumentManager: ObservableObject {
             return
         }
         scrollPositions[url.path] = position
+        scrollPositionTouched[url.path] = Date()
 
-        // Prune if exceeding limit (remove entries for files that no longer exist)
+        // Prune if exceeding limit. First drop stale entries (files no longer on disk); if still
+        // over cap, evict the LRU entries by access timestamp.
         if scrollPositions.count > maxScrollPositions {
             let existingPaths = scrollPositions.keys.filter { FileManager.default.fileExists(atPath: $0) }
             let stalePaths = Set(scrollPositions.keys).subtracting(existingPaths)
             for path in stalePaths {
                 scrollPositions.removeValue(forKey: path)
+                scrollPositionTouched.removeValue(forKey: path)
             }
-            // If still over limit, just keep the most recent entries (by removing random old ones)
             if scrollPositions.count > maxScrollPositions {
                 let excess = scrollPositions.count - maxScrollPositions
-                let keysToRemove = Array(scrollPositions.keys.prefix(excess))
-                for key in keysToRemove {
+                let lruKeys = scrollPositionTouched
+                    .sorted { $0.value < $1.value }
+                    .prefix(excess)
+                    .map(\.key)
+                for key in lruKeys {
                     scrollPositions.removeValue(forKey: key)
+                    scrollPositionTouched.removeValue(forKey: key)
                 }
             }
         }
@@ -483,6 +493,11 @@ class DocumentManager: ObservableObject {
             if let url = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) {
                 accessGranted = url.startAccessingSecurityScopedResource()
                 resolvedURL = url
+                // M10: regenerate the bookmark if stale so it doesn't keep accumulating drift
+                // and eventually fail to resolve, falling silently to NSSavePanel.
+                if isStale, let fresh = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+                    openDocuments[index].bookmarkData = fresh
+                }
             }
         }
 

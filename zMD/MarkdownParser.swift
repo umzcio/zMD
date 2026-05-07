@@ -256,11 +256,19 @@ class MarkdownParser {
                     elements.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: normalizedLang))
                 }
             }
-            // Blockquote
-            else if line.hasPrefix("> ") {
+            // Blockquote — accept "> text", bare ">" (paragraph separator inside the quote), and
+            // indented "  > text" forms. Previously only `hasPrefix("> ")` matched, so a bare `>`
+            // line ended the block (CommonMark calls this a "lazy continuation") and indented
+            // blockquotes weren't recognized at all.
+            else if trimmedLine.hasPrefix(">") {
                 var quoteLines: [String] = []
-                while i < lines.count && lines[i].hasPrefix("> ") {
-                    quoteLines.append(String(lines[i].dropFirst(2)))
+                while i < lines.count {
+                    let lineTrim = lines[i].trimmingCharacters(in: .whitespaces)
+                    guard lineTrim.hasPrefix(">") else { break }
+                    let stripped = lineTrim.dropFirst() // drop the leading >
+                    // Drop optional single space after > (per CommonMark)
+                    let body = stripped.hasPrefix(" ") ? String(stripped.dropFirst()) : String(stripped)
+                    quoteLines.append(body)
                     i += 1
                 }
                 elements.append(.blockquote(quoteLines.joined(separator: "\n")))
@@ -842,7 +850,6 @@ class MarkdownParser {
         var headings: [(id: String, level: Int, text: String, lineIndex: Int)] = []
         let lines = markdown.components(separatedBy: .newlines)
         var slugCounts: [String: Int] = [:]
-        var inCodeFence = false
         var i = 0
 
         // Skip YAML frontmatter: if the file opens with `---` and has a matching closer, jump past it.
@@ -854,16 +861,54 @@ class MarkdownParser {
             }
         }
 
+        // Track open fence width so a `` ``` `` line inside a 4-backtick block doesn't end it.
+        // M1: previously toggling on any 3-backtick line emitted phantom "headings" from `#`
+        // lines that lived inside ` ```` `-fenced blocks containing nested ` ``` ` examples.
+        var openFenceLen: Int = 0
+        // Track HTML block: accumulate lines from the open until isHTMLBalanced returns true,
+        // then exit. Mirrors parse()'s loop so a `# X` line inside a `<div>...</div>` block
+        // doesn't get counted as a heading (M4).
+        var htmlBuffer: [String]? = nil
+
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-            if trimmed.hasPrefix("```") {
-                inCodeFence.toggle()
+            // Fence enter/exit
+            if trimmed.hasPrefix("```") && htmlBuffer == nil {
+                let fenceLen = trimmed.prefix { $0 == "`" }.count
+                if openFenceLen == 0 {
+                    openFenceLen = fenceLen
+                } else if fenceLen >= openFenceLen && trimmed.allSatisfy({ $0 == "`" }) {
+                    openFenceLen = 0
+                }
                 i += 1
                 continue
             }
-            if inCodeFence {
+            if openFenceLen > 0 {
+                i += 1
+                continue
+            }
+
+            // Inside an open HTML block — keep accumulating until balanced.
+            if var buf = htmlBuffer {
+                buf.append(line)
+                if isHTMLBalanced(buf.joined(separator: "\n")) {
+                    htmlBuffer = nil
+                } else {
+                    htmlBuffer = buf
+                }
+                i += 1
+                continue
+            }
+
+            // New HTML block entry: only if line opens a recognized block tag and isn't
+            // immediately balanced on its own line.
+            if isHTMLLine(line) {
+                if !isHTMLBalanced(line) {
+                    htmlBuffer = [line]
+                }
+                // Either way, an HTML-block-opening line is not a heading.
                 i += 1
                 continue
             }

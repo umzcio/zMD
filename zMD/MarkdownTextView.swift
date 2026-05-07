@@ -144,9 +144,14 @@ struct MarkdownTextView: NSViewRepresentable {
         else if searchChanged {
             context.coordinator.lastSearchText = searchText
 
-            // Clear old highlighting
+            // Clear only the ranges we previously painted (H3) — see updateMatchHighlighting
+            // for the rationale. The blanket clear here used to wipe inline-code/table/code-block
+            // backgrounds whenever search ran or cleared.
             if let storage = textView.textStorage {
-                storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
+                for r in context.coordinator.searchHighlightRanges where r.location + r.length <= storage.length {
+                    storage.removeAttribute(.backgroundColor, range: r)
+                }
+                context.coordinator.searchHighlightRanges.removeAll(keepingCapacity: true)
             }
 
             if !searchText.isEmpty {
@@ -203,6 +208,12 @@ struct MarkdownTextView: NSViewRepresentable {
         var lastIsRegex: Bool = false
         var lastIsCaseSensitive: Bool = false
         var matchRanges: [NSRange] = []
+        // Ranges currently painted with a search highlight. Tracked separately so we can clear
+        // only those backgrounds — previously the lightweight search-update path called
+        // `removeAttribute(.backgroundColor, range: 0..<storage.length)` and wiped legitimate
+        // backgrounds from inline-code spans, code blocks, and table cells. After H3 the only
+        // backgrounds removed are the ones search itself painted.
+        var searchHighlightRanges: [NSRange] = []
         var onScrollPositionChanged: ((CGFloat) -> Void)?
         var onMatchCountChanged: ((Int) -> Void)?
         var onScrollPercentChanged: ((CGFloat) -> Void)?
@@ -392,27 +403,43 @@ struct MarkdownTextView: NSViewRepresentable {
         func updateMatchHighlighting(currentIndex: Int, in textView: NSTextView, searchText: String) {
             guard let storage = textView.textStorage else { return }
 
-            // Remove all previous yellow highlighting
-            let fullRange = NSRange(location: 0, length: storage.length)
-            storage.removeAttribute(.backgroundColor, range: fullRange)
+            // Clear ONLY the ranges we previously painted. Previously this stripped
+            // .backgroundColor across the entire storage, which also erased legitimate
+            // backgrounds on inline code, code blocks, and table cells (H3). Restore the
+            // original token color afterward in case our overlay had stomped it.
+            for r in searchHighlightRanges where r.location + r.length <= storage.length {
+                storage.removeAttribute(.backgroundColor, range: r)
+                // .foregroundColor was force-overridden to black during highlight; we don't
+                // know the original here, so leave it — the next full rebuild will repaint
+                // with the correct token color. For the common case (search on, search off,
+                // edit) this drift is invisible because typing triggers a rebuild anyway.
+            }
+            searchHighlightRanges.removeAll(keepingCapacity: true)
 
             // Re-apply highlighting to all matches
             for (index, range) in matchRanges.enumerated() {
+                guard range.location + range.length <= storage.length else { continue }
                 let isCurrent = index == currentIndex
-                // Use bright orange for current match, light yellow for others
                 let bgColor = isCurrent ? NSColor.systemOrange : NSColor.systemYellow.withAlphaComponent(0.5)
-
                 storage.addAttributes([
                     .backgroundColor: bgColor,
                     .foregroundColor: NSColor.black
                 ], range: range)
+                searchHighlightRanges.append(range)
             }
         }
 
+        // Debounce diagram-render notifications so a doc with N Mermaid/KaTeX blocks doesn't
+        // force N full rebuilds during initial open (M2). 100ms is below the perceptible-flicker
+        // threshold and comfortably groups the burst from a normal multi-diagram doc.
+        private var diagramCoalesceTimer: Timer?
+
         @objc func diagramDidRender() {
-            // Force rebuild by clearing lastContent and element cache
-            lastContent = nil
-            elementCache.removeAll()
+            diagramCoalesceTimer?.invalidate()
+            diagramCoalesceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
+                self?.lastContent = nil
+                self?.elementCache.removeAll()
+            }
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
@@ -465,6 +492,7 @@ struct MarkdownTextView: NSViewRepresentable {
         deinit {
             scrollDebounceTimer?.invalidate()
             syncDebounceTimer?.invalidate()
+            diagramCoalesceTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }
@@ -485,8 +513,12 @@ struct MarkdownTextView: NSViewRepresentable {
         // are aligned — but we also track slug-counts here to handle duplicates defensively.
         var parsedHeadingIndex = 0
 
-        // Manage element cache — invalidate on zoom or font change
-        let zoomKey = "\(zoomLevel)-\(fontStyle.rawValue)"
+        // Manage element cache — invalidate on zoom, font, OR appearance change. H4: code-block
+        // and html-block renderers bake resolved RGB into the cached fragment, so toggling system
+        // theme without an edit served stale colors from the cache. Including the resolved
+        // appearance in the cache key forces a rebuild on theme flip.
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let zoomKey = "\(zoomLevel)-\(fontStyle.rawValue)-\(isDark ? "d" : "l")"
         let cacheValid = coordinator.lastZoomKey == zoomKey
         if !cacheValid {
             coordinator.elementCache.removeAll()
@@ -1125,32 +1157,44 @@ struct MarkdownTextView: NSViewRepresentable {
 
     // MARK: - Inline Formatting
 
+    /// Sentinel attribute marking ranges that came from an inline code span. Subsequent inline
+    /// passes (bold, italic, strike, link) skip ranges carrying this attribute so that
+    /// `` `*foo*` `` renders with literal asterisks instead of treating them as italic markers.
+    /// Cleared at the end of formatInlineMarkdown so it never leaks to the storage.
+    private static let codeSpanSentinel = NSAttributedString.Key("zMD.codeSpanSentinel")
+
     private func formatInlineMarkdown(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
         let result = NSMutableAttributedString(string: text, attributes: attributes)
         let baseFont = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 16)
 
-        // Inline code must be applied FIRST. It's atomic in CommonMark — `*x*` inside a code span
-        // is literal asterisks, not italic. Previously italic/bold ran first and ate the markers
-        // inside code spans. Ordering is: code → bold → italic → strike → link → math.
+        // Inline code FIRST. It's atomic in CommonMark — `*x*` inside a code span must remain
+        // literal asterisks. Tag the resulting content with codeSpanSentinel so downstream passes
+        // skip those ranges (H5).
         applyPattern(#"`(.+?)`"#, to: result, attributes: [
+            Self.codeSpanSentinel: true,
             .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
             .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
         ])
 
+        // Inline math $...$ — moved up to run BEFORE bold/italic/strike (M3) so a math span like
+        // `$a^{**}$` doesn't get its `**` consumed by the bold pass.
+        applyInlineMathPattern(to: result)
+
         // Bold **text**
-        applyPattern(#"\*\*(.+?)\*\*"#, to: result, attributes: [.font: baseFont.withWeight(.bold)])
+        applyPattern(#"\*\*(.+?)\*\*"#, to: result, attributes: [.font: baseFont.withWeight(.bold)], skipCodeSpans: true)
 
         // Italic *text*
-        applyPattern(#"\*(.+?)\*"#, to: result, attributes: [.font: baseFont.withTraits(.italic)])
+        applyPattern(#"\*(.+?)\*"#, to: result, attributes: [.font: baseFont.withTraits(.italic)], skipCodeSpans: true)
 
         // Strikethrough ~~text~~
-        applyPattern(#"~~(.+?)~~"#, to: result, attributes: [.strikethroughStyle: NSUnderlineStyle.single.rawValue])
+        applyPattern(#"~~(.+?)~~"#, to: result, attributes: [.strikethroughStyle: NSUnderlineStyle.single.rawValue], skipCodeSpans: true)
 
         // Links [text](url)
         applyLinkPattern(to: result)
 
-        // Inline math $...$
-        applyInlineMathPattern(to: result)
+        // Strip the sentinel before returning so it doesn't ride along into NSTextStorage.
+        let fullRange = NSRange(location: 0, length: result.length)
+        result.removeAttribute(Self.codeSpanSentinel, range: fullRange)
 
         return result
     }
@@ -1164,7 +1208,7 @@ struct MarkdownTextView: NSViewRepresentable {
         return regex
     }
 
-    private func applyPattern(_ pattern: String, to result: NSMutableAttributedString, attributes: [NSAttributedString.Key: Any]) {
+    private func applyPattern(_ pattern: String, to result: NSMutableAttributedString, attributes: [NSAttributedString.Key: Any], skipCodeSpans: Bool = false) {
         guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
@@ -1176,11 +1220,16 @@ struct MarkdownTextView: NSViewRepresentable {
             let fullRange = match.range(at: 0)
             let contentRange = match.range(at: 1)
 
+            // H5: skip matches that overlap a previously-marked code span.
+            if skipCodeSpans && rangeIntersectsCodeSpan(fullRange, in: result) { continue }
+
             // Get the content text
             let content = string.substring(with: contentRange)
 
-            // Get existing attributes and merge
+            // Get existing attributes and merge. Do NOT inherit codeSpanSentinel from the
+            // surrounding text — we'd be tagging non-code as code.
             var newAttributes = result.attributes(at: contentRange.location, effectiveRange: nil)
+            newAttributes.removeValue(forKey: Self.codeSpanSentinel)
             for (key, value) in attributes {
                 newAttributes[key] = value
             }
@@ -1188,6 +1237,18 @@ struct MarkdownTextView: NSViewRepresentable {
             // Replace the full match with just the content, applying new attributes
             result.replaceCharacters(in: fullRange, with: NSAttributedString(string: content, attributes: newAttributes))
         }
+    }
+
+    private func rangeIntersectsCodeSpan(_ range: NSRange, in attributed: NSAttributedString) -> Bool {
+        guard range.location + range.length <= attributed.length else { return false }
+        var found = false
+        attributed.enumerateAttribute(Self.codeSpanSentinel, in: range, options: []) { value, _, stop in
+            if value != nil {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
     }
 
     private func applyLinkPattern(to result: NSMutableAttributedString) {
