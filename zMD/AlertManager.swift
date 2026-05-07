@@ -52,15 +52,27 @@ class AlertManager {
     }
 
     /// Show a dialog asking to reload a changed file
-    func showFileChangedDialog(fileName: String) -> FileChangedAction {
+    /// Show the file-changed-externally dialog. When `hasUnsavedChanges` is true the message
+    /// is rewritten to warn the user that "Reload" will destroy their local edits — closing
+    /// a real data-loss path where `git pull` while a doc was dirty would silently overwrite
+    /// the user's work the moment they hit "Reload" by reflex.
+    func showFileChangedDialog(fileName: String, hasUnsavedChanges: Bool = false) -> FileChangedAction {
         let alert = NSAlert()
         alert.messageText = "File Changed Externally"
-        alert.informativeText = "\"\(fileName)\" has been modified by another application. Do you want to reload it?"
-        alert.alertStyle = .informational
-
-        alert.addButton(withTitle: "Reload")
-        alert.addButton(withTitle: "Ignore")
-        alert.addButton(withTitle: "Ignore All")
+        if hasUnsavedChanges {
+            alert.informativeText = "\"\(fileName)\" has been modified by another application, and you have unsaved local changes. Reloading will permanently discard your edits."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Discard My Changes & Reload")
+            alert.addButton(withTitle: "Keep My Changes")
+            alert.addButton(withTitle: "Ignore All Future Changes")
+            alert.buttons.first?.hasDestructiveAction = true
+        } else {
+            alert.informativeText = "\"\(fileName)\" has been modified by another application. Do you want to reload it?"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Reload")
+            alert.addButton(withTitle: "Ignore")
+            alert.addButton(withTitle: "Ignore All")
+        }
 
         let response = alert.runModal()
         switch response {

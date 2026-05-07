@@ -666,14 +666,75 @@ class MarkdownParser {
             html += "</table>\n"
             return html
         case .image(let alt, let path):
-            return "<img src=\"\(escapeHTML(path))\" alt=\"\(escapeHTML(alt))\">\n"
+            // C3: also clean image src — javascript: / vbscript: are not normally seen for
+            // <img> but defense-in-depth. Allows http/https/file/relative/data:image.
+            return "<img src=\"\(escapeHTML(Self.sanitizeURLScheme(path)))\" alt=\"\(escapeHTML(alt))\">\n"
         case .horizontalRule:
             return "<hr>\n"
         case .blockquote(let text):
             return "<blockquote>\(formatInlineHTML(text))</blockquote>\n"
         case .htmlBlock(let html):
-            return html + "\n"
+            // C2: htmlBlock content is user-controlled markdown — when re-emitted into an
+            // exported HTML file it would otherwise execute on open. Strip dangerous tags
+            // (script/iframe/object/embed/style/link/meta) and event-handler attributes
+            // before passing through. Conservative allowlist of safe block tags survives.
+            return Self.sanitizeHTMLBlock(html) + "\n"
         }
+    }
+
+    /// Strip script-like tags and inline event-handler attributes from a user-supplied HTML
+    /// block before emitting in an exported document. Defensive — not a full sanitizer, but
+    /// closes the obvious XSS surface introduced by `<details ontoggle>`, `<a onclick>`,
+    /// `<iframe>`, etc. Used by C2 fix.
+    private static func sanitizeHTMLBlock(_ html: String) -> String {
+        var s = html
+        // Remove tag pairs and self-closing forms for dangerous elements (case-insensitive).
+        let dangerousTags = ["script", "iframe", "object", "embed", "applet", "style", "link", "meta", "form", "base"]
+        for tag in dangerousTags {
+            // Drop <tag ...> ... </tag>  and  <tag .../>  in any case.
+            let pairPattern = "(?is)<\\s*\(tag)\\b[^>]*>.*?<\\s*/\\s*\(tag)\\s*>"
+            s = s.replacingOccurrences(of: pairPattern, with: "", options: .regularExpression)
+            let solo = "(?i)<\\s*/?\\s*\(tag)\\b[^>]*/?\\s*>"
+            s = s.replacingOccurrences(of: solo, with: "", options: .regularExpression)
+        }
+        // Strip on*="..." / on*='...' / on*=value event-handler attributes.
+        s = s.replacingOccurrences(
+            of: #"(?i)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#,
+            with: "",
+            options: .regularExpression
+        )
+        // Neutralize javascript:/vbscript:/data:text URLs in href / src / action / formaction.
+        s = s.replacingOccurrences(
+            of: #"(?i)(href|src|action|formaction)\s*=\s*("|')\s*(javascript:|vbscript:|data:text)[^"']*\2"#,
+            with: "$1=\"#\"",
+            options: .regularExpression
+        )
+        return s
+    }
+
+    /// C3: Allow only safe URL schemes in markdown link `href`. Anything else is rewritten
+    /// to `#` so an exported HTML can't execute `javascript:` / `data:text/html` payloads
+    /// when opened in a browser. Relative paths and fragment links pass through unchanged.
+    static func sanitizeURLScheme(_ url: String) -> String {
+        let trimmed = url.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return "#" }
+        // Schemeless / fragment / relative paths are fine.
+        if trimmed.hasPrefix("#") || trimmed.hasPrefix("/") || trimmed.hasPrefix("./") || trimmed.hasPrefix("../") {
+            return trimmed
+        }
+        // No colon = no scheme = relative.
+        guard let colon = trimmed.firstIndex(of: ":") else { return trimmed }
+        let scheme = trimmed[..<colon].lowercased()
+        // No `/` before the colon = file or filename with `:` in it = let it pass.
+        if scheme.contains("/") { return trimmed }
+        let allowed: Set<String> = ["http", "https", "mailto", "tel", "ftp", "file"]
+        if allowed.contains(scheme) { return trimmed }
+        // Allow data:image/* but not data:text/html or other arbitrary data: payloads.
+        if scheme == "data" {
+            let rest = trimmed[trimmed.index(after: colon)...].lowercased()
+            if rest.hasPrefix("image/") { return trimmed }
+        }
+        return "#"
     }
 
     // MARK: - Inline Formatting
@@ -703,12 +764,24 @@ class MarkdownParser {
             options: .regularExpression
         )
 
-        // Links [text](url)
-        result = result.replacingOccurrences(
-            of: #"\[([^\]]+)\]\(([^\)]+)\)"#,
-            with: "<a href=\"$2\">$1</a>",
-            options: .regularExpression
-        )
+        // Links [text](url) — C3: allowlist URL scheme so exported HTML can't execute
+        // `javascript:` or render `data:text/html` payloads when opened in a browser.
+        // We use a regex to find matches, then rewrite each one with a sanitized href.
+        if let linkRegex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^\)]+)\)"#) {
+            let ns = result as NSString
+            let matches = linkRegex.matches(in: result, range: NSRange(location: 0, length: ns.length)).reversed()
+            let mutable = NSMutableString(string: result)
+            for m in matches where m.numberOfRanges == 3 {
+                let label = ns.substring(with: m.range(at: 1))
+                let rawHref = ns.substring(with: m.range(at: 2))
+                let safeHref = Self.sanitizeURLScheme(rawHref)
+                let escapedHref = safeHref
+                    .replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "\"", with: "&quot;")
+                mutable.replaceCharacters(in: m.range, with: "<a href=\"\(escapedHref)\">\(label)</a>")
+            }
+            result = mutable as String
+        }
 
         // Strikethrough ~~text~~
         result = result.replacingOccurrences(

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Security
 
 class UpdateManager: ObservableObject {
     static let shared = UpdateManager()
@@ -113,46 +114,75 @@ class UpdateManager: ObservableObject {
         isDownloading = true
         downloadProgress = 0
 
-        let session = URLSession(configuration: .default, delegate: nil, delegateQueue: .main)
+        // Use a default-queue session so the completion fires off main; we hop to main only
+        // for the small amount of UI state-flipping. The big work (mount/copy/detach) runs on
+        // a background queue inside installFromDMG to keep the main thread responsive — the
+        // previous code blocked main for several seconds, freezing the UI and risking watchdog kills.
+        let session = URLSession(configuration: .default)
         let task = session.downloadTask(with: url) { [weak self] tempURL, response, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.isDownloading = false
+            guard let self = self else { return }
 
-                if let error = error {
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.isDownloading = false
                     AlertManager.shared.showError( "Download Failed", message: error.localizedDescription)
-                    return
                 }
-
-                guard let tempURL = tempURL else {
+                return
+            }
+            guard let tempURL = tempURL else {
+                DispatchQueue.main.async {
+                    self.isDownloading = false
                     AlertManager.shared.showError( "Download Failed", message: "No file was downloaded.")
-                    return
                 }
+                return
+            }
 
-                self.installFromDMG(at: tempURL)
+            // Copy off URLSession's temp area before that gets cleaned up.
+            let stableDMGPath = FileManager.default.temporaryDirectory.appendingPathComponent("zMD-update.dmg")
+            try? FileManager.default.removeItem(at: stableDMGPath)
+            do {
+                try FileManager.default.copyItem(at: tempURL, to: stableDMGPath)
+            } catch {
+                DispatchQueue.main.async {
+                    self.isDownloading = false
+                    AlertManager.shared.showError("Update Failed", message: "Could not prepare DMG: \(error.localizedDescription)")
+                }
+                return
+            }
+
+            // Heavy work (hdiutil + /Applications copy) on a background queue.
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.installFromDMG(at: stableDMGPath)
             }
         }
         task.resume()
     }
 
-    private func installFromDMG(at dmgPath: URL) {
+    /// Install the new app bundle. MUST be called off main — runs hdiutil subprocesses,
+    /// codesign verification, and an /Applications copy that together can take several seconds.
+    /// Hops to main only for the relaunch prompt at the end.
+    private func installFromDMG(at stableDMGPath: URL) {
         let fileManager = FileManager.default
 
-        // Copy DMG to a stable temp location (download temp files get cleaned up)
-        let stableDMGPath = fileManager.temporaryDirectory.appendingPathComponent("zMD-update.dmg")
-        try? fileManager.removeItem(at: stableDMGPath)
-        do {
-            try fileManager.copyItem(at: dmgPath, to: stableDMGPath)
-        } catch {
-            AlertManager.shared.showError( "Update Failed", message: "Could not prepare DMG: \(error.localizedDescription)")
-            return
+        func reportError(_ message: String, detachVolume: String? = nil) {
+            if let v = detachVolume {
+                let detach = Process()
+                detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                detach.arguments = ["detach", v, "-quiet"]
+                try? detach.run()
+                detach.waitUntilExit()
+            }
+            try? fileManager.removeItem(at: stableDMGPath)
+            DispatchQueue.main.async {
+                self.isDownloading = false
+                AlertManager.shared.showError("Update Failed", message: message)
+            }
         }
 
         // Mount the DMG
         let mountProcess = Process()
         mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
         mountProcess.arguments = ["attach", stableDMGPath.path, "-nobrowse", "-plist"]
-
         let pipe = Pipe()
         mountProcess.standardOutput = pipe
         mountProcess.standardError = FileHandle.nullDevice
@@ -161,15 +191,14 @@ class UpdateManager: ObservableObject {
             try mountProcess.run()
             mountProcess.waitUntilExit()
         } catch {
-            AlertManager.shared.showError( "Update Failed", message: "Could not mount DMG: \(error.localizedDescription)")
+            reportError("Could not mount DMG: \(error.localizedDescription)")
             return
         }
 
-        // Parse mount point from plist output
         let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
         guard let plist = try? PropertyListSerialization.propertyList(from: outputData, format: nil) as? [String: Any],
               let entities = plist["system-entities"] as? [[String: Any]] else {
-            AlertManager.shared.showError( "Update Failed", message: "Could not read DMG mount info.")
+            reportError("Could not read DMG mount info.")
             return
         }
 
@@ -180,63 +209,109 @@ class UpdateManager: ObservableObject {
                 break
             }
         }
-
         guard let volumePath = mountPoint else {
-            AlertManager.shared.showError( "Update Failed", message: "Could not find DMG mount point.")
+            reportError("Could not find DMG mount point.")
             return
         }
 
-        // Find .app in the mounted volume
         let volumeURL = URL(fileURLWithPath: volumePath)
         guard let contents = try? fileManager.contentsOfDirectory(at: volumeURL, includingPropertiesForKeys: nil),
               let appURL = contents.first(where: { $0.pathExtension == "app" }) else {
-            // Detach
-            let detach = Process()
-            detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            detach.arguments = ["detach", volumePath, "-quiet"]
-            try? detach.run()
-            AlertManager.shared.showError( "Update Failed", message: "No app found in DMG.")
+            reportError("No app found in DMG.", detachVolume: volumePath)
+            return
+        }
+
+        // Verify the downloaded bundle: codesign valid AND same Team ID as the running process.
+        // Without this, a compromised release URL or any future TLS issue could silently
+        // replace /Applications/zMD.app with arbitrary code that auto-launches.
+        guard let teamID = currentTeamID() else {
+            reportError("Cannot determine current bundle Team ID; refusing to auto-install.", detachVolume: volumePath)
+            return
+        }
+        switch verifySignature(at: appURL, requireTeamID: teamID) {
+        case .ok:
+            break
+        case .invalid(let reason):
+            reportError("Downloaded app failed signature check: \(reason). Aborting auto-install.", detachVolume: volumePath)
             return
         }
 
         let destURL = URL(fileURLWithPath: "/Applications/zMD.app")
 
-        // Remove old app and copy new one
         do {
             if fileManager.fileExists(atPath: destURL.path) {
                 try fileManager.removeItem(at: destURL)
             }
             try fileManager.copyItem(at: appURL, to: destURL)
         } catch {
-            // Detach
-            let detach = Process()
-            detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            detach.arguments = ["detach", volumePath, "-quiet"]
-            try? detach.run()
-            AlertManager.shared.showError( "Update Failed", message: "Could not install app: \(error.localizedDescription)")
+            reportError("Could not install app: \(error.localizedDescription)", detachVolume: volumePath)
             return
         }
 
-        // Detach DMG
+        // Detach + cleanup
         let detach = Process()
         detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
         detach.arguments = ["detach", volumePath, "-quiet"]
         try? detach.run()
-
-        // Clean up temp DMG
+        detach.waitUntilExit()
         try? fileManager.removeItem(at: stableDMGPath)
 
-        // Prompt to relaunch
-        let shouldRelaunch = AlertManager.shared.showConfirmation(
-            title: "Update Installed",
-            message: "zMD \(latestVersion) has been installed to /Applications. Relaunch now?",
-            confirmButton: "Relaunch",
-            cancelButton: "Later"
-        )
-
-        if shouldRelaunch {
-            relaunch()
+        // Hop to main for the relaunch prompt.
+        DispatchQueue.main.async {
+            self.isDownloading = false
+            let shouldRelaunch = AlertManager.shared.showConfirmation(
+                title: "Update Installed",
+                message: "zMD \(self.latestVersion) has been installed to /Applications. Relaunch now?",
+                confirmButton: "Relaunch",
+                cancelButton: "Later"
+            )
+            if shouldRelaunch { self.relaunch() }
         }
+    }
+
+    // MARK: - Code-signing verification
+
+    private enum VerifyResult {
+        case ok
+        case invalid(String)
+    }
+
+    /// The Team ID of the currently-running process bundle. Used as the trust anchor for
+    /// auto-update — the new bundle MUST be signed by the same team or we refuse to install.
+    private func currentTeamID() -> String? {
+        var staticCode: SecStaticCode?
+        let bundleURL = Bundle.main.bundleURL
+        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode) == errSecSuccess,
+              let code = staticCode else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return nil }
+        return dict[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
+    private func verifySignature(at url: URL, requireTeamID expectedTeamID: String) -> VerifyResult {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+              let code = staticCode else {
+            return .invalid("Cannot create static code reference")
+        }
+        // Strict signature check: covers tampering, broken signatures, missing resources.
+        // Default flags (empty set) perform a strict validation including resource hashes.
+        let validity = SecStaticCodeCheckValidity(code, [], nil)
+        guard validity == errSecSuccess else {
+            return .invalid("codesign validity \(validity)")
+        }
+        // Team ID check: must match the running app to prevent swap-in of an unrelated signed app.
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any],
+              let foundTeamID = dict[kSecCodeInfoTeamIdentifier as String] as? String else {
+            return .invalid("Could not extract Team ID from new bundle")
+        }
+        guard foundTeamID == expectedTeamID else {
+            return .invalid("Team ID mismatch: expected \(expectedTeamID), got \(foundTeamID)")
+        }
+        return .ok
     }
 
     private func relaunch() {

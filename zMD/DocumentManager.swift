@@ -951,8 +951,11 @@ extension DocumentManager: FileWatcherDelegate {
         pendingExternalChange.insert(document.id)
         defer { pendingExternalChange.remove(document.id) }
 
-        // Ask user what to do
-        let action = alertManager.showFileChangedDialog(fileName: url.lastPathComponent)
+        // C4: Pass dirty state so the user is warned before destroying unsaved local edits.
+        let action = alertManager.showFileChangedDialog(
+            fileName: url.lastPathComponent,
+            hasUnsavedChanges: document.isDirty
+        )
 
         switch action {
         case .reload:
