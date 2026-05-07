@@ -190,7 +190,7 @@ struct zMDApp: App {
                     Button("PDF...") {
                         if let selectedId = documentManager.selectedDocumentId,
                            let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
-                            ExportManager.shared.exportToPDF(content: document.content, fileName: document.name)
+                            ExportManager.shared.exportToPDF(content: document.content, fileName: document.name, baseURL: document.url)
                         }
                     }
                     .disabled(documentManager.openDocuments.isEmpty)

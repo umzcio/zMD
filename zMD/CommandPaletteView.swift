@@ -140,7 +140,7 @@ class CommandRegistry {
             CommandAction(name: "Export as PDF", category: .export, shortcut: nil, icon: "doc.text.fill", isEnabled: hasDoc) {
                 if let id = documentManager.selectedDocumentId,
                    let doc = documentManager.openDocuments.first(where: { $0.id == id }) {
-                    ExportManager.shared.exportToPDF(content: doc.content, fileName: doc.name)
+                    ExportManager.shared.exportToPDF(content: doc.content, fileName: doc.name, baseURL: doc.url)
                 }
             },
             CommandAction(name: "Export as HTML", category: .export, shortcut: nil, icon: "globe", isEnabled: hasDoc) {

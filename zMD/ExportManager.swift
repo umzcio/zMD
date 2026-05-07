@@ -9,8 +9,60 @@ class ExportManager {
 
     private init() {}
 
+    /// Strip CDN script/link tags and remote `<img src>` from HTML before handing it to
+    /// `NSAttributedString(html:)`. That initializer is a synchronous WebKit shim that fetches
+    /// network resources on the main thread; offline or with a slow CDN it hangs for seconds
+    /// per resource (H14). KaTeX/Mermaid scripts wouldn't run inside an attributed-string
+    /// rendering pass anyway, so dropping them is functionally a no-op for the rendered output.
+    private func stripNetworkResourcesForAttributedString(_ html: String) -> String {
+        var result = html
+        // Strip <script>...</script> blocks (case-insensitive).
+        result = result.replacingOccurrences(
+            of: #"<script\b[^>]*>[\s\S]*?</script\s*>"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        // Self-closing/void <script> and <link>.
+        result = result.replacingOccurrences(
+            of: #"<(script|link)\b[^>]*/?>"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        // Drop <img> tags that point at http(s):// — they'd trigger a sync fetch.
+        result = result.replacingOccurrences(
+            of: #"<img\b[^>]*\bsrc\s*=\s*["']https?://[^"']*["'][^>]*/?>"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        return result
+    }
+
+    /// Rewrite `<img src="...">` paths to absolute file:// URLs relative to baseURL so PDF
+    /// export resolves images against the document's directory the same way preview does.
+    /// Without this `<img src="images/foo.png">` resolves against the process working
+    /// directory (typically `/`), and the image silently fails to render in PDF (M15).
+    private func absolutizeImageSrcs(_ html: String, baseURL: URL?) -> String {
+        guard let baseDir = baseURL?.deletingLastPathComponent() else { return html }
+        let pattern = #"(<img\b[^>]*\bsrc\s*=\s*["'])([^"']+)(["'])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return html }
+        let ns = html as NSString
+        let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).reversed()
+        let mutable = NSMutableString(string: html)
+        for m in matches where m.numberOfRanges == 4 {
+            let src = ns.substring(with: m.range(at: 2))
+            // Skip absolute URLs (http(s)://, data:, file://, etc.) and rooted paths.
+            if src.contains("://") || src.hasPrefix("/") { continue }
+            let decoded = src.removingPercentEncoding ?? src
+            let abs = baseDir.appendingPathComponent(decoded).absoluteString
+            let prefix = ns.substring(with: m.range(at: 1))
+            let suffix = ns.substring(with: m.range(at: 3))
+            mutable.replaceCharacters(in: m.range, with: "\(prefix)\(abs)\(suffix)")
+        }
+        return mutable as String
+    }
+
     // MARK: - PDF Export
-    func exportToPDF(content: String, fileName: String) {
+    func exportToPDF(content: String, fileName: String, baseURL: URL? = nil) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.pdf]
         savePanel.nameFieldStringValue = fileName.replacingOccurrences(of: ".md", with: ".pdf")
@@ -21,8 +73,12 @@ class ExportManager {
 
             DispatchQueue.main.async {
                 do {
-                    // Create PDF using NSAttributedString (sandbox-friendly)
-                    let html = self.parser.toHTML(content, includeStyles: true)
+                    // Create PDF using NSAttributedString (sandbox-friendly).
+                    // Pre-process: strip CDN scripts (H14, prevents main-thread network hang)
+                    // and absolutize relative <img src> paths against the doc's directory (M15).
+                    var html = self.parser.toHTML(content, includeStyles: true)
+                    html = self.absolutizeImageSrcs(html, baseURL: baseURL)
+                    html = self.stripNetworkResourcesForAttributedString(html)
 
                     guard let htmlData = html.data(using: .utf8) else {
                         self.alertManager.showExportError("PDF", reason: "Failed to encode HTML content")
@@ -81,16 +137,39 @@ class ExportManager {
                     layoutManager.addTextContainer(textContainer)
                     textStorage.addLayoutManager(layoutManager)
 
-                    layoutManager.glyphRange(for: textContainer)
+                    let glyphRange = layoutManager.glyphRange(for: textContainer)
                     let usedRect = layoutManager.usedRect(for: textContainer)
 
-                    // Draw pages
+                    // Draw pages, advancing currentY to the largest line-fragment boundary
+                    // ≤ currentY + pageHeight. Without this, glyphs straddling the cut got
+                    // clipped (top half on page N, bottom half on N+1) (H13).
                     var currentY: CGFloat = 0
                     let pageHeight = textRect.height
 
                     while currentY < usedRect.height {
-                        context.beginPage(mediaBox: &mediaBox)
+                        let targetBottom = currentY + pageHeight
+                        var nextY = targetBottom
+                        if targetBottom < usedRect.height {
+                            // Walk line fragments to find the last one that ends ≤ targetBottom.
+                            var lastBoundary = currentY
+                            var glyph = layoutManager.glyphIndexForCharacter(at: 0)
+                            let endGlyph = NSMaxRange(glyphRange)
+                            while glyph < endGlyph {
+                                var lineRange = NSRange()
+                                let frag = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &lineRange)
+                                let fragBottom = frag.maxY
+                                if fragBottom <= targetBottom {
+                                    lastBoundary = fragBottom
+                                    glyph = NSMaxRange(lineRange)
+                                } else {
+                                    break
+                                }
+                            }
+                            // If we couldn't fit even one line, fall back to a hard cut so we make progress.
+                            nextY = (lastBoundary > currentY) ? lastBoundary : targetBottom
+                        }
 
+                        context.beginPage(mediaBox: &mediaBox)
                         context.saveGState()
 
                         // PDF origin is bottom-left; flip the CTM so our top-down
@@ -113,7 +192,7 @@ class ExportManager {
                         context.restoreGState()
                         context.endPage()
 
-                        currentY += pageHeight
+                        currentY = nextY
                     }
 
                     context.closePDF()
@@ -159,8 +238,10 @@ class ExportManager {
             guard response == .OK, let url = savePanel.url else { return }
 
             DispatchQueue.main.async {
-                // Convert markdown to HTML first, then to attributed string, then to RTF
-                let html = self.parser.toHTML(content, includeStyles: true)
+                // Convert markdown to HTML first, then to attributed string, then to RTF.
+                // H14: scripts stripped to avoid synchronous network fetch on main thread.
+                var html = self.parser.toHTML(content, includeStyles: true)
+                html = self.stripNetworkResourcesForAttributedString(html)
 
                 guard let data = html.data(using: .utf8) else {
                     self.alertManager.showExportError("RTF", reason: "Failed to encode HTML content")
@@ -798,13 +879,21 @@ class ExportManager {
     }
 
     private func createImageParagraph(path: String, alt: String, baseURL: URL?) -> String {
-        // Resolve the image path
+        // Resolve the image path. H17: a path like `images/foo.png` is RELATIVE to the doc;
+        // building `URL(fileURLWithPath:)` from it produced a URL relative to the process working
+        // directory (typically `/`), which spuriously matched `/images/foo.png` if it existed and
+        // missed the actual sibling file. Treat as relative unless rooted (`/`) or has a scheme;
+        // also percent-decode in case the markdown writer URL-encoded spaces etc.
+        let decodedPath = path.removingPercentEncoding ?? path
+        let isRooted = decodedPath.hasPrefix("/")
+        let hasScheme = decodedPath.contains("://")
+
         let resolvedURL: URL?
-        let absoluteURL = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(atPath: absoluteURL.path) {
-            resolvedURL = absoluteURL
+        if isRooted || hasScheme {
+            let absoluteURL = URL(fileURLWithPath: decodedPath)
+            resolvedURL = FileManager.default.fileExists(atPath: absoluteURL.path) ? absoluteURL : nil
         } else if let base = baseURL?.deletingLastPathComponent() {
-            let relativeURL = base.appendingPathComponent(path)
+            let relativeURL = base.appendingPathComponent(decodedPath)
             resolvedURL = FileManager.default.fileExists(atPath: relativeURL.path) ? relativeURL : nil
         } else {
             resolvedURL = nil
@@ -986,15 +1075,27 @@ class ExportManager {
     }
 
     private func formatInlineMarkdownForDOCX(_ text: String) -> String {
-        // Strip markdown formatting for headings (will be applied via DOCX styles)
+        // Strip markdown formatting for headings (will be applied via DOCX styles).
+        // M13: now also strips `~~strikethrough~~` so heading runs don't show literal `~~`.
         return text
             .replacingOccurrences(of: #"\*\*([^\*]+)\*\*"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"\*([^\*]+)\*"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"~~([^~]+)~~"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
     }
 
     private func xmlEscape(_ text: String) -> String {
-        return text
+        // M12: XML 1.0 forbids most C0 controls. A markdown file containing U+0008 (or any
+        // C0 except tab/LF/CR) produces malformed document.xml that Word/LibreOffice refuse
+        // to open. Also drop U+FFFE/U+FFFF which are non-characters per Unicode.
+        let scrubbed = String(text.unicodeScalars.filter { scalar in
+            let v = scalar.value
+            if v == 0x09 || v == 0x0A || v == 0x0D { return true }    // allowed C0
+            if v < 0x20 { return false }                              // strip rest of C0
+            if v == 0xFFFE || v == 0xFFFF { return false }            // non-characters
+            return true
+        })
+        return scrubbed
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")

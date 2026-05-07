@@ -474,6 +474,7 @@ class DocumentManager: ObservableObject {
                     self.openDocuments[idx].isUntitled = false
                     self.openDocuments[idx].isDirty = false
                     self.openDocuments[idx].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    FolderManager.shared.noteSelfWrite(at: newURL)
                     self.startWatchingFile(for: self.openDocuments[idx])
                     self.addToRecentFiles(url: newURL)
                     ToastManager.shared.show("File saved", style: .success)
@@ -508,8 +509,9 @@ class DocumentManager: ObservableObject {
             if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
             openDocuments[index].isDirty = false
 
-            // Suppress the self-write echo from the file watcher.
+            // Suppress the self-write echo from per-file watcher and folder DirectoryWatcher.
             fileWatchers[id]?.ignoreNextChange = true
+            FolderManager.shared.noteSelfWrite(at: resolvedURL)
 
             ToastManager.shared.show("File saved", style: .success)
         } catch {
@@ -538,6 +540,7 @@ class DocumentManager: ObservableObject {
                     self.openDocuments[idx].url = newURL
                     self.openDocuments[idx].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
                     self.fileWatchers[id]?.ignoreNextChange = true
+                    FolderManager.shared.noteSelfWrite(at: newURL)
                     ToastManager.shared.show("File saved", style: .success)
                 } catch {
                     self.alertManager.showFileSaveError(url: newURL, error: error)

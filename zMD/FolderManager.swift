@@ -19,6 +19,20 @@ class FolderManager: ObservableObject {
     private var securityScopedAccess = false
     private let bookmarkKey = DefaultsKeys.folderBookmark
 
+    // Self-write suppression. DocumentManager calls noteSelfWrite(at:) right after a save so
+    // the directory watcher's resulting "something changed" event doesn't cause a full O(N)
+    // tree rebuild — the FSEvents API doesn't tell us which path changed, so we use a recency
+    // window: any directory change within 800ms of a self-write is assumed to be that
+    // self-write echo and skipped (M8). External edits arriving in the same window will be
+    // missed for one cycle; the next debounce will catch them.
+    private var lastSelfWriteAt: Date = .distantPast
+    private static let selfWriteSuppressionWindow: TimeInterval = 0.8
+
+    func noteSelfWrite(at url: URL) {
+        guard let folder = folderURL, url.path.hasPrefix(folder.path) else { return }
+        lastSelfWriteAt = Date()
+    }
+
     private init() {}
 
     // MARK: - Open/Close Folder
@@ -73,6 +87,11 @@ class FolderManager: ObservableObject {
     /// stays responsive.
     private func refreshFileTreeAsync() {
         guard let folderURL = folderURL else { return }
+        // Suppress the rebuild if it was almost certainly caused by our own save. Without this,
+        // every save in folder mode triggers a full O(N) tree scan (M8).
+        if Date().timeIntervalSince(lastSelfWriteAt) < Self.selfWriteSuppressionWindow {
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self, folderURL] in
             let tree = self?.buildTree(at: folderURL, relativeTo: folderURL) ?? []
             DispatchQueue.main.async {

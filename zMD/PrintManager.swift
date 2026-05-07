@@ -53,7 +53,7 @@ class PrintManager {
         let result = NSMutableAttributedString()
         let defaultAttributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: NSColor.black
+            .foregroundColor: NSColor.labelColor
         ]
 
         let elements = MarkdownParser.shared.parse(content)
@@ -106,7 +106,7 @@ class PrintManager {
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraphStyle
         ]
 
@@ -123,7 +123,7 @@ class PrintManager {
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraphStyle
         ]
 
@@ -168,7 +168,7 @@ class PrintManager {
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraphStyle
         ]
 
@@ -189,7 +189,7 @@ class PrintManager {
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.labelColor,
             .backgroundColor: NSColor.lightGray.withAlphaComponent(0.2),
             .paragraphStyle: paragraphStyle
         ]
@@ -228,7 +228,7 @@ class PrintManager {
 
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: rowFont,
-                .foregroundColor: NSColor.black,
+                .foregroundColor: NSColor.labelColor,
                 .paragraphStyle: paragraphStyle
             ]
 

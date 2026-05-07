@@ -460,7 +460,14 @@ class MarkdownParser {
             html += "\n    <link rel=\"stylesheet\" href=\"\(CDN.katexCSS)\">"
             html += "\n    <script src=\"\(CDN.katexJS)\"></script>"
             html += "\n    <script src=\"\(CDN.katexAutoRenderJS)\"></script>"
-            html += "\n    <script>document.addEventListener('DOMContentLoaded', function() { renderMathInElement(document.body, { delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}] }); });</script>"
+            // Auto-render handles inline `$...$` (we only emit those for inline math). For
+            // display math we use <script type="math/tex; mode=display"> tags (H16) — read each
+            // one and call katex.render so the body LaTeX isn't subject to HTML parsing.
+            html += "\n    <script>document.addEventListener('DOMContentLoaded', function() {"
+            html += " renderMathInElement(document.body, { delimiters: [{left: '$', right: '$', display: false}] });"
+            html += " var mathScripts = document.querySelectorAll('script[type=\"math/tex; mode=display\"]');"
+            html += " mathScripts.forEach(function(s) { var span = document.createElement('span'); try { katex.render(s.textContent, span, { displayMode: true }); s.parentNode.insertBefore(span, s); } catch(e) { span.textContent = s.textContent; s.parentNode.insertBefore(span, s); } });"
+            html += " });</script>"
         }
 
         if includeStyles {
@@ -660,7 +667,12 @@ class MarkdownParser {
         case .mermaidBlock(let code):
             return "<pre class=\"mermaid\">\(escapeHTML(code))</pre>\n"
         case .displayMath(let latex):
-            return "<div class=\"math-display\">$$\(escapeHTML(latex))$$</div>\n"
+            // H16: place the LaTeX inside a <script type="math/tex; mode=display"> tag.
+            // Script tag contents aren't parsed as HTML, so `a < b` and `\&` survive intact —
+            // previously HTML-escaping turned those into entities that KaTeX rendered literally.
+            // The companion init script (added to the head when hasMath is true) reads these
+            // tags and calls katex.render on each.
+            return "<div class=\"math-display\"><script type=\"math/tex; mode=display\">\(latex)</script></div>\n"
         case .table(let rows):
             var html = "<table>\n"
             for (rowIndex, row) in rows.enumerated() {
