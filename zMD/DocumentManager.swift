@@ -36,7 +36,11 @@ class DocumentManager: ObservableObject {
     @Published var autoSaveEnabled: Bool {
         didSet { UserDefaults.standard.set(autoSaveEnabled, forKey: DefaultsKeys.autoSaveEnabled) }
     }
-    private var autoSaveTimer: Timer?
+    // Per-document auto-save timers. Previously a single shared `autoSaveTimer` was reused across
+    // all docs, so typing in tab A would cancel tab B's pending save (and Cmd+S during the debounce
+    // window left an armed timer that re-saved 2s later, clobbering intermediate undo state).
+    // Keyed by document id, mirroring `fileWatchers`.
+    private var autoSaveTimers: [UUID: Timer] = [:]
 
     // Search state
     @Published var isSearching: Bool = false
@@ -410,14 +414,18 @@ class DocumentManager: ObservableObject {
         openDocuments[index].content = newContent
         openDocuments[index].isDirty = true
 
-        // Pause file watcher during editing
-        fileWatchers[documentId]?.pause()
+        // Note: previously this paused the file watcher per-keystroke and only resumed it on
+        // save. With auto-save off and no Cmd+S, the watcher stayed paused after the first
+        // keystroke — external changes were silently never detected. `ignoreNextChange` already
+        // suppresses self-write echoes from save, so the pause is redundant.
 
-        // Schedule auto-save if enabled (skip for untitled files)
+        // Schedule auto-save if enabled (skip for untitled files). Each doc has its own timer
+        // so typing in tab A can't cancel a pending save in tab B.
         if autoSaveEnabled && !(openDocuments[index].isUntitled) {
-            autoSaveTimer?.invalidate()
-            autoSaveTimer = Timer.scheduledTimer(withTimeInterval: Timing.autoSaveDebounce, repeats: false) { [weak self] _ in
+            autoSaveTimers[documentId]?.invalidate()
+            autoSaveTimers[documentId] = Timer.scheduledTimer(withTimeInterval: Timing.autoSaveDebounce, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
+                self.autoSaveTimers[documentId] = nil
                 // Never auto-save while a file-change dialog is outstanding for this doc,
                 // or while the doc no longer exists in the open set.
                 guard !self.pendingExternalChange.contains(documentId) else { return }
@@ -429,6 +437,11 @@ class DocumentManager: ObservableObject {
 
     func saveDocument(id: UUID) {
         guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
+        // Cancel any pending auto-save for this doc — we're saving right now, the pending
+        // timer would fire 2s later and re-save (clobbering intermediate undo state).
+        autoSaveTimers[id]?.invalidate()
+        autoSaveTimers[id] = nil
+
         let document = openDocuments[index]
 
         // Untitled documents need a save dialog first
@@ -437,9 +450,13 @@ class DocumentManager: ObservableObject {
             savePanel.allowedContentTypes = [UTType(filenameExtension: "md")].compactMap { $0 }
             savePanel.nameFieldStringValue = document.url.lastPathComponent
             savePanel.begin { [weak self] response in
-                guard response == .OK, let newURL = savePanel.url else { return }
-                guard let self = self,
-                      let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else { return }
+                guard let self = self else { return }
+                guard response == .OK, let newURL = savePanel.url else {
+                    // User cancelled — surface a toast so they don't think Cmd+S succeeded.
+                    ToastManager.shared.show("Save cancelled — changes still unsaved", style: .warning)
+                    return
+                }
+                guard let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else { return }
                 do {
                     let enc = DocumentManager.encoding(for: self.openDocuments[idx].detectedEncoding)
                     try self.openDocuments[idx].content.write(to: newURL, atomically: true, encoding: enc)
@@ -451,7 +468,7 @@ class DocumentManager: ObservableObject {
                     self.addToRecentFiles(url: newURL)
                     ToastManager.shared.show("File saved", style: .success)
                 } catch {
-                    self.alertManager.showError("Save Failed", message: error.localizedDescription)
+                    self.alertManager.showFileSaveError(url: newURL, error: error)
                 }
             }
             return
@@ -476,30 +493,39 @@ class DocumentManager: ObservableObject {
             if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
             openDocuments[index].isDirty = false
 
-            // Resume file watcher, ignoring this change
+            // Suppress the self-write echo from the file watcher.
             fileWatchers[id]?.ignoreNextChange = true
-            fileWatchers[id]?.resume()
 
             ToastManager.shared.show("File saved", style: .success)
         } catch {
             // Release security scope before falling back to NSSavePanel
             if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
 
-            // Fall back to NSSavePanel (gets its own sandbox access)
+            // Fall back to NSSavePanel (gets its own sandbox access).
             let savePanel = NSSavePanel()
             savePanel.nameFieldStringValue = document.url.lastPathComponent
             savePanel.directoryURL = document.url.deletingLastPathComponent()
+            // Capture content snapshot for the closure — we re-resolve the document index by id
+            // at completion time because the user can close other tabs while the panel is up,
+            // shifting `index`. Previously the captured `index` could point to the wrong row
+            // (or be out of bounds → crash).
+            let contentSnapshot = document.content
             savePanel.begin { [weak self] response in
-                guard response == .OK, let newURL = savePanel.url else { return }
+                guard let self = self else { return }
+                guard response == .OK, let newURL = savePanel.url else {
+                    ToastManager.shared.show("Save cancelled — changes still unsaved", style: .warning)
+                    return
+                }
+                guard let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else { return }
                 do {
-                    try document.content.write(to: newURL, atomically: true, encoding: saveEncoding)
-                    self?.openDocuments[index].isDirty = false
-                    self?.openDocuments[index].url = newURL
-                    self?.openDocuments[index].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-                    self?.fileWatchers[id]?.ignoreNextChange = true
-                    self?.fileWatchers[id]?.resume()
+                    try contentSnapshot.write(to: newURL, atomically: true, encoding: saveEncoding)
+                    self.openDocuments[idx].isDirty = false
+                    self.openDocuments[idx].url = newURL
+                    self.openDocuments[idx].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+                    self.fileWatchers[id]?.ignoreNextChange = true
+                    ToastManager.shared.show("File saved", style: .success)
                 } catch {
-                    self?.alertManager.showError("Save Failed", message: error.localizedDescription)
+                    self.alertManager.showFileSaveError(url: newURL, error: error)
                 }
             }
         }
@@ -562,8 +588,8 @@ class DocumentManager: ObservableObject {
             }
 
             // Cancel any pending auto-save for this doc so it can't fire after close.
-            autoSaveTimer?.invalidate()
-            autoSaveTimer = nil
+            autoSaveTimers[document.id]?.invalidate()
+            autoSaveTimers[document.id] = nil
             pendingExternalChange.remove(document.id)
 
             // Handle split view: if closing secondary, just close split
@@ -617,8 +643,11 @@ class DocumentManager: ObservableObject {
             endSearch()
         }
 
-        autoSaveTimer?.invalidate()
-        autoSaveTimer = nil
+        // Cancel pending auto-saves for every doc being closed.
+        for doc in openDocuments where doc.id != document.id {
+            autoSaveTimers[doc.id]?.invalidate()
+            autoSaveTimers[doc.id] = nil
+        }
 
         // Stop file watching for closed documents
         for doc in openDocuments where doc.id != document.id {
