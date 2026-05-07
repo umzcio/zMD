@@ -225,5 +225,35 @@ hdiutil detach "$MOUNT_DIR" -quiet
 hdiutil convert "$TEMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -quiet
 rm -f "$TEMP_DMG"
 
+# Notarize + staple. Requires a one-time keychain profile created via:
+#   xcrun notarytool store-credentials zmd-notary --apple-id <id> --team-id 5JJ6G6A84S
+# (use an app-specific password from appleid.apple.com → Sign-In and Security → App-Specific
+# Passwords). Set NOTARIZE=0 in the environment to skip (e.g., for fast local iteration).
+if [ "${NOTARIZE:-1}" != "0" ]; then
+    if ! xcrun notarytool history --keychain-profile zmd-notary >/dev/null 2>&1; then
+        echo "==> WARN: notarytool profile 'zmd-notary' missing — skipping notarization."
+        echo "    Set up once: xcrun notarytool store-credentials zmd-notary --apple-id <id> --team-id 5JJ6G6A84S"
+        echo "    Then re-run: bash scripts/build-dmg.sh"
+    else
+        echo "==> Submitting DMG to Apple notary service (this can take a few minutes)..."
+        if xcrun notarytool submit "$DMG_PATH" --keychain-profile zmd-notary --wait 2>&1 | tee /tmp/zmd-notary.log | grep -E "status:|message:"; then
+            STATUS=$(grep -E "^\s*status:" /tmp/zmd-notary.log | tail -1 | awk '{print $2}')
+            if [ "$STATUS" = "Accepted" ]; then
+                echo "==> Stapling notarization ticket..."
+                xcrun stapler staple "$DMG_PATH" 2>&1 | tail -3
+                echo "==> Verifying stapled DMG..."
+                spctl -a -vv -t install "$DMG_PATH" 2>&1 | tail -3
+            else
+                echo "==> ERROR: notarization status was '$STATUS', expected 'Accepted'."
+                echo "    See /tmp/zmd-notary.log for details. DMG is built but unstapled."
+                exit 1
+            fi
+        else
+            echo "==> ERROR: notarytool submit failed. See /tmp/zmd-notary.log."
+            exit 1
+        fi
+    fi
+fi
+
 echo "==> Done! DMG at: $DMG_PATH"
 echo "    Size: $(du -h "$DMG_PATH" | cut -f1)"
