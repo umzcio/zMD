@@ -154,6 +154,19 @@ struct ContentView: View {
         // SwiftUI's .keyboardShortcut only binds to an interactable control (Button, MenuItem).
         // Without a control it was never wired to anything; the real Quick Open shortcut lives
         // on the File menu. Removed.
+        // Live search: every keystroke in the find bar must rebuild searchMatches, otherwise
+        // Replace operates on stale ranges (or empty array) and silently no-ops or — worse —
+        // corrupts the doc by applying replacement at offsets that no longer match. Mirroring
+        // the same trigger to regex/case toggles keeps the highlight + replace target in sync.
+        .onChange(of: documentManager.searchText) { _ in
+            documentManager.performSearch()
+        }
+        .onChange(of: documentManager.isRegexSearch) { _ in
+            documentManager.performSearch()
+        }
+        .onChange(of: documentManager.isCaseSensitive) { _ in
+            documentManager.performSearch()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickOpen)) { _ in
             showCommandPalette = false
             showQuickOpen = true
@@ -573,7 +586,10 @@ extension ContentView {
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
             },
-            zoomLevel: settings.zoomLevel
+            zoomLevel: settings.zoomLevel,
+            searchText: documentManager.isSearching ? documentManager.searchText : "",
+            searchMatches: documentManager.isSearching ? documentManager.searchMatches : [],
+            currentMatchIndex: documentManager.currentMatchIndex
         )
     }
 
@@ -595,7 +611,10 @@ extension ContentView {
                     }
                 }
             } : nil,
-            scrollToPercent: documentManager.isScrollSyncEnabled && documentManager.scrollSyncOrigin == .preview ? documentManager.scrollSyncSourcePercent : nil
+            scrollToPercent: documentManager.isScrollSyncEnabled && documentManager.scrollSyncOrigin == .preview ? documentManager.scrollSyncSourcePercent : nil,
+            searchText: documentManager.isSearching ? documentManager.searchText : "",
+            searchMatches: documentManager.isSearching ? documentManager.searchMatches : [],
+            currentMatchIndex: documentManager.currentMatchIndex
         )
     }
 }
@@ -610,6 +629,9 @@ struct SourceEditorWithMinimap: View {
     var zoomLevel: CGFloat = 1.0
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
+    var searchText: String = ""
+    var searchMatches: [SearchMatch] = []
+    var currentMatchIndex: Int = 0
 
     @ObservedObject private var settings = SettingsManager.shared
     @State private var capturedTextView: NSTextView?
@@ -626,7 +648,10 @@ struct SourceEditorWithMinimap: View {
                 onViewsReady: { tv, sv in
                     capturedTextView = tv
                     capturedScrollView = sv
-                }
+                },
+                searchText: searchText,
+                searchMatches: searchMatches,
+                currentMatchIndex: currentMatchIndex
             )
 
             if settings.showMinimap, capturedTextView != nil {

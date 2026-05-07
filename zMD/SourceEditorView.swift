@@ -12,6 +12,14 @@ struct SourceEditorView: NSViewRepresentable {
     /// both the text view and its scroll view to draw the viewport indicator).
     var onViewsReady: ((NSTextView, NSScrollView) -> Void)?
 
+    // Search highlight inputs. When `searchText` is non-empty the editor paints `.backgroundColor`
+    // on every match in `searchMatches`, with the match at `currentMatchIndex` painted in an
+    // accent color so the user can see which one Replace/Next/Prev will act on. Source-mode find
+    // bar previously had no visual feedback at all (matches lit up only in the preview pane).
+    var searchText: String = ""
+    var searchMatches: [SearchMatch] = []
+    var currentMatchIndex: Int = 0
+
     func makeNSView(context: Context) -> NSScrollView {
         // Build NSScrollView + EditorTextView manually so we get our NSTextView subclass with
         // multi-cursor, auto-close brackets, snippet autocomplete, Cmd+/ comment toggle, line-move
@@ -72,6 +80,9 @@ struct SourceEditorView: NSViewRepresentable {
         context.coordinator.scrollView = scrollView
         context.coordinator.zoomLevel = zoomLevel
         context.coordinator.onScrollPercentChanged = onScrollPercentChanged
+        context.coordinator.searchText = searchText
+        context.coordinator.searchMatches = searchMatches
+        context.coordinator.currentMatchIndex = currentMatchIndex
 
         // Scroll sync
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -150,6 +161,21 @@ struct SourceEditorView: NSViewRepresentable {
             context.coordinator.applyHighlighting(to: textView)
         }
 
+        // Search highlight diff — repaint only when something actually changed. Without this guard,
+        // every unrelated state update (zoom, scroll-percent push, etc.) repaints the whole storage,
+        // which is both wasteful and can fight with active typing.
+        let coord = context.coordinator
+        let matchIDs = searchMatches.map(\.id)
+        if coord.searchText != searchText
+            || coord.lastMatchIDs != matchIDs
+            || coord.currentMatchIndex != currentMatchIndex {
+            coord.searchText = searchText
+            coord.searchMatches = searchMatches
+            coord.currentMatchIndex = currentMatchIndex
+            coord.lastMatchIDs = matchIDs
+            coord.applyHighlighting(to: textView)
+        }
+
         if let percent = scrollToPercent, !context.coordinator.isUserScrolling {
             context.coordinator.scrollToPercent(percent, in: scrollView)
         }
@@ -171,6 +197,13 @@ struct SourceEditorView: NSViewRepresentable {
         private var autocompleteTimer: Timer?
         private var scrollDebounceTimer: Timer?
         private var isProgrammaticScroll = false
+
+        // Search highlight state mirrored from SourceEditorView so applyHighlighting can paint
+        // match backgrounds. lastMatchIDs is just the dedupe key for updateNSView.
+        var searchText: String = ""
+        var searchMatches: [SearchMatch] = []
+        var currentMatchIndex: Int = 0
+        var lastMatchIDs: [UUID] = []
 
         init(onContentChange: ((String) -> Void)?) {
             self.onContentChange = onContentChange
@@ -356,6 +389,19 @@ struct SourceEditorView: NSViewRepresentable {
             highlightPattern(#"^[\t ]*[-*+]\s"#, in: storage, text: nsText, color: .systemPurple)
             highlightPattern(#"^[\t ]*\d+\.\s"#, in: storage, text: nsText, color: .systemPurple)
             highlightPattern(#"\[[ xX]\]"#, in: storage, text: nsText, color: .systemIndigo)
+
+            // Paint search match backgrounds last so they layer on top of token coloring.
+            // Active match gets the system control-accent color for visibility against any token.
+            if !searchText.isEmpty && !searchMatches.isEmpty {
+                let plainColor = NSColor.systemYellow.withAlphaComponent(0.4)
+                let activeColor = NSColor.controlAccentColor.withAlphaComponent(0.5)
+                for (i, match) in searchMatches.enumerated() {
+                    guard let nsRange = NSRange(match.range, in: text) as NSRange?,
+                          nsRange.location + nsRange.length <= storage.length else { continue }
+                    let color = (i == currentMatchIndex) ? activeColor : plainColor
+                    storage.addAttribute(.backgroundColor, value: color, range: nsRange)
+                }
+            }
 
             storage.endEditing()
         }

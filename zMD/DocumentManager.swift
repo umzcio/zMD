@@ -58,6 +58,13 @@ class DocumentManager: ObservableObject {
     // Documents with a pending external-change dialog — auto-save must not fire while a user decision is outstanding.
     private var pendingExternalChange: Set<UUID> = []
 
+    // Search debouncing — every keystroke triggers performSearch via the ContentView .onChange.
+    // For plain-text we run inline (cheap). For regex we hop to a background queue and gate by a
+    // monotonic token so a stale background result can't overwrite a newer one.
+    private var searchDebounceTimer: Timer?
+    private var searchToken: UInt64 = 0
+    private static let maxSearchMatches = 10_000
+
     /// Map a human-readable encoding name (stored on MarkdownDocument.detectedEncoding) back to a String.Encoding.
     /// Callers writing a file must use this so round-tripping preserves the source encoding.
     static func encoding(for name: String) -> String.Encoding {
@@ -837,7 +844,28 @@ extension DocumentManager {
         showReplace = true
     }
 
-    func performSearch() {
+    /// Run the current search.
+    ///
+    /// Plain text search runs synchronously on the main thread (it's cheap even on multi-MB docs).
+    /// Regex search hops to a background queue with a monotonic token so a slow pattern (e.g.,
+    /// catastrophic backtracker like `(a+)+b`) can't freeze the UI on every keystroke. The result
+    /// list is capped at `maxSearchMatches` to bound memory + render cost.
+    ///
+    /// Pass `immediate: true` to bypass debouncing (used for explicit user actions like clicking
+    /// Next/Previous after a programmatic edit).
+    func performSearch(immediate: Bool = false) {
+        searchDebounceTimer?.invalidate()
+        if immediate {
+            executeSearch()
+            return
+        }
+        // 200ms debounce: enough to coalesce a typing burst, short enough to feel live.
+        searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
+            self?.executeSearch()
+        }
+    }
+
+    private func executeSearch() {
         guard let selectedId = selectedDocumentId,
               let document = openDocuments.first(where: { $0.id == selectedId }),
               !searchText.isEmpty else {
@@ -847,45 +875,66 @@ extension DocumentManager {
         }
 
         let content = document.content
-        var matches: [SearchMatch] = []
+        let useRegex = isRegexSearch
+        let caseSensitive = isCaseSensitive
+        let pattern = searchText
 
-        if isRegexSearch {
-            // Regex search
-            var options: NSRegularExpression.Options = []
-            if !isCaseSensitive { options.insert(.caseInsensitive) }
-            guard let regex = try? NSRegularExpression(pattern: searchText, options: options) else {
-                searchMatches = []
-                currentMatchIndex = 0
-                return
-            }
-            let nsContent = content as NSString
-            let results = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
-            for result in results {
-                guard let range = Range(result.range, in: content) else { continue }
-                let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
-                matches.append(SearchMatch(range: range, lineNumber: lineNumber))
-            }
-        } else {
-            // Plain text search
-            var searchOptions: String.CompareOptions = []
-            if !isCaseSensitive { searchOptions.insert(.caseInsensitive) }
+        searchToken &+= 1
+        let token = searchToken
 
-            var searchStartIndex = content.startIndex
-            while searchStartIndex < content.endIndex {
-                if let range = content.range(of: searchText, options: searchOptions, range: searchStartIndex..<content.endIndex) {
-                    let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
-                    matches.append(SearchMatch(range: range, lineNumber: lineNumber))
-                    searchStartIndex = range.upperBound
-                } else {
-                    break
+        if useRegex {
+            // Background: regex evaluation can be O(catastrophic) on adversarial patterns.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let matches = Self.regexMatches(pattern: pattern, content: content, caseSensitive: caseSensitive)
+                DispatchQueue.main.async {
+                    guard let self = self, self.searchToken == token else { return }
+                    self.searchMatches = matches
+                    if !matches.isEmpty && self.currentMatchIndex >= matches.count {
+                        self.currentMatchIndex = 0
+                    }
                 }
             }
+        } else {
+            let matches = Self.plainMatches(pattern: pattern, content: content, caseSensitive: caseSensitive)
+            searchMatches = matches
+            if !matches.isEmpty && currentMatchIndex >= matches.count {
+                currentMatchIndex = 0
+            }
         }
+    }
 
-        searchMatches = matches
-        if !matches.isEmpty && currentMatchIndex >= matches.count {
-            currentMatchIndex = 0
+    private static func regexMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
+        var options: NSRegularExpression.Options = []
+        if !caseSensitive { options.insert(.caseInsensitive) }
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return [] }
+        let nsContent = content as NSString
+        let results = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+        var matches: [SearchMatch] = []
+        matches.reserveCapacity(min(results.count, maxSearchMatches))
+        for result in results {
+            if matches.count >= maxSearchMatches { break }
+            guard let range = Range(result.range, in: content) else { continue }
+            let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
+            matches.append(SearchMatch(range: range, lineNumber: lineNumber))
         }
+        return matches
+    }
+
+    private static func plainMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
+        var searchOptions: String.CompareOptions = []
+        if !caseSensitive { searchOptions.insert(.caseInsensitive) }
+        var matches: [SearchMatch] = []
+        var searchStartIndex = content.startIndex
+        while searchStartIndex < content.endIndex && matches.count < maxSearchMatches {
+            if let range = content.range(of: pattern, options: searchOptions, range: searchStartIndex..<content.endIndex) {
+                let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
+                matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+                searchStartIndex = range.upperBound
+            } else {
+                break
+            }
+        }
+        return matches
     }
 
     func replaceCurrentMatch() {
@@ -896,9 +945,29 @@ extension DocumentManager {
 
         let match = searchMatches[currentMatchIndex]
         var content = openDocuments[index].content
-        content.replaceSubrange(match.range, with: replaceText)
+
+        if isRegexSearch {
+            // For regex mode, run the pattern over only the match range so capture-group
+            // backreferences in `replaceText` (e.g., `$1`, `\1`) expand correctly. Without this,
+            // a regex like `(\w+)` with replacement `[$1]` was inserting the literal string `[$1]`.
+            var options: NSRegularExpression.Options = []
+            if !isCaseSensitive { options.insert(.caseInsensitive) }
+            if let regex = try? NSRegularExpression(pattern: searchText, options: options),
+               let nsRange = NSRange(match.range, in: content) as NSRange? {
+                let nsContent = content as NSString
+                let replaced = regex.stringByReplacingMatches(in: content, options: [], range: nsRange, withTemplate: replaceText)
+                // stringByReplacingMatches returns the entire content with that one range replaced.
+                content = replaced
+                _ = nsContent
+            } else {
+                content.replaceSubrange(match.range, with: replaceText)
+            }
+        } else {
+            content.replaceSubrange(match.range, with: replaceText)
+        }
+
         updateContent(for: selectedId, newContent: content)
-        performSearch()
+        performSearch(immediate: true)
     }
 
     func replaceAllMatches() {
@@ -907,13 +976,34 @@ extension DocumentManager {
               !searchMatches.isEmpty else { return }
 
         var content = openDocuments[index].content
-        // Replace in reverse order to maintain valid ranges
-        for match in searchMatches.reversed() {
-            content.replaceSubrange(match.range, with: replaceText)
-        }
         let count = searchMatches.count
+
+        if isRegexSearch {
+            var options: NSRegularExpression.Options = []
+            if !isCaseSensitive { options.insert(.caseInsensitive) }
+            if let regex = try? NSRegularExpression(pattern: searchText, options: options) {
+                let nsContent = content as NSString
+                content = regex.stringByReplacingMatches(
+                    in: content,
+                    options: [],
+                    range: NSRange(location: 0, length: nsContent.length),
+                    withTemplate: replaceText
+                )
+            } else {
+                // Pattern compile failure — fall back to literal in-reverse replace.
+                for match in searchMatches.reversed() {
+                    content.replaceSubrange(match.range, with: replaceText)
+                }
+            }
+        } else {
+            // Replace in reverse order to maintain valid ranges
+            for match in searchMatches.reversed() {
+                content.replaceSubrange(match.range, with: replaceText)
+            }
+        }
+
         updateContent(for: selectedId, newContent: content)
-        performSearch()
+        performSearch(immediate: true)
         ToastManager.shared.show("Replaced \(count) occurrences", style: .success)
     }
 
