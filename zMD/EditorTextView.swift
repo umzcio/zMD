@@ -330,10 +330,14 @@ class EditorTextView: NSTextView {
                 }
                 return nil
             }),
-            // Empty list item (just marker, no content) — stop the list
-            (#"^[-*+] $"#, { _ in nil }),
-            (#"^- \[[ xX]\] $"#, { _ in nil }),
-            (#"^\d+\. $"#, { _ in nil }),
+            // Empty list item (just marker, no content) — stop the list.
+            // Patterns use `\s*$` so they match against `trimmedLine` (which has had whitespace
+            // stripped); the previous `^[-*+] $` form required a literal trailing space and
+            // never matched once trimmingCharacters had stripped it. Result: pressing Enter on
+            // an empty bullet did nothing; the bullet was preserved forever.
+            (#"^[-*+]\s*$"#, { _ in nil }),
+            (#"^- \[[ xX]\]\s*$"#, { _ in nil }),
+            (#"^\d+\.\s*$"#, { _ in nil }),
         ]
 
         for (pattern, continuation) in listPatterns {

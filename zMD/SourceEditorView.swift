@@ -205,6 +205,13 @@ struct SourceEditorView: NSViewRepresentable {
         var currentMatchIndex: Int = 0
         var lastMatchIDs: [UUID] = []
 
+        // Timestamp of the most recent textDidChange. Used by textViewDidChangeSelection to
+        // distinguish caret movement caused by text insertion (don't dismiss autocomplete) from
+        // caret movement caused by arrow keys / click (do dismiss). AppKit fires textDidChange
+        // immediately before textViewDidChangeSelection on the same runloop turn for inserts, so
+        // a 50ms window safely catches the caret-from-insert case.
+        private var lastTextChangeTimestamp: Date = .distantPast
+
         init(onContentChange: ((String) -> Void)?) {
             self.onContentChange = onContentChange
             super.init()
@@ -275,6 +282,7 @@ struct SourceEditorView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
 
+            lastTextChangeTimestamp = Date()
             isUpdatingFromUser = true
             onContentChange?(textView.string)
 
@@ -336,6 +344,18 @@ struct SourceEditorView: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             if let scrollView = scrollView, let gutter = scrollView.verticalRulerView {
                 gutter.needsDisplay = true
+            }
+
+            // Dismiss autocomplete if caret moved without a corresponding text change. Otherwise
+            // an open popup confirms with `replaceCharacters(in: triggerRange, ...)` at the
+            // ORIGINAL trigger location, silently rewriting unrelated text. Repro before fix:
+            // type `code`, popup appears, press Left arrow once, press Enter → completion was
+            // inserted at the original word position, mutilating text under the cursor.
+            if let editor = notification.object as? EditorTextView, editor.autocomplete.isVisible {
+                let elapsedSinceTextChange = Date().timeIntervalSince(lastTextChangeTimestamp)
+                if elapsedSinceTextChange > 0.05 {
+                    editor.autocomplete.dismiss()
+                }
             }
 
             // Publish real cursor position so StatusBar shows accurate "Ln X, Col Y".

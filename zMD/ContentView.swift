@@ -205,16 +205,7 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            for provider in providers {
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
-                    guard let data = data as? Data,
-                          let url = URL(dataRepresentation: data, relativeTo: nil),
-                          ["md", "markdown"].contains(url.pathExtension.lowercased()) else { return }
-                    DispatchQueue.main.async {
-                        documentManager.loadDocument(from: url)
-                    }
-                }
-            }
+            DropHandler.handle(providers: providers, documentManager: documentManager)
             return true
         }
     }
@@ -316,6 +307,73 @@ extension Notification.Name {
     static let showQuickOpen = Notification.Name("showQuickOpen")
     static let showCommandPalette = Notification.Name("showCommandPalette")
     static let toggleFocusMode = Notification.Name("toggleFocusMode")
+}
+
+/// Drop handler for `.fileURL` providers dropped onto the main window.
+/// Recurses one level into dropped folders, caps the open-count to avoid the previous
+/// 5,000-tabs-at-once footgun, and toasts the skipped-count so the user gets feedback when
+/// non-markdown drops or over-cap drops are silently dropped.
+enum DropHandler {
+    static let maxOpenOnDrop = 20
+
+    static func handle(providers: [NSItemProvider], documentManager: DocumentManager) {
+        let group = DispatchGroup()
+        var collectedURLs: [URL] = []
+        let lock = NSLock()
+
+        for provider in providers {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+                defer { group.leave() }
+                guard let data = data as? Data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                lock.lock()
+                collectedURLs.append(url)
+                lock.unlock()
+            }
+        }
+
+        group.notify(queue: .main) {
+            // Expand folders to immediate-child .md files (no deep recursion — a dropped folder
+            // structure shouldn't blow up into thousands of tabs).
+            var expanded: [URL] = []
+            var nonMarkdownSkipped = 0
+            for url in collectedURLs {
+                var isDir: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+                if isDir.boolValue {
+                    if let children = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                        for child in children where Self.isMarkdown(child) {
+                            expanded.append(child)
+                        }
+                    }
+                } else if Self.isMarkdown(url) {
+                    expanded.append(url)
+                } else {
+                    nonMarkdownSkipped += 1
+                }
+            }
+
+            let toOpen = Array(expanded.prefix(maxOpenOnDrop))
+            let overCapSkipped = max(0, expanded.count - toOpen.count)
+
+            for url in toOpen {
+                documentManager.loadDocument(from: url)
+            }
+
+            if toOpen.isEmpty && nonMarkdownSkipped > 0 {
+                ToastManager.shared.show("No markdown files found in drop", style: .warning)
+            } else if overCapSkipped > 0 {
+                ToastManager.shared.show("Opened \(toOpen.count) files; skipped \(overCapSkipped) (cap \(maxOpenOnDrop))", style: .warning)
+            } else if nonMarkdownSkipped > 0 {
+                ToastManager.shared.show("Opened \(toOpen.count); skipped \(nonMarkdownSkipped) non-markdown", style: .warning)
+            }
+        }
+    }
+
+    private static func isMarkdown(_ url: URL) -> Bool {
+        ["md", "markdown"].contains(url.pathExtension.lowercased())
+    }
 }
 
 struct WelcomeView: View {
