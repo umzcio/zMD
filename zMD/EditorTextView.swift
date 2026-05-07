@@ -15,7 +15,6 @@ extension Notification.Name {
     static let editorInsertUnorderedList = Notification.Name("editorInsertUnorderedList")
     static let editorInsertOrderedList = Notification.Name("editorInsertOrderedList")
     static let editorInsertTaskList = Notification.Name("editorInsertTaskList")
-    static let editorFindAndReplace = Notification.Name("editorFindAndReplace")
 }
 
 // MARK: - EditorTextView

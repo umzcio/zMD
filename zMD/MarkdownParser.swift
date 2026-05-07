@@ -823,16 +823,6 @@ class MarkdownParser {
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 
-    /// Escape XML special characters
-    func escapeXML(_ text: String) -> String {
-        return text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
-    }
-
     // MARK: - Outline Extraction
 
     /// Convert heading text to a GitHub-style slug for stable IDs that survive edits above the heading.

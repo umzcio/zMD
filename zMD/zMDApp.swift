@@ -148,7 +148,11 @@ struct zMDApp: App {
 
                 Divider()
 
-                Button("Duplicate...") {
+                // L13: macOS reflex is ⌘⇧S = Save As. We don't have a true Save-As (the
+                // duplicate flow does the same thing) but at least the menu label and shortcut
+                // should match user expectation. "Save As..." routes through duplicateDocument
+                // which presents an NSSavePanel — equivalent UX.
+                Button("Save As...") {
                     if let selectedId = documentManager.selectedDocumentId,
                        let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
                         documentManager.duplicateDocument(document: document)

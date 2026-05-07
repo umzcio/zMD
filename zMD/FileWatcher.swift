@@ -116,7 +116,10 @@ class FileWatcher {
     }
 
     private func restartIfFileExists() {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        // L10: skip the upfront fileExists check — it's TOCTOU racy. The file could be removed
+        // in the gap between exists-check and `open()`, leaving the watcher silently dead with
+        // no error path. startWatching() already handles the missing-file case (open returns -1
+        // and the function bails); just call it directly so any other error gets bubbled.
         stopWatching()
         startWatching()
     }

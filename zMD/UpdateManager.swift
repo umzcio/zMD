@@ -334,8 +334,13 @@ class UpdateManager: ObservableObject {
     }
 
     private func isNewerVersion(remote: String, current: String) -> Bool {
-        let remoteParts = remote.split(separator: ".").compactMap { Int($0) }
-        let currentParts = current.split(separator: ".").compactMap { Int($0) }
+        // Strip semver pre-release/build metadata (everything after the first '-' or '+') so
+        // `2.5.3-rc1` parses as `[2,5,3]` instead of `[2,5]` (L9). The current shipped version
+        // never has metadata, so this only affects how we compare against tagged pre-releases.
+        let cleanRemote = remote.split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? remote
+        let cleanCurrent = current.split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? current
+        let remoteParts = cleanRemote.split(separator: ".").compactMap { Int($0) }
+        let currentParts = cleanCurrent.split(separator: ".").compactMap { Int($0) }
 
         let maxLen = max(remoteParts.count, currentParts.count)
         for i in 0..<maxLen {
