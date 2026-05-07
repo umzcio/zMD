@@ -198,11 +198,17 @@ class SettingsManager: ObservableObject {
         self.showLineNumbers = UserDefaults.standard.object(forKey: DefaultsKeys.showLineNumbers) == nil
             ? true : UserDefaults.standard.bool(forKey: DefaultsKeys.showLineNumbers)
 
-        // Observe NSApp.effectiveAppearance so views observing SettingsManager re-render on
-        // system theme toggle. NSApp posts a KVO change when light ↔ dark; we just bump a tick.
-        self.appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
-            DispatchQueue.main.async {
-                self?.appearanceTick &+= 1
+        // Observe NSApplication.effectiveAppearance so views observing SettingsManager re-render
+        // on system theme toggle. SettingsManager.shared can be touched during zMDApp.init —
+        // BEFORE NSApp's global is wired up — so accessing NSApp directly here was a launch
+        // crash (force-unwrap of nil). Defer to the next main-queue spin: by then the App
+        // delegate has assigned NSApp, and NSApplication.shared is the safe canonical accessor.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async {
+                    self?.appearanceTick &+= 1
+                }
             }
         }
     }
