@@ -21,8 +21,15 @@ WIN_Y=200
 
 echo "==> Building Release..."
 cd "$PROJECT_DIR"
+# Notarization-required signing flags:
+#   --timestamp                          → embed Apple secure-timestamp (notary requires it)
+#   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO → don't inject the Debug-only `get-task-allow` entitlement
+# Without these, notarytool returns "Invalid: signature does not include a secure timestamp" and
+# "executable requests the com.apple.security.get-task-allow entitlement".
 xcodebuild -project zMD.xcodeproj -scheme zMD -configuration Release \
     CONFIGURATION_BUILD_DIR="$BUILD_DIR/Release" \
+    OTHER_CODE_SIGN_FLAGS='--timestamp' \
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     2>&1 | tail -5
 
 if [ ! -d "$BUILD_DIR/Release/$APP_NAME" ]; then
@@ -225,33 +232,87 @@ hdiutil detach "$MOUNT_DIR" -quiet
 hdiutil convert "$TEMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -quiet
 rm -f "$TEMP_DMG"
 
-# Notarize + staple. Requires a one-time keychain profile created via:
-#   xcrun notarytool store-credentials zmd-notary --apple-id <id> --team-id 5JJ6G6A84S
-# (use an app-specific password from appleid.apple.com → Sign-In and Security → App-Specific
-# Passwords). Set NOTARIZE=0 in the environment to skip (e.g., for fast local iteration).
+# Notarize + staple. Apple's API key is in ~/Downloads/AuthKey_GDJWLVZ2PS.p8 (key ID
+# GDJWLVZ2PS, issuer 69a6de75-9781-47e3-e053-5b8c7c11a4d1, team 5JJ6G6A84S). The DMG built
+# above contains an unsignedticket .app — we submit, wait for Accepted, then RE-PACKAGE so the
+# .app inside the final DMG carries its own staple (offline-launch trust). Without the
+# re-package, only the DMG container is stapled and `stapler validate` on the .app fails.
+# Set NOTARIZE=0 in the environment to skip (e.g., for fast local iteration).
+NOTARY_KEY="$HOME/Downloads/AuthKey_GDJWLVZ2PS.p8"
+NOTARY_KEY_ID="GDJWLVZ2PS"
+NOTARY_ISSUER="69a6de75-9781-47e3-e053-5b8c7c11a4d1"
+
 if [ "${NOTARIZE:-1}" != "0" ]; then
-    if ! xcrun notarytool history --keychain-profile zmd-notary >/dev/null 2>&1; then
-        echo "==> WARN: notarytool profile 'zmd-notary' missing — skipping notarization."
-        echo "    Set up once: xcrun notarytool store-credentials zmd-notary --apple-id <id> --team-id 5JJ6G6A84S"
-        echo "    Then re-run: bash scripts/build-dmg.sh"
+    if [ ! -f "$NOTARY_KEY" ]; then
+        echo "==> WARN: notary API key not found at $NOTARY_KEY — skipping notarization."
+        echo "    See memory/project_notarization.md for setup. Re-run after restoring the key."
     else
         echo "==> Submitting DMG to Apple notary service (this can take a few minutes)..."
-        if xcrun notarytool submit "$DMG_PATH" --keychain-profile zmd-notary --wait 2>&1 | tee /tmp/zmd-notary.log | grep -E "status:|message:"; then
-            STATUS=$(grep -E "^\s*status:" /tmp/zmd-notary.log | tail -1 | awk '{print $2}')
-            if [ "$STATUS" = "Accepted" ]; then
-                echo "==> Stapling notarization ticket..."
-                xcrun stapler staple "$DMG_PATH" 2>&1 | tail -3
-                echo "==> Verifying stapled DMG..."
-                spctl -a -vv -t install "$DMG_PATH" 2>&1 | tail -3
-            else
-                echo "==> ERROR: notarization status was '$STATUS', expected 'Accepted'."
-                echo "    See /tmp/zmd-notary.log for details. DMG is built but unstapled."
-                exit 1
-            fi
-        else
-            echo "==> ERROR: notarytool submit failed. See /tmp/zmd-notary.log."
+        xcrun notarytool submit "$DMG_PATH" \
+            --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+            --wait 2>&1 | tee /tmp/zmd-notary.log
+        STATUS=$(grep -E "^\s*status:" /tmp/zmd-notary.log | tail -1 | awk '{print $2}')
+        if [ "$STATUS" != "Accepted" ]; then
+            echo "==> ERROR: notarization status was '$STATUS', expected 'Accepted'."
+            echo "    Fetch full log:"
+            SUBMIT_ID=$(grep -E "^\s*id:" /tmp/zmd-notary.log | head -1 | awk '{print $2}')
+            echo "    xcrun notarytool log $SUBMIT_ID --key $NOTARY_KEY --key-id $NOTARY_KEY_ID --issuer $NOTARY_ISSUER"
             exit 1
         fi
+
+        echo "==> Stapling .app and re-packaging DMG (so the .app inside is also stapled)..."
+        xcrun stapler staple "$BUILD_DIR/Release/$APP_NAME" 2>&1 | tail -1
+
+        # Re-create DMG with the now-stapled .app so users get offline-launch-ready bundles.
+        rm -f "$DMG_PATH" "$TEMP_DMG"
+        hdiutil create -size 50m -fs HFS+ -volname "$VOLUME_NAME" "$TEMP_DMG" -quiet
+        MOUNT_OUTPUT=$(hdiutil attach "$TEMP_DMG" -readwrite -noverify -noautoopen -plist)
+        MOUNT_DIR=$(echo "$MOUNT_OUTPUT" | python3 -c "import sys, plistlib; d=plistlib.loads(sys.stdin.buffer.read()); print([e['mount-point'] for e in d.get('system-entities',[]) if 'mount-point' in e][0])")
+        cp -R "$BUILD_DIR/Release/$APP_NAME" "$MOUNT_DIR/"
+        ln -s /Applications "$MOUNT_DIR/Applications"
+        mkdir "$MOUNT_DIR/.background"
+        cp "$BUILD_DIR/dmg-background/background.png" "$MOUNT_DIR/.background/background.png"
+        osascript <<APPLESCRIPT >/dev/null 2>&1 || true
+tell application "Finder"
+    tell disk "$VOLUME_NAME"
+        open
+        delay 1
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {${WIN_X}, ${WIN_Y}, $((WIN_X + WIN_W)), $((WIN_Y + WIN_H))}
+        set theViewOptions to the icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 100
+        set background picture of theViewOptions to file ".background:background.png"
+        set position of item "${APP_NAME}" of container window to {$((WIN_W / 2)), 140}
+        set position of item "Applications" of container window to {$((WIN_W / 2)), 400}
+        update without registering applications
+        delay 1
+        close
+    end tell
+end tell
+APPLESCRIPT
+        sync
+        hdiutil detach "$MOUNT_DIR" -quiet
+        hdiutil convert "$TEMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -quiet
+        rm -f "$TEMP_DMG"
+
+        echo "==> Re-submitting repackaged DMG (hash changed) and stapling..."
+        xcrun notarytool submit "$DMG_PATH" \
+            --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+            --wait 2>&1 | tee /tmp/zmd-notary.log
+        STATUS=$(grep -E "^\s*status:" /tmp/zmd-notary.log | tail -1 | awk '{print $2}')
+        if [ "$STATUS" != "Accepted" ]; then
+            echo "==> ERROR: re-notarization status was '$STATUS', expected 'Accepted'."
+            exit 1
+        fi
+        xcrun stapler staple "$DMG_PATH" 2>&1 | tail -1
+
+        echo "==> Verifying:"
+        TMP_MOUNT=$(hdiutil attach "$DMG_PATH" -nobrowse -plist | python3 -c "import sys, plistlib; d=plistlib.loads(sys.stdin.buffer.read()); print([e['mount-point'] for e in d.get('system-entities',[]) if 'mount-point' in e][0])")
+        spctl -a -vv "$TMP_MOUNT/$APP_NAME" 2>&1 | tail -3
+        hdiutil detach "$TMP_MOUNT" -quiet
     fi
 fi
 
