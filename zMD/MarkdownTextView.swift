@@ -439,6 +439,11 @@ struct MarkdownTextView: NSViewRepresentable {
             diagramCoalesceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
                 self?.lastContent = nil
                 self?.elementCache.removeAll()
+                // Force SwiftUI to re-evaluate the view body so updateNSView fires and
+                // rebuilds with the now-cached image. Without this, the math/Mermaid
+                // placeholder text stays on screen until the user scrolls/types/resizes
+                // (regression I introduced when adding the 100ms coalesce in Phase 5).
+                DocumentManager.shared.diagramRenderTick &+= 1
             }
         }
 

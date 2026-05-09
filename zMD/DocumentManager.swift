@@ -26,6 +26,12 @@ class DocumentManager: ObservableObject {
     @Published var currentCursorLine: Int = 1
     @Published var currentCursorColumn: Int = 1
 
+    // Bumped by MarkdownTextView.Coordinator after the diagram-render coalesce timer fires.
+    // Forces SwiftUI to re-evaluate the view body so updateNSView runs and rebuilds the
+    // attributed string from cache (now containing the rendered Mermaid/KaTeX images).
+    // Without this, math/diagrams stay as the purple placeholder text on static docs.
+    @Published var diagramRenderTick: Int = 0
+
     // Scroll sync in split mode
     @Published var isScrollSyncEnabled: Bool = true
     @Published var scrollSyncSourcePercent: CGFloat = 0
