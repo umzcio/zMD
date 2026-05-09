@@ -1282,8 +1282,14 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func applyInlineMathPattern(to result: NSMutableAttributedString) {
-        // Match $...$ but not $$, and not $ preceded/followed by space
-        let pattern = #"(?<!\$)\$(?!\$)(?! )(.+?)(?<! )\$(?!\$)"#
+        // Pandoc-style inline-math rule:
+        //   - opening `$` not preceded by `$` (so `$$` is display math)
+        //   - opening `$` not followed by `$`, space, OR digit (so `$1`, `$10.50` are money,
+        //     not math openers — without this, paragraphs containing `…thanks ($1) for …
+        //     thanks ($10) for …` matched the entire span between the two `$` as math)
+        //   - closing `$` not preceded by space, not followed by `$` or digit
+        //   - content capped at 200 chars to bound runaway lazy matches
+        let pattern = #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#
         guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
@@ -1297,9 +1303,19 @@ struct MarkdownTextView: NSViewRepresentable {
             let cacheKey = "math-inline-" + latex
 
             if let cached = Coordinator.diagramCache.object(forKey: cacheKey as NSString) {
-                // Replace with image attachment
+                // Replace with image attachment, sized to match the surrounding line height.
+                // takeSnapshot returns NSImages whose pixel dimensions are at the device scale
+                // (2x on retina), and NSTextAttachment displays at NSImage.size in points —
+                // without explicit bounds, math renders 2x bigger than text and breaks line
+                // metrics + table cell widths. Scale to the body font's point size, preserving
+                // aspect ratio, with a small descent offset so the math sits on the baseline.
                 let attachment = NSTextAttachment()
                 attachment.image = cached
+                let baseFontSize: CGFloat = fontStyle.nsFont(size: 14 * zoomLevel).pointSize
+                let aspect = cached.size.height > 0 ? cached.size.width / cached.size.height : 1
+                let displayHeight = baseFontSize * 1.1
+                let displayWidth = displayHeight * aspect
+                attachment.bounds = CGRect(x: 0, y: -2, width: displayWidth, height: displayHeight)
                 let replacement = NSAttributedString(attachment: attachment)
                 result.replaceCharacters(in: fullRange, with: replacement)
             } else {

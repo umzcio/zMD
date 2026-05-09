@@ -2,6 +2,11 @@ import AppKit
 import WebKit
 import CryptoKit
 
+/// No-op stub — replaces the debug-trace logging used to diagnose the headless-WebView
+/// requestAnimationFrame issue. Kept (vs deleted) so the call sites remain greppable; @inline
+/// makes the optimizer remove the calls in Release.
+@inline(__always) func _zmdNoop(_ msg: String) { _ = msg }
+
 /// Headless WKWebView-based renderer for Mermaid diagrams and KaTeX math
 @MainActor
 class WebRenderer: NSObject {
@@ -23,7 +28,7 @@ class WebRenderer: NSObject {
     // Render queues to prevent concurrent requests from overwriting completions
     private var mermaidRenderQueue: [(code: String, key: String, completion: (NSImage?) -> Void)] = []
     private var isMermaidRendering = false
-    private var katexRenderQueue: [(latex: String, displayMode: Bool, key: String, completion: (NSImage?) -> Void)] = []
+    private var katexRenderQueue: [(latex: String, displayMode: Bool, isDark: Bool, key: String, completion: (NSImage?) -> Void)] = []
     private var isKatexRendering = false
 
     private override init() {
@@ -186,23 +191,31 @@ class WebRenderer: NSObject {
     // MARK: - KaTeX
 
     func renderMath(_ latex: String, displayMode: Bool, completion: @escaping (NSImage?) -> Void) {
-        let key = cacheKey(for: latex + (displayMode ? "-display" : "-inline"), prefix: "math-")
+        // Detect appearance at render time so dark-mode users get light-on-transparent math.
+        // Cache key includes appearance so flipping themes triggers a re-render rather than
+        // serving stale-color images.
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let key = cacheKey(for: latex + (displayMode ? "-display" : "-inline") + (isDark ? "-dk" : "-lt"), prefix: "math-")
         if let cached = imageCache.object(forKey: key as NSString) {
+            _zmdNoop("[WebRenderer] renderMath cache HIT for: \(latex)")
             completion(cached)
             return
         }
 
         if !katexReady {
+            _zmdNoop("[WebRenderer] renderMath QUEUED (KaTeX not ready) for: \(latex)")
             pendingKatex.append((latex, displayMode, completion))
             setupKatexWebView()
             return
         }
 
-        executeKatexRender(latex: latex, displayMode: displayMode, key: key, completion: completion)
+        _zmdNoop("[WebRenderer] renderMath EXECUTING for: \(latex)")
+        executeKatexRender(latex: latex, displayMode: displayMode, isDark: isDark, key: key, completion: completion)
     }
 
     private func setupKatexWebView() {
         guard katexWebView == nil else { return }
+        _zmdNoop("[WebRenderer] setupKatexWebView called")
 
         let config = WKWebViewConfiguration()
         let userContentController = WKUserContentController()
@@ -212,16 +225,29 @@ class WebRenderer: NSObject {
 
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 400), configuration: config)
         webView.navigationDelegate = self
+        // Make the WebView non-opaque so captured snapshots are transparent — otherwise the
+        // rendered math has a white sticker background that looks awful in dark mode.
+        webView.setValue(false, forKey: "drawsBackground")
         katexWebView = webView
 
+        // Why takeSnapshot instead of canvas/toDataURL: the previous implementation rendered
+        // KaTeX into a container, wrapped container.outerHTML in <svg><foreignObject>, drew the
+        // SVG onto a canvas, and called toDataURL. That path silently fails in WebKit because
+        // (a) the foreignObject doesn't inherit the page's <link>'d KaTeX CSS, and (b) drawing
+        // SVG with foreignObject onto a canvas taints the canvas, so toDataURL throws — the
+        // throw escapes the JS try/catch, no message ever posts back, and the Swift placeholder
+        // stays on screen forever. Instead: JS just renders KaTeX (with proper CSS applied) and
+        // posts back the container's bounding rect. Swift uses WKWebView.takeSnapshot to capture
+        // that rect, which respects all loaded CSS and works reliably.
         let html = """
         <!DOCTYPE html>
         <html><head>
         <link rel="stylesheet" href="\(CDN.katexCSS)">
         <script src="\(CDN.katexJS)"></script>
         <style>
-            body { background: white; margin: 0; padding: 8px; }
-            #container { font-size: 16px; color: black; }
+            html, body { background: transparent; margin: 0; padding: 0; }
+            /* color is set per-render via JS based on the user's current macOS appearance */
+            #container { display: inline-block; padding: 1px 2px; font-size: 14px; }
         </style>
         </head><body>
         <div id="container"></div>
@@ -230,44 +256,24 @@ class WebRenderer: NSObject {
                 window.webkit.messageHandlers.katexReady.postMessage('ready');
             };
 
-            function renderMath(latex, displayMode) {
+            function renderMath(latex, displayMode, isDark) {
                 try {
                     const container = document.getElementById('container');
+                    container.innerHTML = '';
+                    container.style.color = isDark ? '#e8e8e8' : '#1a1a1a';
                     katex.render(latex, container, {
                         displayMode: displayMode,
                         throwOnError: false
                     });
-
+                    // setTimeout instead of requestAnimationFrame — RAF callbacks don't fire in
+                    // headless WKWebViews (no display loop). 16ms is enough for layout/font-metric
+                    // calculations to settle.
                     setTimeout(function() {
-                        // Use html2canvas-style approach: render to SVG foreignObject
-                        const bbox = container.getBoundingClientRect();
-                        const canvas = document.createElement('canvas');
-                        const scale = 2;
-                        canvas.width = bbox.width * scale;
-                        canvas.height = bbox.height * scale;
-                        const ctx = canvas.getContext('2d');
-
-                        // Create SVG with foreignObject
-                        const svgStr = '<svg xmlns="http://www.w3.org/2000/svg" width="' + bbox.width + '" height="' + bbox.height + '">' +
-                            '<foreignObject width="100%" height="100%">' +
-                            '<div xmlns="http://www.w3.org/1999/xhtml">' + container.outerHTML + '</div>' +
-                            '</foreignObject></svg>';
-                        const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-                        const url = URL.createObjectURL(svgBlob);
-                        const img = new Image();
-                        img.onload = function() {
-                            ctx.scale(scale, scale);
-                            ctx.drawImage(img, 0, 0);
-                            URL.revokeObjectURL(url);
-                            const dataURL = canvas.toDataURL('image/png');
-                            window.webkit.messageHandlers.katexResult.postMessage(dataURL);
-                        };
-                        img.onerror = function() {
-                            URL.revokeObjectURL(url);
-                            window.webkit.messageHandlers.katexResult.postMessage('ERROR');
-                        };
-                        img.src = url;
-                    }, 100);
+                        const r = container.getBoundingClientRect();
+                        window.webkit.messageHandlers.katexResult.postMessage(JSON.stringify({
+                            x: r.left, y: r.top, w: r.width, h: r.height
+                        }));
+                    }, 16);
                 } catch(e) {
                     window.webkit.messageHandlers.katexResult.postMessage('ERROR:' + e.message);
                 }
@@ -278,8 +284,8 @@ class WebRenderer: NSObject {
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    private func executeKatexRender(latex: String, displayMode: Bool, key: String, completion: @escaping (NSImage?) -> Void) {
-        katexRenderQueue.append((latex: latex, displayMode: displayMode, key: key, completion: completion))
+    private func executeKatexRender(latex: String, displayMode: Bool, isDark: Bool, key: String, completion: @escaping (NSImage?) -> Void) {
+        katexRenderQueue.append((latex: latex, displayMode: displayMode, isDark: isDark, key: key, completion: completion))
         processNextKatexRender()
     }
 
@@ -308,7 +314,11 @@ class WebRenderer: NSObject {
             self?.processNextKatexRender()
         }
 
-        webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(item.displayMode))") { [weak self] _, error in
+        // Pass the isDark flag through to JS so the rendered glyph color matches the user's
+        // current appearance. Light text on dark themes (and vice versa) — the WebView is
+        // transparent so the text-color in the snapshot is what actually shows over the
+        // surrounding NSTextView.
+        webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(item.displayMode), \(item.isDark))") { [weak self] _, error in
             if error != nil {
                 item.completion(nil)
                 self?.isKatexRendering = false
@@ -318,6 +328,15 @@ class WebRenderer: NSObject {
     }
 
     private var activeKatexCompletion: ((NSImage?) -> Void)?
+
+    /// Decoded payload posted from the KaTeX WebView's JS — the rendered math container's
+    /// bounding rect, which Swift then passes to `WKWebView.takeSnapshot`.
+    private struct KatexRect: Decodable {
+        let x: CGFloat
+        let y: CGFloat
+        let w: CGFloat
+        let h: CGFloat
+    }
 
     // MARK: - Base64 Decode Helper
 
@@ -360,6 +379,7 @@ extension WebRenderer: WKScriptMessageHandler {
             activeMermaidCompletion = nil
 
         case "katexReady":
+            _zmdNoop("[WebRenderer] katexReady — flushing \(pendingKatex.count) pending render(s)")
             katexReady = true
             let pending = pendingKatex
             pendingKatex = []
@@ -368,12 +388,31 @@ extension WebRenderer: WKScriptMessageHandler {
             }
 
         case "katexResult":
-            if let image = imageFromBase64DataURL(bodyString) {
-                activeKatexCompletion?(image)
-            } else {
+            _zmdNoop("[WebRenderer] katexResult received, body: \(bodyString.prefix(200))")
+            if bodyString.hasPrefix("ERROR") {
+                _zmdNoop("[WebRenderer] katexResult ERROR")
                 activeKatexCompletion?(nil)
+                activeKatexCompletion = nil
+                return
             }
+            guard let rectData = bodyString.data(using: .utf8),
+                  let rect = try? JSONDecoder().decode(KatexRect.self, from: rectData),
+                  rect.w > 0, rect.h > 0,
+                  let webView = katexWebView else {
+                _zmdNoop("[WebRenderer] katexResult parse FAILED or webview nil")
+                activeKatexCompletion?(nil)
+                activeKatexCompletion = nil
+                return
+            }
+            _zmdNoop("[WebRenderer] takeSnapshot rect=\(rect.x),\(rect.y),\(rect.w),\(rect.h) webView.window=\(String(describing: webView.window))")
+            let snapshotConfig = WKSnapshotConfiguration()
+            snapshotConfig.rect = CGRect(x: rect.x, y: rect.y, width: rect.w + 1, height: rect.h)
+            let cb = activeKatexCompletion
             activeKatexCompletion = nil
+            webView.takeSnapshot(with: snapshotConfig) { image, error in
+                _zmdNoop("[WebRenderer] takeSnapshot result image=\(image != nil) error=\(String(describing: error))")
+                cb?(image)
+            }
 
         default:
             break
@@ -385,7 +424,16 @@ extension WebRenderer: WKScriptMessageHandler {
 
 extension WebRenderer: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        // Silently handle navigation failures
+        _zmdNoop("[WebRenderer] WKNav didFail: \(error)")
+    }
+    nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        _zmdNoop("[WebRenderer] WKNav didFailProvisional: \(error)")
+    }
+    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        _zmdNoop("[WebRenderer] WKNav didFinish")
+    }
+    nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        _zmdNoop("[WebRenderer] WKNav didStartProvisional")
     }
 }
 
