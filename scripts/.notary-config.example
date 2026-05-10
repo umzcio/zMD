@@ -1,0 +1,11 @@
+# Copy to .notary-config.local (gitignored) and fill in your values.
+# `scripts/build-dmg.sh` sources this file when notarizing.
+
+# Path to your App Store Connect API .p8 key file
+NOTARY_KEY="$HOME/Downloads/AuthKey_XXXXXXXXXX.p8"
+
+# Key ID — printed beside the key in App Store Connect → Users and Access → Integrations → API Keys
+NOTARY_KEY_ID="XXXXXXXXXX"
+
+# Issuer UUID — shown at the top of the API Keys page
+NOTARY_ISSUER="00000000-0000-0000-0000-000000000000"

@@ -232,21 +232,31 @@ hdiutil detach "$MOUNT_DIR" -quiet
 hdiutil convert "$TEMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -quiet
 rm -f "$TEMP_DMG"
 
-# Notarize + staple. Apple's API key is in ~/Downloads/AuthKey_GDJWLVZ2PS.p8 (key ID
-# GDJWLVZ2PS, issuer 69a6de75-9781-47e3-e053-5b8c7c11a4d1, team 5JJ6G6A84S). The DMG built
-# above contains an unsignedticket .app — we submit, wait for Accepted, then RE-PACKAGE so the
-# .app inside the final DMG carries its own staple (offline-launch trust). Without the
-# re-package, only the DMG container is stapled and `stapler validate` on the .app fails.
-# Set NOTARIZE=0 in the environment to skip (e.g., for fast local iteration).
-NOTARY_KEY="$HOME/Downloads/AuthKey_GDJWLVZ2PS.p8"
-NOTARY_KEY_ID="GDJWLVZ2PS"
-NOTARY_ISSUER="69a6de75-9781-47e3-e053-5b8c7c11a4d1"
+# Notarize + staple. Credentials (App Store Connect API key path, key ID, issuer UUID) live
+# OUTSIDE the repo in `scripts/.notary-config.local` (gitignored). That file must define
+# NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER. See `scripts/.notary-config.example` for the
+# template. Set NOTARIZE=0 to skip the notary loop entirely (fast local iteration).
+#
+# After Accepted: stapler the .app, then RE-PACKAGE the DMG so the .app inside it also
+# carries its own ticket (offline-launch trust). Without the re-package, only the DMG
+# container is stapled and `stapler validate` on the extracted .app fails.
+NOTARY_CONFIG="$SCRIPT_DIR/.notary-config.local"
 
 if [ "${NOTARIZE:-1}" != "0" ]; then
-    if [ ! -f "$NOTARY_KEY" ]; then
-        echo "==> WARN: notary API key not found at $NOTARY_KEY — skipping notarization."
-        echo "    See memory/project_notarization.md for setup. Re-run after restoring the key."
+    if [ ! -f "$NOTARY_CONFIG" ]; then
+        echo "==> WARN: $NOTARY_CONFIG missing — skipping notarization."
+        echo "    Copy scripts/.notary-config.example, fill in your creds, save as .notary-config.local."
     else
+        # shellcheck disable=SC1090
+        source "$NOTARY_CONFIG"
+        if [ ! -f "${NOTARY_KEY:-}" ]; then
+            echo "==> WARN: NOTARY_KEY ($NOTARY_KEY) not found on disk — skipping notarization."
+            exit 0
+        fi
+        if [ -z "${NOTARY_KEY_ID:-}" ] || [ -z "${NOTARY_ISSUER:-}" ]; then
+            echo "==> WARN: NOTARY_KEY_ID / NOTARY_ISSUER unset in $NOTARY_CONFIG — skipping notarization."
+            exit 0
+        fi
         echo "==> Submitting DMG to Apple notary service (this can take a few minutes)..."
         xcrun notarytool submit "$DMG_PATH" \
             --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
