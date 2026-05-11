@@ -2,6 +2,18 @@ import SwiftUI
 import AppKit
 import Security
 
+/// Update wizard stage. Drives the single update sheet end-to-end so the user sees one
+/// dialog whose contents change as the install progresses, instead of a stack of separate
+/// confirmation/error/relaunch alerts (each of which the user previously had to click through,
+/// and could double-click into multiple installs).
+enum UpdateStage: Equatable {
+    case idle               // showing release notes + "Update Now" / "Later"
+    case downloading        // progress spinner; button hidden
+    case installing         // verifying signature, mounting DMG, copying to /Applications
+    case ready              // installed; "Relaunch" / "Later"
+    case failed(String)     // error message; "Close" only
+}
+
 class UpdateManager: ObservableObject {
     static let shared = UpdateManager()
 
@@ -13,8 +25,7 @@ class UpdateManager: ObservableObject {
     @Published var latestVersion: String = ""
     @Published var releaseNotes: String = ""
     @Published var downloadURL: URL?
-    @Published var isDownloading = false
-    @Published var downloadProgress: Double = 0
+    @Published var stage: UpdateStage = .idle
 
     private let lastCheckKey = DefaultsKeys.lastUpdateCheckDate
     private let checkIntervalHours: Double = Timing.updateCheckIntervalHours
@@ -106,13 +117,16 @@ class UpdateManager: ObservableObject {
     }
 
     func downloadAndInstall() {
+        // Re-entrancy guard: ignore extra clicks once we're past idle. Previously rapid clicks
+        // on the "Update Now" button queued multiple downloads + installs in parallel.
+        guard stage == .idle else { return }
+
         guard let url = downloadURL else {
-            AlertManager.shared.showError( "Download Failed", message: "No DMG download URL available. Please download manually from GitHub.")
+            stage = .failed("No DMG download URL available. Download manually from GitHub.")
             return
         }
 
-        isDownloading = true
-        downloadProgress = 0
+        stage = .downloading
 
         // Use a default-queue session so the completion fires off main; we hop to main only
         // for the small amount of UI state-flipping. The big work (mount/copy/detach) runs on
@@ -124,15 +138,13 @@ class UpdateManager: ObservableObject {
 
             if let error = error {
                 DispatchQueue.main.async {
-                    self.isDownloading = false
-                    AlertManager.shared.showError( "Download Failed", message: error.localizedDescription)
+                    self.stage = .failed(error.localizedDescription)
                 }
                 return
             }
             guard let tempURL = tempURL else {
                 DispatchQueue.main.async {
-                    self.isDownloading = false
-                    AlertManager.shared.showError( "Download Failed", message: "No file was downloaded.")
+                    self.stage = .failed("No file was downloaded.")
                 }
                 return
             }
@@ -144,13 +156,13 @@ class UpdateManager: ObservableObject {
                 try FileManager.default.copyItem(at: tempURL, to: stableDMGPath)
             } catch {
                 DispatchQueue.main.async {
-                    self.isDownloading = false
-                    AlertManager.shared.showError("Update Failed", message: "Could not prepare DMG: \(error.localizedDescription)")
+                    self.stage = .failed("Could not prepare DMG: \(error.localizedDescription)")
                 }
                 return
             }
 
-            // Heavy work (hdiutil + /Applications copy) on a background queue.
+            // Transition to installing; hdiutil + /Applications copy on background queue.
+            DispatchQueue.main.async { self.stage = .installing }
             DispatchQueue.global(qos: .userInitiated).async {
                 self.installFromDMG(at: stableDMGPath)
             }
@@ -174,8 +186,7 @@ class UpdateManager: ObservableObject {
             }
             try? fileManager.removeItem(at: stableDMGPath)
             DispatchQueue.main.async {
-                self.isDownloading = false
-                AlertManager.shared.showError("Update Failed", message: message)
+                self.stage = .failed(message)
             }
         }
 
@@ -256,17 +267,17 @@ class UpdateManager: ObservableObject {
         detach.waitUntilExit()
         try? fileManager.removeItem(at: stableDMGPath)
 
-        // Hop to main for the relaunch prompt.
+        // Transition to ready stage — the wizard sheet renders the "Relaunch" button
+        // automatically and the user clicks it to invoke `relaunchAfterUpdate()`. Replaces a
+        // separate AlertManager confirmation that appeared on top of the wizard sheet.
         DispatchQueue.main.async {
-            self.isDownloading = false
-            let shouldRelaunch = AlertManager.shared.showConfirmation(
-                title: "Update Installed",
-                message: "zMD \(self.latestVersion) has been installed to /Applications. Relaunch now?",
-                confirmButton: "Relaunch",
-                cancelButton: "Later"
-            )
-            if shouldRelaunch { self.relaunch() }
+            self.stage = .ready
         }
+    }
+
+    /// Public entry point invoked by the wizard sheet's "Relaunch" button.
+    func relaunchAfterUpdate() {
+        relaunch()
     }
 
     // MARK: - Code-signing verification
@@ -315,20 +326,26 @@ class UpdateManager: ObservableObject {
     }
 
     private func relaunch() {
+        // Detached shell trampoline: poll `kill -0 <pid>` until our process exits, THEN open the
+        // newly-installed app. Without this gate, `open -n` started the new instance while the
+        // old was still running — leaving the user with two zMD windows / dock icons until the
+        // 0.5s asyncAfter eventually terminated the old one. Now: terminate first, the
+        // background shell waits for PID to vanish, then launches.
         let appPath = "/Applications/zMD.app"
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        let script = "while kill -0 \(myPid) 2>/dev/null; do sleep 0.1; done; open '\(appPath)'"
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-n", appPath]
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", script]
         do {
             try task.run()
         } catch {
-            // Previously this used `try?` and then terminated anyway — so if `open` failed
-            // (missing binary, permission issue) the user was left with nothing running.
             AlertManager.shared.showError("Relaunch Failed", message: error.localizedDescription)
             return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        // Terminate. Trampoline picks up once kill -0 fails.
+        DispatchQueue.main.async {
             NSApplication.shared.terminate(nil)
         }
     }

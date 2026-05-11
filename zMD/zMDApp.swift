@@ -58,17 +58,19 @@ struct zMDApp: App {
                 // pinned to the bottom regardless of note length.
                 .sheet(isPresented: $updateManager.showingUpdateAlert) {
                     UpdateAvailableSheet(
-                        latestVersion: updateManager.latestVersion,
-                        currentVersion: updateManager.currentVersion,
-                        releaseNotes: updateManager.releaseNotes,
-                        canInstall: updateManager.downloadURL != nil,
-                        onUpdate: { updateManager.downloadAndInstall() },
+                        updateManager: updateManager,
                         onViewOnGitHub: {
                             if let url = URL(string: "https://github.com/umzcio/zMD/releases/latest") {
                                 NSWorkspace.shared.open(url)
                             }
                         },
-                        onLater: { updateManager.showingUpdateAlert = false }
+                        onLater: {
+                            updateManager.showingUpdateAlert = false
+                            // Reset to idle so reopening the sheet starts at release notes.
+                            if case .failed = updateManager.stage {
+                                updateManager.stage = .idle
+                            }
+                        }
                     )
                 }
         }
@@ -539,55 +541,92 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
 /// Replaces a SwiftUI `.alert` for update prompts — alerts have no scrollable message area,
 /// so long release notes pushed the action buttons off the screen (v2.5 regression).
 /// This sheet caps at 520x480, scrolls the release notes, and pins the button row to the bottom.
+/// Stateful update wizard sheet. The body switches on `updateManager.stage` so the user sees
+/// one dialog whose contents change as the install progresses (release notes → downloading
+/// → installing → relaunch). Replaces a stack of separate AlertManager dialogs that the user
+/// could double-click into duplicate downloads.
 struct UpdateAvailableSheet: View {
-    let latestVersion: String
-    let currentVersion: String
-    let releaseNotes: String
-    let canInstall: Bool
-    let onUpdate: () -> Void
+    @ObservedObject var updateManager: UpdateManager
     let onViewOnGitHub: () -> Void
     let onLater: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header — same for every stage.
             VStack(alignment: .leading, spacing: 8) {
-                Text("Update Available")
+                Text(headerTitle)
                     .font(.system(size: 16, weight: .semibold))
-                Text("zMD \(latestVersion) is available (you have \(currentVersion)).")
+                Text(headerSubtitle)
                     .font(.system(size: 13))
-                if canInstall {
-                    Text("Update Now will download, install to /Applications, and relaunch automatically.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
+                    .foregroundColor(.secondary)
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
             .padding(.bottom, 12)
 
-            if !releaseNotes.isEmpty {
-                Divider()
-                ScrollView {
-                    Text(releaseNotes)
-                        .font(.system(size: 12))
-                        .foregroundColor(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
+            Divider()
+
+            // Stage-dependent body.
+            switch updateManager.stage {
+            case .idle:
+                if !updateManager.releaseNotes.isEmpty {
+                    ScrollView {
+                        Text(updateManager.releaseNotes)
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                    }
+                    .frame(maxHeight: 280)
+                    Divider()
                 }
-                .frame(maxHeight: 280)
+            case .downloading:
+                stageContent(label: "Downloading update…", spinner: true)
+            case .installing:
+                stageContent(label: "Installing to /Applications…", spinner: true)
+            case .ready:
+                stageContent(label: "Update installed. Relaunch zMD to start using \(updateManager.latestVersion).", spinner: false)
+            case .failed(let message):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Update failed").font(.system(size: 13, weight: .semibold)).foregroundColor(.red)
+                    Text(message).font(.system(size: 12)).foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(20)
                 Divider()
             }
 
+            // Stage-dependent button row.
             HStack {
-                Button("Later", action: onLater)
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("View on GitHub", action: onViewOnGitHub)
-                if canInstall {
-                    Button("Update Now", action: onUpdate)
+                switch updateManager.stage {
+                case .idle:
+                    Button("Later", action: onLater)
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("View on GitHub", action: onViewOnGitHub)
+                    if updateManager.downloadURL != nil {
+                        Button("Update Now") { updateManager.downloadAndInstall() }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                case .downloading, .installing:
+                    Spacer()
+                    Button("Update Now") {}
+                        .disabled(true) // visible-but-disabled so the user sees progress is happening
+                case .ready:
+                    Button("Later", action: onLater)
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Relaunch zMD") { updateManager.relaunchAfterUpdate() }
                         .keyboardShortcut(.defaultAction)
+                case .failed:
+                    Spacer()
+                    Button("Close") {
+                        updateManager.stage = .idle
+                        onLater()
+                    }
+                    .keyboardShortcut(.defaultAction)
                 }
             }
             .padding(.horizontal, 20)
@@ -595,5 +634,38 @@ struct UpdateAvailableSheet: View {
         }
         .frame(width: 520)
         .frame(minHeight: 200, maxHeight: 480)
+    }
+
+    private var headerTitle: String {
+        switch updateManager.stage {
+        case .idle: return "Update Available"
+        case .downloading: return "Downloading Update"
+        case .installing: return "Installing Update"
+        case .ready: return "Update Ready"
+        case .failed: return "Update Failed"
+        }
+    }
+
+    private var headerSubtitle: String {
+        "zMD \(updateManager.latestVersion) (you have \(updateManager.currentVersion))"
+    }
+
+    @ViewBuilder
+    private func stageContent(label: String, spinner: Bool) -> some View {
+        VStack(alignment: .center, spacing: 12) {
+            if spinner {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.large)
+            }
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundColor(.primary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 32)
+        Divider()
     }
 }
