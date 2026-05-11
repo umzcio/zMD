@@ -339,8 +339,9 @@ class UpdateManager: ObservableObject {
         let script = """
         ( echo "[$(date)] trampoline waiting for PID \(myPid)" >> \(logPath); \
           while kill -0 \(myPid) 2>/dev/null; do sleep 0.1; done; \
+          sleep 0.5; \
           echo "[$(date)] PID gone, opening \(appPath)" >> \(logPath); \
-          open '\(appPath)' >> \(logPath) 2>&1; \
+          open -n '\(appPath)' >> \(logPath) 2>&1; \
           echo "[$(date)] open exit=$?" >> \(logPath) ) &
         disown
         """
@@ -363,8 +364,18 @@ class UpdateManager: ObservableObject {
         // has been backgrounded.
         task.waitUntilExit()
 
+        // Force-exit instead of NSApplication.terminate(nil). v2.5.11 left the trampoline
+        // spinning forever because terminate(nil) goes through applicationShouldTerminate, which
+        // SwiftUI returns .terminateCancel for when a modal sheet (the update wizard itself) is
+        // up — confirmed via /tmp/zmd-relaunch.log showing the same PID polled for 30+ seconds
+        // across repeated Relaunch clicks. exit(0) bypasses the AppKit terminate handshake.
         DispatchQueue.main.async {
-            NSApplication.shared.terminate(nil)
+            // Dismiss the sheet first so SwiftUI gets a chance to tear down its modal state.
+            self.showingUpdateAlert = false
+            // Hop another runloop tick, then hard-exit.
+            DispatchQueue.main.async {
+                exit(0)
+            }
         }
     }
 
