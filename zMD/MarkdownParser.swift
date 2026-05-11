@@ -155,6 +155,7 @@ class MarkdownParser {
                 && !isHorizontalRule(line)
                 && !isHTMLLine(line)
                 && trimmedLine != "$$"
+                && !(trimmedLine.hasPrefix("$$") && trimmedLine.hasSuffix("$$") && trimmedLine.count > 4)
                 && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil
             if !isPlainText && !paragraphLines.isEmpty {
                 elements.append(.paragraph(paragraphLines.joined(separator: " ")))
@@ -231,6 +232,11 @@ class MarkdownParser {
                     i += 1
                 }
                 elements.append(.displayMath(latex: mathLines.joined(separator: "\n")))
+            }
+            // Single-line display math: $$...$$ on one line
+            else if trimmedLine.hasPrefix("$$") && trimmedLine.hasSuffix("$$") && trimmedLine.count > 4 {
+                let inner = String(trimmedLine.dropFirst(2).dropLast(2))
+                elements.append(.displayMath(latex: inner))
             }
             // Code block (supports indented fences). CommonMark requires the closing fence to have
             // at least as many backticks as the opening fence — so ````swift blocks aren't closed
