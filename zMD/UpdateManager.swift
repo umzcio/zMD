@@ -326,25 +326,43 @@ class UpdateManager: ObservableObject {
     }
 
     private func relaunch() {
-        // Detached shell trampoline: poll `kill -0 <pid>` until our process exits, THEN open the
-        // newly-installed app. Without this gate, `open -n` started the new instance while the
-        // old was still running — leaving the user with two zMD windows / dock icons until the
-        // 0.5s asyncAfter eventually terminated the old one. Now: terminate first, the
-        // background shell waits for PID to vanish, then launches.
+        // Detached background trampoline: a backgrounded subshell that polls `kill -0 <pid>` until
+        // our process exits, THEN opens the newly-installed app. The ( ... ) & disown construct
+        // is critical: without it, the trampoline shell was a direct child of zMD and got reaped
+        // alongside zMD on terminate, so `open` never ran. Now: outer sh exits immediately,
+        // backgrounded subshell is orphaned to launchd, survives zMD's termination, then opens
+        // the new app once the old PID is gone. Output redirected to a log for postmortem
+        // debugging if relaunch ever fails again.
         let appPath = "/Applications/zMD.app"
         let myPid = ProcessInfo.processInfo.processIdentifier
-        let script = "while kill -0 \(myPid) 2>/dev/null; do sleep 0.1; done; open '\(appPath)'"
+        let logPath = "/tmp/zmd-relaunch.log"
+        let script = """
+        ( echo "[$(date)] trampoline waiting for PID \(myPid)" >> \(logPath); \
+          while kill -0 \(myPid) 2>/dev/null; do sleep 0.1; done; \
+          echo "[$(date)] PID gone, opening \(appPath)" >> \(logPath); \
+          open '\(appPath)' >> \(logPath) 2>&1; \
+          echo "[$(date)] open exit=$?" >> \(logPath) ) &
+        disown
+        """
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
         task.arguments = ["-c", script]
+        // Detach standard streams so the shell doesn't keep an inheritable file descriptor
+        // pointing at zMD's stdio.
+        task.standardInput = FileHandle.nullDevice
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
         do {
             try task.run()
         } catch {
             AlertManager.shared.showError("Relaunch Failed", message: error.localizedDescription)
             return
         }
+        // Wait briefly for the outer sh to fork+disown the background subshell before we
+        // terminate. Without this small gap there's a race where zMD exits before the subshell
+        // has been backgrounded.
+        task.waitUntilExit()
 
-        // Terminate. Trampoline picks up once kill -0 fails.
         DispatchQueue.main.async {
             NSApplication.shared.terminate(nil)
         }
