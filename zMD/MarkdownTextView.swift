@@ -886,6 +886,40 @@ struct MarkdownTextView: NSViewRepresentable {
         for (rowIndex, row) in rows.enumerated() {
             let isHeader = rowIndex == 0
 
+            // "Populated first cell, empty trailing cells" → render as a single full-width
+            // cell. Convention used in many docs to create summary/footer rows that visually
+            // span the table; CommonMark has no syntax for it, so we infer the intent.
+            let trimmed = row.map { $0.trimmingCharacters(in: .whitespaces) }
+            let isFullSpan = row.count > 1 && !trimmed[0].isEmpty
+                && trimmed.dropFirst().allSatisfy({ $0.isEmpty })
+
+            if isFullSpan {
+                let block = NSTextTableBlock(table: table, startingRow: rowIndex, rowSpan: 1, startingColumn: 0, columnSpan: columnCount)
+                block.setBorderColor(borderColor)
+                block.setWidth(0.5, type: .absoluteValueType, for: .border)
+                block.setWidth(6, type: .absoluteValueType, for: .padding)
+                if rowIndex % 2 == 0 {
+                    block.backgroundColor = NSColor.textColor.withAlphaComponent(0.03)
+                }
+
+                let cellStyle = NSMutableParagraphStyle()
+                cellStyle.textBlocks = [block]
+                cellStyle.lineSpacing = 2
+                cellStyle.paragraphSpacingBefore = 2
+                cellStyle.paragraphSpacing = 2
+
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: font,
+                    .foregroundColor: NSColor.textColor,
+                    .paragraphStyle: cellStyle
+                ]
+
+                let formattedCell = formatInlineMarkdown(row[0], attributes: attrs)
+                result.append(formattedCell)
+                result.append(NSAttributedString(string: "\n", attributes: attrs))
+                continue
+            }
+
             for colIndex in 0..<columnCount {
                 let cellText = colIndex < row.count ? row[colIndex] : ""
 

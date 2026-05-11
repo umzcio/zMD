@@ -691,9 +691,19 @@ class MarkdownParser {
             var html = "<table>\n"
             for (rowIndex, row) in rows.enumerated() {
                 html += "<tr>"
-                for cell in row {
-                    let tag = rowIndex == 0 ? "th" : "td"
-                    html += "<\(tag)>\(formatInlineHTML(cell))</\(tag)>"
+                let tag = rowIndex == 0 ? "th" : "td"
+                // Detect "populated first cell, all others empty" rows (a common convention for
+                // summary/footer rows that span the full width). Emit colspan so the populated
+                // cell visually fills the row in HTML/PDF/RTF output. CommonMark doesn't have
+                // syntax for this; we infer it.
+                let trimmed = row.map { $0.trimmingCharacters(in: .whitespaces) }
+                if row.count > 1, !trimmed[0].isEmpty,
+                   trimmed.dropFirst().allSatisfy({ $0.isEmpty }) {
+                    html += "<\(tag) colspan=\"\(row.count)\">\(formatInlineHTML(row[0]))</\(tag)>"
+                } else {
+                    for cell in row {
+                        html += "<\(tag)>\(formatInlineHTML(cell))</\(tag)>"
+                    }
                 }
                 html += "</tr>\n"
             }
