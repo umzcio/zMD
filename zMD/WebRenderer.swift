@@ -190,11 +190,14 @@ class WebRenderer: NSObject {
 
     // MARK: - KaTeX
 
-    func renderMath(_ latex: String, displayMode: Bool, completion: @escaping (NSImage?) -> Void) {
+    func renderMath(_ latex: String, displayMode: Bool, forceLightTheme: Bool = false, completion: @escaping (NSImage?) -> Void) {
         // Detect appearance at render time so dark-mode users get light-on-transparent math.
         // Cache key includes appearance so flipping themes triggers a re-render rather than
-        // serving stale-color images.
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // serving stale-color images. `forceLightTheme: true` is used by exports (PDF/RTF/print
+        // on a white page) — without it, dark-mode renders produce near-invisible glyphs in PDF.
+        let isDark = forceLightTheme
+            ? false
+            : NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let key = cacheKey(for: latex + (displayMode ? "-display" : "-inline") + (isDark ? "-dk" : "-lt"), prefix: "math-")
         if let cached = imageCache.object(forKey: key as NSString) {
             _zmdNoop("[WebRenderer] renderMath cache HIT for: \(latex)")

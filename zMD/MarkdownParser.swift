@@ -18,7 +18,7 @@ class MarkdownParser {
         case heading6(String)
         case paragraph(String)
         case frontmatter(lines: [String])
-        case list(items: [(level: Int, text: String, isOrdered: Bool)])
+        case list(items: [(level: Int, text: String, isOrdered: Bool, startNumber: Int?)])
         case codeBlock(code: String, language: String?)
         case mermaidBlock(code: String)
         case displayMath(latex: String)
@@ -45,7 +45,7 @@ class MarkdownParser {
             case .paragraph(let text): return "p\(unit)\(text)"
             case .frontmatter(let lines): return "fm\(unit)\(lines.joined(separator: "\n"))"
             case .list(let items):
-                let joined = items.map { "\($0.level)\(unit)\($0.isOrdered ? "1" : "0")\(unit)\($0.text)" }.joined(separator: "\u{1E}")
+                let joined = items.map { "\($0.level)\(unit)\($0.isOrdered ? "1" : "0")\(unit)\($0.startNumber.map(String.init) ?? "")\(unit)\($0.text)" }.joined(separator: "\u{1E}")
                 return "list\(unit)\(joined)"
             case .codeBlock(let code, let lang): return "code\(unit)\(lang ?? "")\(unit)\(code)"
             case .mermaidBlock(let code): return "mermaid\(unit)\(code)"
@@ -114,18 +114,19 @@ class MarkdownParser {
         var elements: [Element] = []
         let lines = markdown.components(separatedBy: .newlines)
         var i = 0
-        var listItems: [(level: Int, text: String, isOrdered: Bool)] = []
+        var listItems: [(level: Int, text: String, isOrdered: Bool, startNumber: Int?)] = []
         var paragraphLines: [String] = []
 
-        // Check for YAML frontmatter at start of document
-        if lines.first == "---" {
+        // Check for YAML frontmatter at start of document. Trim trailing whitespace on the
+        // delimiter so a stray space after `---` doesn't defeat detection (L6).
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "---" {
             var frontmatterLines: [String] = []
             i = 1
-            while i < lines.count && lines[i] != "---" {
+            while i < lines.count && lines[i].trimmingCharacters(in: .whitespaces) != "---" {
                 frontmatterLines.append(lines[i])
                 i += 1
             }
-            if i < lines.count && lines[i] == "---" {
+            if i < lines.count && lines[i].trimmingCharacters(in: .whitespaces) == "---" {
                 elements.append(.frontmatter(lines: frontmatterLines))
                 i += 1
             } else {
@@ -348,7 +349,7 @@ class MarkdownParser {
         return trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
-    func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool) {
+    func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool, startNumber: Int?) {
         // Count leading spaces/tabs to determine nesting level
         var level = 0
         var index = line.startIndex
@@ -369,12 +370,16 @@ class MarkdownParser {
         let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
 
         if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-            return (nestLevel, String(trimmed.dropFirst(2)), false)
+            return (nestLevel, String(trimmed.dropFirst(2)), false, nil)
         }
         if let match = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-            return (nestLevel, String(trimmed[match.upperBound...]), true)
+            // Capture the leading integer so renderers/exporters can preserve a list that starts
+            // at e.g. `4.` instead of always renumbering from 1.
+            let leading = String(trimmed[match]).prefix(while: { $0.isNumber })
+            let start = Int(leading)
+            return (nestLevel, String(trimmed[match.upperBound...]), true, start)
         }
-        return (nestLevel, trimmed, false)
+        return (nestLevel, trimmed, false, nil)
     }
 
     func isHorizontalRule(_ line: String) -> Bool {
@@ -648,8 +653,17 @@ class MarkdownParser {
             html += "</table></div>\n"
             return html
         case .list(let items):
-            let firstTag = (items.first?.isOrdered ?? false) ? "ol" : "ul"
-            var html = "<\(firstTag)>\n"
+            let isOrdered = items.first?.isOrdered ?? false
+            let firstTag = isOrdered ? "ol" : "ul"
+            // Honor an explicit start number on the first item (e.g. `4. ...` should render as
+            // `<ol start="4">`, not `<ol>` which always restarts at 1). Skipping start=1 keeps
+            // the common case clean.
+            var openTag = "<\(firstTag)"
+            if isOrdered, let start = items.first?.startNumber, start != 1 {
+                openTag += " start=\"\(start)\""
+            }
+            openTag += ">"
+            var html = "\(openTag)\n"
             for item in items {
                 let style = item.level > 0 ? " style=\"margin-left: \(item.level * 20)px\"" : ""
                 if item.text.hasPrefix("[ ] ") {
@@ -761,7 +775,26 @@ class MarkdownParser {
 
     /// Format inline markdown (bold, italic, code, links) to HTML
     func formatInlineHTML(_ text: String) -> String {
-        var result = escapeHTML(text)
+        // CommonMark backslash escapes: `\X` where X is one of the escapable chars renders as
+        // literal X. Tokenize them first using BMP Private Use Area codepoints so the bold/
+        // italic/etc. regexes won't see the `*`/`_` etc. as markers, then strip the sentinels
+        // at the end. U+E000..U+F8FF are reserved for private use — never appear in real text.
+        let openSentinel = "\u{E000}"
+        let closeSentinel = "\u{E001}"
+        let brSentinel = "\u{E002}"
+        var result = text.replacingOccurrences(
+            of: #"\\([\\`*_{}\[\]()#+\-.!|~])"#,
+            with: "\(openSentinel)$1\(closeSentinel)",
+            options: .regularExpression
+        )
+        // Preserve `<br>` (case-insensitive, optional self-closing slash) through HTML escape.
+        result = result.replacingOccurrences(
+            of: #"<br\s*/?>"#,
+            with: brSentinel,
+            options: [.regularExpression, .caseInsensitive]
+        )
+        result = escapeHTML(result)
+        result = result.replacingOccurrences(of: brSentinel, with: "<br>")
 
         // Bold **text** (must come before italic)
         result = result.replacingOccurrences(
@@ -777,7 +810,13 @@ class MarkdownParser {
             options: .regularExpression
         )
 
-        // Inline code `text`
+        // Inline code — try double-backtick first so spans like ``foo`bar`baz`` survive with the
+        // inner backtick intact (L7), then single-backtick handles the common case.
+        result = result.replacingOccurrences(
+            of: #"``([^`]+(?:`[^`]+)*)``"#,
+            with: "<code>$1</code>",
+            options: .regularExpression
+        )
         result = result.replacingOccurrences(
             of: #"`([^`]+)`"#,
             with: "<code>$1</code>",
@@ -809,6 +848,10 @@ class MarkdownParser {
             with: "<del>$1</del>",
             options: .regularExpression
         )
+
+        // Strip backslash-escape sentinels — leaves the literal char that was escaped.
+        result = result.replacingOccurrences(of: openSentinel, with: "")
+        result = result.replacingOccurrences(of: closeSentinel, with: "")
 
         return result
     }
@@ -854,11 +897,12 @@ class MarkdownParser {
         var slugCounts: [String: Int] = [:]
         var i = 0
 
-        // Skip YAML frontmatter: if the file opens with `---` and has a matching closer, jump past it.
-        if lines.first == "---" {
+        // Skip YAML frontmatter: if the file opens with `---` and has a matching closer, jump
+        // past it. Tolerate trailing whitespace on the delimiter (L6).
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "---" {
             var j = 1
-            while j < lines.count && lines[j] != "---" { j += 1 }
-            if j < lines.count && lines[j] == "---" {
+            while j < lines.count && lines[j].trimmingCharacters(in: .whitespaces) != "---" { j += 1 }
+            if j < lines.count && lines[j].trimmingCharacters(in: .whitespaces) == "---" {
                 i = j + 1
             }
         }

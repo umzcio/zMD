@@ -103,8 +103,10 @@ class DocumentManager: ObservableObject {
 
     /// Decode file data trying multiple encodings, returns content and encoding name.
     /// Order: BOM sniff → strict UTF-8 → CP1252 heuristic → Mac Roman → ISO-8859-1 catch-all.
-    /// CP1252 and ISO-8859-1 decode arbitrary byte sequences successfully, so they must come AFTER
-    /// strict UTF-8 and BOM detection, otherwise UTF-16 / UTF-8 files would be silently misclassified.
+    /// L5 note: CP1252 *almost* decodes any byte sequence — Foundation rejects 5 undefined
+    /// positions (0x81, 0x8D, 0x8F, 0x90, 0x9D). When CP1252 fails on those, the chain falls
+    /// through to Mac Roman / ISO-8859-1 (latter has no undefined positions). Either way the
+    /// strict UTF-8 + BOM checks must come first or UTF-encoded files get misclassified.
     private func decodeFileData(_ data: Data) -> (content: String, encoding: String) {
         // 1) BOM sniff — most reliable discrimination.
         if data.count >= 3, data[0] == 0xEF, data[1] == 0xBB, data[2] == 0xBF,

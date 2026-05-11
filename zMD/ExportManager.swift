@@ -9,6 +9,110 @@ class ExportManager {
 
     private init() {}
 
+    /// Strip `$..$` and `$$..$$` math from the SOURCE MARKDOWN before HTML conversion, replacing
+    /// each with a safe placeholder. Returns the modified markdown + an ordered list of math
+    /// expressions. Pair with `substituteMathPlaceholdersInHTML` after toHTML to swap the
+    /// placeholders for rendered `<img>` tags.
+    ///
+    /// Why not work on the HTML directly: the inline-formatting pass in `MarkdownParser.toHTML`
+    /// (bold/italic/strike) operates on every `*`/`_`/`~` it sees, including those INSIDE math
+    /// spans. A math span like `$*p < .05. **p < .01. ***p < .001.$` ends up with `<em>` and
+    /// `<strong>` tags woven through the LaTeX, which KaTeX then can't parse. Pre-extracting
+    /// at the markdown layer keeps the LaTeX pristine.
+    private func extractMathFromMarkdown(_ markdown: String) -> (modified: String, math: [(latex: String, display: Bool)]) {
+        var math: [(latex: String, display: Bool)] = []
+
+        // Display math first ($$..$$, may span newlines)
+        var modified = markdown
+        if let displayRegex = try? NSRegularExpression(pattern: #"\$\$([\s\S]+?)\$\$"#) {
+            let ns = modified as NSString
+            let matches = displayRegex.matches(in: modified, range: NSRange(location: 0, length: ns.length)).reversed()
+            let mutable = NSMutableString(string: modified)
+            for m in matches {
+                let latex = ns.substring(with: m.range(at: 1))
+                let placeholder = "ZMDMATHPH\(math.count)ZMDEND"
+                math.append((latex, true))
+                mutable.replaceCharacters(in: m.range, with: placeholder)
+            }
+            modified = mutable as String
+        }
+        // Inline math (Pandoc-style restrictions matched in MarkdownTextView).
+        if let inlineRegex = try? NSRegularExpression(pattern: #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n$]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#) {
+            let ns = modified as NSString
+            let matches = inlineRegex.matches(in: modified, range: NSRange(location: 0, length: ns.length)).reversed()
+            let mutable = NSMutableString(string: modified)
+            for m in matches {
+                let latex = ns.substring(with: m.range(at: 1))
+                let placeholder = "ZMDMATHPH\(math.count)ZMDEND"
+                math.append((latex, false))
+                mutable.replaceCharacters(in: m.range, with: placeholder)
+            }
+            modified = mutable as String
+        }
+        return (modified, math)
+    }
+
+    /// Render each math expression to a base64 PNG `<img>` and substitute into the HTML where
+    /// the matching `ZMDMATHPHnZMDEND` placeholder appears. Forces light-theme glyphs so they
+    /// stay readable on the white PDF/RTF page.
+    private func substituteMathPlaceholdersInHTML(_ html: String, math: [(latex: String, display: Bool)]) -> String {
+        guard !math.isEmpty else { return html }
+
+        var renderedImages: [Int: NSImage] = [:]
+        let semaphore = DispatchSemaphore(value: 0)
+        for (i, hit) in math.enumerated() {
+            DispatchQueue.main.async {
+                WebRenderer.shared.renderMath(hit.latex, displayMode: hit.display, forceLightTheme: true) { image in
+                    renderedImages[i] = image
+                    semaphore.signal()
+                }
+            }
+            _ = semaphore.wait(timeout: .now() + 5)
+        }
+
+        var result = html
+        for (i, hit) in math.enumerated() {
+            let placeholder = "ZMDMATHPH\(i)ZMDEND"
+            let replacement: String = {
+                guard let img = renderedImages[i] else { return escapeHTMLAttr(hit.latex) }
+                let targetHeight: CGFloat = hit.display ? 22 : 14
+                let aspect = img.size.height > 0 ? img.size.width / img.size.height : 1
+                let targetWidth = targetHeight * aspect
+                guard let resized = resizeImage(img, to: NSSize(width: targetWidth, height: targetHeight)),
+                      let png = resized.tiffRepresentation
+                        .flatMap({ NSBitmapImageRep(data: $0) })
+                        .flatMap({ $0.representation(using: .png, properties: [:]) }) else {
+                    return escapeHTMLAttr(hit.latex)
+                }
+                let b64 = png.base64EncodedString()
+                let style = hit.display ? "display:block; margin:0.4em auto;" : "vertical-align:middle;"
+                return "<img src=\"data:image/png;base64,\(b64)\" width=\"\(Int(targetWidth))\" height=\"\(Int(targetHeight))\" style=\"\(style)\" alt=\"\(escapeHTMLAttr(hit.latex))\">"
+            }()
+            result = result.replacingOccurrences(of: placeholder, with: replacement)
+        }
+        return result
+    }
+
+    /// Render an NSImage at exactly `size` (in points), letting AppKit downsample.
+    private func resizeImage(_ image: NSImage, to size: NSSize) -> NSImage? {
+        let newImage = NSImage(size: size)
+        newImage.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        image.draw(in: NSRect(origin: .zero, size: size),
+                   from: NSRect(origin: .zero, size: image.size),
+                   operation: .copy,
+                   fraction: 1.0)
+        newImage.unlockFocus()
+        return newImage
+    }
+
+    private func escapeHTMLAttr(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "\"", with: "&quot;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
     /// Strip CDN script/link tags and remote `<img src>` from HTML before handing it to
     /// `NSAttributedString(html:)`. That initializer is a synchronous WebKit shim that fetches
     /// network resources on the main thread; offline or with a slow CDN it hangs for seconds
@@ -71,15 +175,20 @@ class ExportManager {
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
 
-            DispatchQueue.main.async {
-                do {
-                    // Create PDF using NSAttributedString (sandbox-friendly).
-                    // Pre-process: strip CDN scripts (H14, prevents main-thread network hang)
-                    // and absolutize relative <img src> paths against the doc's directory (M15).
-                    var html = self.parser.toHTML(content, includeStyles: true)
-                    html = self.absolutizeImageSrcs(html, baseURL: baseURL)
-                    html = self.stripNetworkResourcesForAttributedString(html)
+            // Pre-render math on a background queue (preRenderMathInHTML dispatches WebRenderer
+            // calls back to main and waits via semaphore — would deadlock if we waited on main).
+            // Then hop back to main for the PDF/CGContext work.
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Extract math from MARKDOWN before HTML conversion so the inline-formatting
+                // pass doesn't weave <em>/<strong> into LaTeX containing `*` characters.
+                let (preprocessed, math) = self.extractMathFromMarkdown(content)
+                var html = self.parser.toHTML(preprocessed, includeStyles: true)
+                html = self.absolutizeImageSrcs(html, baseURL: baseURL)
+                html = self.substituteMathPlaceholdersInHTML(html, math: math)
+                html = self.stripNetworkResourcesForAttributedString(html)
 
+                DispatchQueue.main.async {
+                do {
                     guard let htmlData = html.data(using: .utf8) else {
                         self.alertManager.showExportError("PDF", reason: "Failed to encode HTML content")
                         return
@@ -140,59 +249,58 @@ class ExportManager {
                     let glyphRange = layoutManager.glyphRange(for: textContainer)
                     let usedRect = layoutManager.usedRect(for: textContainer)
 
-                    // Draw pages, advancing currentY to the largest line-fragment boundary
-                    // ≤ currentY + pageHeight. Without this, glyphs straddling the cut got
-                    // clipped (top half on page N, bottom half on N+1) (H13).
-                    var currentY: CGFloat = 0
+                    // Page by glyph range, not by clipping. Walk line fragments to compute the
+                    // glyph range that fits on each page, then `drawGlyphs(forGlyphRange:at:)`
+                    // to draw ONLY those glyphs. This avoids the clipping race where
+                    // NSAttributedString.draw renders into a wider rect and we relied on the
+                    // clip to hide the overflow — which sometimes painted the top of the next
+                    // line on the bottom of the current page (cut-then-repeat).
                     let pageHeight = textRect.height
+                    var pageStartGlyph = layoutManager.glyphIndexForCharacter(at: 0)
+                    var pageStartY: CGFloat = 0
+                    let totalGlyphs = NSMaxRange(glyphRange)
 
-                    while currentY < usedRect.height {
-                        let targetBottom = currentY + pageHeight
-                        var nextY = targetBottom
-                        if targetBottom < usedRect.height {
-                            // Walk line fragments to find the last one that ends ≤ targetBottom.
-                            var lastBoundary = currentY
-                            var glyph = layoutManager.glyphIndexForCharacter(at: 0)
-                            let endGlyph = NSMaxRange(glyphRange)
-                            while glyph < endGlyph {
-                                var lineRange = NSRange()
-                                let frag = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &lineRange)
-                                let fragBottom = frag.maxY
-                                if fragBottom <= targetBottom {
-                                    lastBoundary = fragBottom
-                                    glyph = NSMaxRange(lineRange)
-                                } else {
-                                    break
-                                }
-                            }
-                            // If we couldn't fit even one line, fall back to a hard cut so we make progress.
-                            nextY = (lastBoundary > currentY) ? lastBoundary : targetBottom
+                    while pageStartGlyph < totalGlyphs {
+                        // Find largest glyph range whose lines all end ≤ pageStartY + pageHeight.
+                        let pageBottom = pageStartY + pageHeight
+                        var pageEndGlyph = pageStartGlyph
+                        var pageEndY = pageStartY
+                        var glyph = pageStartGlyph
+                        while glyph < totalGlyphs {
+                            var lineRange = NSRange()
+                            let frag = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &lineRange)
+                            if frag.maxY > pageBottom { break }
+                            pageEndGlyph = NSMaxRange(lineRange)
+                            pageEndY = frag.maxY
+                            glyph = NSMaxRange(lineRange)
                         }
+                        // If a single line is taller than pageHeight, force advance one line so
+                        // we make progress (still better than infinite loop).
+                        if pageEndGlyph == pageStartGlyph {
+                            var lineRange = NSRange()
+                            let frag = layoutManager.lineFragmentRect(forGlyphAt: pageStartGlyph, effectiveRange: &lineRange)
+                            pageEndGlyph = NSMaxRange(lineRange)
+                            pageEndY = frag.maxY
+                        }
+
+                        let pageGlyphRange = NSRange(location: pageStartGlyph, length: pageEndGlyph - pageStartGlyph)
 
                         context.beginPage(mediaBox: &mediaBox)
                         context.saveGState()
-
-                        // PDF origin is bottom-left; flip the CTM so our top-down
-                        // coordinates (and the flipped: true NSGraphicsContext) are
-                        // accurate. Without this, NSAttributedString renders mirrored.
+                        // Flip CTM so our top-down coords match NSGraphicsContext(flipped: true).
                         context.translateBy(x: 0, y: pageSize.height)
                         context.scaleBy(x: 1, y: -1)
 
-                        context.clip(to: textRect)
-
-                        let drawRect = NSRect(
-                            x: textRect.minX,
-                            y: textRect.minY - currentY,
-                            width: textRect.width,
-                            height: usedRect.height
-                        )
-
-                        attributedString.draw(in: drawRect)
+                        // Anchor glyphs so the top of pageStartY lands at textRect.minY on the page.
+                        let origin = NSPoint(x: textRect.minX, y: textRect.minY - pageStartY)
+                        layoutManager.drawBackground(forGlyphRange: pageGlyphRange, at: origin)
+                        layoutManager.drawGlyphs(forGlyphRange: pageGlyphRange, at: origin)
 
                         context.restoreGState()
                         context.endPage()
 
-                        currentY = nextY
+                        pageStartGlyph = pageEndGlyph
+                        pageStartY = pageEndY
                     }
 
                     context.closePDF()
@@ -201,6 +309,7 @@ class ExportManager {
                     ToastManager.shared.show("Exported as PDF", style: .success)
                 } catch {
                     self.alertManager.showExportError("PDF", error: error)
+                }
                 }
             }
         }
@@ -237,38 +346,42 @@ class ExportManager {
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
 
-            DispatchQueue.main.async {
-                // Convert markdown to HTML first, then to attributed string, then to RTF.
-                // H14: scripts stripped to avoid synchronous network fetch on main thread.
-                var html = self.parser.toHTML(content, includeStyles: true)
+            // Pre-render math on a background queue so the semaphore wait doesn't deadlock
+            // with WebRenderer dispatching back to main. Then RTF gen on main.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (preprocessed, math) = self.extractMathFromMarkdown(content)
+                var html = self.parser.toHTML(preprocessed, includeStyles: true)
+                html = self.substituteMathPlaceholdersInHTML(html, math: math)
                 html = self.stripNetworkResourcesForAttributedString(html)
 
-                guard let data = html.data(using: .utf8) else {
-                    self.alertManager.showExportError("RTF", reason: "Failed to encode HTML content")
-                    return
-                }
+                DispatchQueue.main.async {
+                    guard let data = html.data(using: .utf8) else {
+                        self.alertManager.showExportError("RTF", reason: "Failed to encode HTML content")
+                        return
+                    }
 
-                guard let attributedString = NSAttributedString(
-                    html: data,
-                    options: [
-                        .documentType: NSAttributedString.DocumentType.html,
-                        .characterEncoding: String.Encoding.utf8.rawValue
-                    ],
-                    documentAttributes: nil
-                ) else {
-                    self.alertManager.showExportError("RTF", reason: "Failed to create styled content")
-                    return
-                }
+                    guard let attributedString = NSAttributedString(
+                        html: data,
+                        options: [
+                            .documentType: NSAttributedString.DocumentType.html,
+                            .characterEncoding: String.Encoding.utf8.rawValue
+                        ],
+                        documentAttributes: nil
+                    ) else {
+                        self.alertManager.showExportError("RTF", reason: "Failed to create styled content")
+                        return
+                    }
 
-                do {
-                    let rtfData = try attributedString.data(
-                        from: NSRange(location: 0, length: attributedString.length),
-                        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-                    )
-                    try rtfData.write(to: url)
-                    ToastManager.shared.show("Exported as RTF", style: .success)
-                } catch {
-                    self.alertManager.showExportError("RTF", error: error)
+                    do {
+                        let rtfData = try attributedString.data(
+                            from: NSRange(location: 0, length: attributedString.length),
+                            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+                        )
+                        try rtfData.write(to: url)
+                        ToastManager.shared.show("Exported as RTF", style: .success)
+                    } catch {
+                        self.alertManager.showExportError("RTF", error: error)
+                    }
                 }
             }
         }
@@ -298,15 +411,21 @@ class ExportManager {
     // Property to track hyperlinks and images during document generation
     private var hyperlinkRelationships: [(id: String, url: String)] = []
     private var imageRelationships: [(id: String, fileName: String, data: Data, ext: String)] = []
-    private var nextHyperlinkId = 6 // rId1-5 reserved for numbering, styles, settings, header, footer
+    // Static relationships occupy rId1..rIdN (numbering, styles, settings, header, footer).
+    // L14: derived from `staticDOCXRelationshipCount` instead of a hardcoded literal so adding a
+    // new static relationship in `word/_rels/document.xml.rels` only needs that constant updated;
+    // hyperlink/image counters auto-shift to avoid collision.
+    private static let staticDOCXRelationshipCount = 5
+    private var nextHyperlinkId = staticDOCXRelationshipCount + 1
     private var nextImageId = 1
     private var numberedListCount = 0 // tracks how many separate numbered lists for numId generation
+    private var numberedListStarts: [Int] = [] // start number per numbered list (index 0 = first ordered list)
 
     private func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil, baseURL: URL? = nil) throws {
         // Reset hyperlink and image tracking for new document
         hyperlinkRelationships = []
         imageRelationships = []
-        nextHyperlinkId = 6
+        nextHyperlinkId = Self.staticDOCXRelationshipCount + 1
         nextImageId = 1
 
         // Create temporary directory for DOCX structure
@@ -525,10 +644,12 @@ class ExportManager {
                 <w:abstractNumId w:val="1"/>
             </w:num>
         """
-        // Add a <w:num> for each separate numbered list, with restart override
+        // Add a <w:num> for each separate numbered list, with restart override honoring the
+        // source's leading integer (so a list opening with `4.` actually starts at 4 in Word).
         for listIdx in 1...max(numberedListCount, 1) {
             let numId = 2 + listIdx
-            numberingXML += "\n    <w:num w:numId=\"\(numId)\"><w:abstractNumId w:val=\"1\"/><w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"1\"/></w:lvlOverride></w:num>"
+            let start = (listIdx <= numberedListStarts.count) ? numberedListStarts[listIdx - 1] : 1
+            numberingXML += "\n    <w:num w:numId=\"\(numId)\"><w:abstractNumId w:val=\"1\"/><w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"\(start)\"/></w:lvlOverride></w:num>"
         }
         numberingXML += "\n</w:numbering>"
         try numberingXML.write(to: wordDir.appendingPathComponent("numbering.xml"), atomically: true, encoding: .utf8)
@@ -685,6 +806,7 @@ class ExportManager {
         let elements = MarkdownParser.shared.parse(markdown)
         var currentNumberedNumId = 2
         numberedListCount = 0
+        numberedListStarts = []
 
         for element in elements {
             switch element {
@@ -704,12 +826,16 @@ class ExportManager {
                 }
 
             case .list(let items):
-                // Assign a fresh numId each time we encounter an ordered-prefix run.
+                // Assign a fresh numId each time we encounter an ordered-prefix run, and
+                // remember the run's first item's startNumber so the generated numbering.xml
+                // includes a matching <w:startOverride>. Without this, an ordered list opening
+                // with `4.` always rendered as `1.` in DOCX.
                 var inNumbered = false
                 for item in items {
                     if item.isOrdered && !inNumbered {
                         numberedListCount += 1
                         currentNumberedNumId = 2 + numberedListCount
+                        numberedListStarts.append(item.startNumber ?? 1)
                         inNumbered = true
                     } else if !item.isOrdered && inNumbered {
                         inNumbered = false
@@ -1076,11 +1202,14 @@ class ExportManager {
 
     private func formatInlineMarkdownForDOCX(_ text: String) -> String {
         // Strip markdown formatting for headings (will be applied via DOCX styles).
-        // M13: now also strips `~~strikethrough~~` so heading runs don't show literal `~~`.
+        // M13: strikethrough handled. L15: bold pattern uses `(?:[^*]|\*(?!\*))+?` to allow
+        // single `*` characters inside the bold span — previously `**foo*bar*baz**` had its
+        // inner `*bar*` eaten by the italic pass after bold matched only `**foo*`.
         return text
-            .replacingOccurrences(of: #"\*\*([^\*]+)\*\*"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"\*\*((?:[^*]|\*(?!\*))+?)\*\*"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"\*([^\*]+)\*"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"~~([^~]+)~~"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"``([^`]+(?:`[^`]+)*)``"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
     }
 
@@ -1113,7 +1242,25 @@ class ExportManager {
         process.arguments = ["-r", "-X", tempZip.path, "."]
 
         try process.run()
-        process.waitUntilExit()
+
+        // L16: bound the wait so a stalled `/usr/bin/zip` (rare, but possible on full disks
+        // or APFS hiccups) doesn't wedge the main thread forever. Poll on a background queue;
+        // if the process is still alive after 30s, terminate and bail with a recognizable error.
+        let timeoutSec: TimeInterval = 30
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.waitUntilExit()
+            group.leave()
+        }
+        let waitResult = group.wait(timeout: .now() + timeoutSec)
+        if waitResult == .timedOut {
+            process.terminate()
+            // Give it a moment to actually exit after SIGTERM, then SIGKILL if still alive.
+            _ = group.wait(timeout: .now() + 2)
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            throw NSError(domain: "ExportManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "ZIP creation timed out after \(Int(timeoutSec))s"])
+        }
 
         guard process.terminationStatus == 0 else {
             throw NSError(domain: "ExportManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to create ZIP archive"])

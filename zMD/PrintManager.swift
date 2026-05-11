@@ -69,8 +69,24 @@ class PrintManager {
             case .paragraph(let text): appendParagraph(text: text, to: result)
             case .frontmatter: break // skip in print output
             case .list(let items):
+                // Per-level ordered counter, seeded by each item's startNumber on first occurrence
+                // at that level. Without this, every ordered list printed as `1. 1. 1.`.
+                var orderedCounters: [Int: Int] = [:]
                 for item in items {
-                    appendListItem(level: item.level, text: item.text, isOrdered: item.isOrdered, to: result)
+                    var explicitNumber: Int? = nil
+                    if item.isOrdered {
+                        let counter: Int
+                        if let existing = orderedCounters[item.level] {
+                            counter = existing + 1
+                        } else if let start = item.startNumber {
+                            counter = start
+                        } else {
+                            counter = 1
+                        }
+                        orderedCounters[item.level] = counter
+                        explicitNumber = counter
+                    }
+                    appendListItem(level: item.level, text: item.text, isOrdered: item.isOrdered, number: explicitNumber, to: result)
                 }
             case .codeBlock(let code, _): appendCodeBlock(code: code, to: result)
             case .mermaidBlock(let code): appendCodeBlock(code: "[mermaid]\n" + code, to: result)
@@ -88,10 +104,10 @@ class PrintManager {
         return result
     }
 
-    private func appendListItem(level: Int, text: String, isOrdered: Bool, to result: NSMutableAttributedString) {
+    private func appendListItem(level: Int, text: String, isOrdered: Bool, number: Int?, to result: NSMutableAttributedString) {
         // Construct the raw line the old helper expected so bullet/indent math stays identical.
         let indent = String(repeating: "  ", count: level)
-        let marker = isOrdered ? "1. " : "- "
+        let marker = isOrdered ? "\(number ?? 1). " : "- "
         appendListItem(line: indent + marker + text, to: result)
     }
 

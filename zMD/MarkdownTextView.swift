@@ -658,13 +658,15 @@ struct MarkdownTextView: NSViewRepresentable {
         result.append(NSAttributedString(string: "\n"))
     }
 
-    private func appendList(items: [(level: Int, text: String, isOrdered: Bool)], to result: NSMutableAttributedString) {
+    private func appendList(items: [(level: Int, text: String, isOrdered: Bool, startNumber: Int?)], to result: NSMutableAttributedString) {
         let font = fontStyle.nsFont(size: 16 * zoomLevel)
 
-        // Track ordered list counters per nesting level
+        // Track ordered list counters per nesting level. The list's first item carries an
+        // optional startNumber from the source markdown; subsequent items at the same level
+        // continue sequentially. A list opening with `4. foo` renders as `4.`, not `1.`.
         var orderedCounters: [Int: Int] = [:]
 
-        for (level, text, isOrdered) in items {
+        for (level, text, isOrdered, startNumber) in items {
             // Calculate indentation based on nesting level
             let baseIndent: CGFloat = 16
             let levelIndent: CGFloat = CGFloat(level) * 20
@@ -694,7 +696,15 @@ struct MarkdownTextView: NSViewRepresentable {
                 itemText = String(text.dropFirst(4))
                 orderedCounters[level] = nil
             } else if isOrdered {
-                let counter = (orderedCounters[level] ?? 0) + 1
+                let counter: Int
+                if let existing = orderedCounters[level] {
+                    counter = existing + 1
+                } else if let start = startNumber {
+                    // First item at this level — honor the explicit start number from source.
+                    counter = start
+                } else {
+                    counter = 1
+                }
                 orderedCounters[level] = counter
                 bulletPrefix = "\(counter).  "
             } else {
@@ -962,8 +972,14 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     private func loadImage(path: String) -> NSImage? {
-        // Check cache first
-        if let cached = Coordinator.imageCache.object(forKey: path as NSString) {
+        // L3: cache key composed of (baseURL.path, path) so two open documents in different
+        // folders can each have an `image.png` without one's image overwriting the other's
+        // entry. Remote URLs are unique by URL alone, so we leave them keyed on `path`.
+        let cacheKey: String = {
+            if path.hasPrefix("http://") || path.hasPrefix("https://") { return path }
+            return (baseURL?.deletingLastPathComponent().path ?? "") + "\u{1F}" + path
+        }()
+        if let cached = Coordinator.imageCache.object(forKey: cacheKey as NSString) {
             return cached
         }
 
@@ -975,7 +991,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 DispatchQueue.global(qos: .userInitiated).async {
                     guard let image = NSImage(contentsOf: url) else { return }
                     DispatchQueue.main.async {
-                        Coordinator.imageCache.setObject(image, forKey: path as NSString)
+                        Coordinator.imageCache.setObject(image, forKey: cacheKey as NSString)
                         NotificationCenter.default.post(name: .diagramRendered, object: nil)
                     }
                 }
@@ -1013,7 +1029,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         if let url = resolvedURL, let image = NSImage(contentsOf: url) {
-            Coordinator.imageCache.setObject(image, forKey: path as NSString)
+            Coordinator.imageCache.setObject(image, forKey: cacheKey as NSString)
             return image
         }
 
@@ -1169,13 +1185,34 @@ struct MarkdownTextView: NSViewRepresentable {
     private static let codeSpanSentinel = NSAttributedString.Key("zMD.codeSpanSentinel")
 
     private func formatInlineMarkdown(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: text, attributes: attributes)
+        // CommonMark backslash escapes + <br>. Sentinel-out before regex passes so escaped
+        // markers (\* \_ etc.) don't trigger bold/italic, and <br> becomes a real newline in
+        // the rendered NSAttributedString instead of literal "<br>" text.
+        var processed = text.replacingOccurrences(
+            of: #"<br\s*/?>"#,
+            with: "\n",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        let openSentinel = "\u{E000}"
+        let closeSentinel = "\u{E001}"
+        processed = processed.replacingOccurrences(
+            of: #"\\([\\`*_{}\[\]()#+\-.!|~])"#,
+            with: "\(openSentinel)$1\(closeSentinel)",
+            options: .regularExpression
+        )
+        let result = NSMutableAttributedString(string: processed, attributes: attributes)
         let baseFont = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 16)
 
         // Inline code FIRST. It's atomic in CommonMark — `*x*` inside a code span must remain
         // literal asterisks. Tag the resulting content with codeSpanSentinel so downstream passes
-        // skip those ranges (H5).
-        applyPattern(#"`(.+?)`"#, to: result, attributes: [
+        // skip those ranges (H5). Try double-backtick first so `` `foo` `` content (with literal
+        // backticks inside) renders correctly; then single-backtick handles the common case (L7).
+        applyPattern(#"``([^`]+(?:`[^`]+)*)``"#, to: result, attributes: [
+            Self.codeSpanSentinel: true,
+            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
+            .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
+        ])
+        applyPattern(#"`([^`]+?)`"#, to: result, attributes: [
             Self.codeSpanSentinel: true,
             .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
             .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
@@ -1201,6 +1238,10 @@ struct MarkdownTextView: NSViewRepresentable {
         let fullRange = NSRange(location: 0, length: result.length)
         result.removeAttribute(Self.codeSpanSentinel, range: fullRange)
 
+        // Strip backslash-escape sentinels — leaves the literal escaped char.
+        result.mutableString.replaceOccurrences(of: openSentinel, with: "", options: [], range: NSRange(location: 0, length: result.length))
+        result.mutableString.replaceOccurrences(of: closeSentinel, with: "", options: [], range: NSRange(location: 0, length: result.length))
+
         return result
     }
 
@@ -1217,7 +1258,12 @@ struct MarkdownTextView: NSViewRepresentable {
         guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
-        // Find all matches in reverse order to preserve indices when modifying
+        // L8: matches are computed once over the original string and iterated in reverse so
+        // index-shifting from earlier replacements doesn't invalidate later ranges. Side effect:
+        // we don't re-tokenize after each mutation, so a replacement that creates new pairs
+        // (e.g., `**a*` followed by `*b**` joined into `**a*` + `*b**` → `**a**b**` post-replace)
+        // would not be re-matched. This is acceptable: the input must be CommonMark-correct, and
+        // emitting paired markers from a non-paired input is a pathological case.
         let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()
 
         for match in matches {

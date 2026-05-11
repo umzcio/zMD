@@ -116,6 +116,13 @@ class EditorTextView: NSTextView {
         nc.addObserver(self, selector: #selector(handleInsertTaskList), name: .editorInsertTaskList, object: nil)
     }
 
+    /// L1: every open EditorTextView subscribes to the same global toolbar notifications. Without
+    /// this guard, hitting ⌘B with three tabs open would bold-wrap the selection in all three.
+    /// Only the editor that's currently the window's first responder should react.
+    private var isActiveEditor: Bool {
+        window?.firstResponder === self
+    }
+
     // MARK: - Drawing
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
@@ -525,22 +532,27 @@ class EditorTextView: NSTextView {
     // MARK: - Format Actions
 
     @objc func handleFormatBold() {
+        guard isActiveEditor else { return }
         wrapSelectionWith("**", "**", placeholder: "bold text")
     }
 
     @objc func handleFormatItalic() {
+        guard isActiveEditor else { return }
         wrapSelectionWith("*", "*", placeholder: "italic text")
     }
 
     @objc func handleFormatStrikethrough() {
+        guard isActiveEditor else { return }
         wrapSelectionWith("~~", "~~", placeholder: "strikethrough text")
     }
 
     @objc func handleFormatInlineCode() {
+        guard isActiveEditor else { return }
         wrapSelectionWith("`", "`", placeholder: "code")
     }
 
     @objc func handleFormatCodeBlock() {
+        guard isActiveEditor else { return }
         let range = selectedRange()
         let text = string as NSString
 
@@ -555,13 +567,14 @@ class EditorTextView: NSTextView {
             let insertion = "```\n\n```"
             if shouldChangeText(in: range, replacementString: insertion) {
                 replaceCharacters(in: range, with: insertion)
-                setSelectedRange(NSRange(location: range.location + 4, length: 0))
                 didChangeText()
+                setSelectedRange(NSRange(location: range.location + 4, length: 0))
             }
         }
     }
 
     @objc func handleInsertLink() {
+        guard isActiveEditor else { return }
         let range = selectedRange()
         let text = string as NSString
 
@@ -572,20 +585,21 @@ class EditorTextView: NSTextView {
                 replaceCharacters(in: range, with: replacement)
                 // Select "url" for easy replacement
                 let urlStart = range.location + selected.count + 3
-                setSelectedRange(NSRange(location: urlStart, length: 3))
                 didChangeText()
+                setSelectedRange(NSRange(location: urlStart, length: 3))
             }
         } else {
             let insertion = "[link text](url)"
             if shouldChangeText(in: range, replacementString: insertion) {
                 replaceCharacters(in: range, with: insertion)
-                setSelectedRange(NSRange(location: range.location + 1, length: 9))
                 didChangeText()
+                setSelectedRange(NSRange(location: range.location + 1, length: 9))
             }
         }
     }
 
     @objc func handleInsertImage() {
+        guard isActiveEditor else { return }
         let range = selectedRange()
         let text = string as NSString
 
@@ -595,20 +609,21 @@ class EditorTextView: NSTextView {
             if shouldChangeText(in: range, replacementString: replacement) {
                 replaceCharacters(in: range, with: replacement)
                 let urlStart = range.location + selected.count + 4
-                setSelectedRange(NSRange(location: urlStart, length: 9))
                 didChangeText()
+                setSelectedRange(NSRange(location: urlStart, length: 9))
             }
         } else {
             let insertion = "![alt text](image-url)"
             if shouldChangeText(in: range, replacementString: insertion) {
                 replaceCharacters(in: range, with: insertion)
-                setSelectedRange(NSRange(location: range.location + 2, length: 8))
                 didChangeText()
+                setSelectedRange(NSRange(location: range.location + 2, length: 8))
             }
         }
     }
 
     @objc func handleInsertHR() {
+        guard isActiveEditor else { return }
         let range = selectedRange()
         let text = string as NSString
         let lineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
@@ -628,6 +643,7 @@ class EditorTextView: NSTextView {
     }
 
     @objc func handleToggleHeading() {
+        guard isActiveEditor else { return }
         let text = string as NSString
         let range = selectedRange()
         let lineRange = text.lineRange(for: NSRange(location: range.location, length: 0))
@@ -659,14 +675,17 @@ class EditorTextView: NSTextView {
     }
 
     @objc func handleInsertUnorderedList() {
+        guard isActiveEditor else { return }
         insertListPrefix("- ")
     }
 
     @objc func handleInsertOrderedList() {
+        guard isActiveEditor else { return }
         insertListPrefix("1. ")
     }
 
     @objc func handleInsertTaskList() {
+        guard isActiveEditor else { return }
         insertListPrefix("- [ ] ")
     }
 
