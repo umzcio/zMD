@@ -1382,6 +1382,12 @@ struct MarkdownTextView: NSViewRepresentable {
             let latex = string.substring(with: contentRange)
             let cacheKey = "math-inline-" + latex
 
+            // Preserve the existing attributes (especially .paragraphStyle, which carries the
+            // table-cell textBlocks attribute). NSAttributedString(attachment:) and a fresh
+            // dictionary both strip the paragraph style; without it, table cells containing math
+            // lose their textBlock binding and render as full-width rows outside the table.
+            let existing = result.attributes(at: fullRange.location, effectiveRange: nil)
+
             if let cached = Coordinator.diagramCache.object(forKey: cacheKey as NSString) {
                 // Replace with image attachment, sized to match the surrounding line height.
                 // takeSnapshot returns NSImages whose pixel dimensions are at the device scale
@@ -1396,14 +1402,15 @@ struct MarkdownTextView: NSViewRepresentable {
                 let displayHeight = baseFontSize * 1.1
                 let displayWidth = displayHeight * aspect
                 attachment.bounds = CGRect(x: 0, y: -2, width: displayWidth, height: displayHeight)
-                let replacement = NSAttributedString(attachment: attachment)
+                let replacement = NSMutableAttributedString(attachment: attachment)
+                replacement.addAttributes(existing, range: NSRange(location: 0, length: replacement.length))
                 result.replaceCharacters(in: fullRange, with: replacement)
             } else {
-                // Style as code-like placeholder and trigger async render
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.monospacedSystemFont(ofSize: 13 * zoomLevel, weight: .regular),
-                    .foregroundColor: NSColor.systemPurple
-                ]
+                // Style as code-like placeholder and trigger async render. Merge math styling
+                // on top of the existing attrs so paragraph style is preserved (see above).
+                var attributes = existing
+                attributes[.font] = NSFont.monospacedSystemFont(ofSize: 13 * zoomLevel, weight: .regular)
+                attributes[.foregroundColor] = NSColor.systemPurple
                 result.replaceCharacters(in: fullRange, with: NSAttributedString(string: latex, attributes: attributes))
 
                 Task { @MainActor in
