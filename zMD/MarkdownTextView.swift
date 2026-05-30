@@ -124,7 +124,13 @@ struct MarkdownTextView: NSViewRepresentable {
             // Restore scroll position after content is set (only on content change, not zoom)
             if contentChanged {
                 DispatchQueue.main.async {
-                    if initialScrollPosition > 10 && searchText.isEmpty {
+                    if let pinY = context.coordinator.pendingDiagramScrollY {
+                        // Diagram-render rebuild: clamp scroll back to the exact Y the user
+                        // was at before the rebuild. Doc layout may have shifted slightly
+                        // (math attachments arrived) but pinning Y means no visible scroll jump.
+                        context.coordinator.pendingDiagramScrollY = nil
+                        context.coordinator.restoreScrollPosition(pinY, in: scrollView)
+                    } else if initialScrollPosition > 10 && searchText.isEmpty {
                         context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
                     } else if searchText.isEmpty {
                         scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
@@ -228,16 +234,25 @@ struct MarkdownTextView: NSViewRepresentable {
             cache.totalCostLimit = Cache.imageByteLimit
             return cache
         }()
-        // Diagram/math cache
+        // Diagram/math cache — uses the diagram-specific limits, which are much higher than
+        // the image limits because math images are tiny but appear in large numbers in
+        // technical docs (~300+ inline spans is common). Old shared image limit (100) thrashed.
         static var diagramCache: NSCache<NSString, NSImage> = {
             let cache = NSCache<NSString, NSImage>()
-            cache.countLimit = Cache.imageCountLimit
-            cache.totalCostLimit = Cache.imageByteLimit
+            cache.countLimit = Cache.diagramCountLimit
+            cache.totalCostLimit = Cache.diagramByteLimit
             return cache
         }()
         // Element-level rendering cache for incremental updates
         var elementCache: [String: NSAttributedString] = [:]
         var lastZoomKey: String = ""
+
+        // Scroll Y captured at the moment a diagram-render notification arrived. After the
+        // rebuild lands, updateNSView restores to this exact Y — preserving the user's scroll
+        // position rather than letting setAttributedString reset to 0 or anchor-based restore
+        // visibly shift it. The visible content at that Y may be slightly different post-rebuild
+        // (math images replaced text placeholders) but the viewport doesn't jump.
+        var pendingDiagramScrollY: CGFloat?
 
         func scrollToHeading(id: String, in textView: NSTextView) {
             guard let range = headingRanges[id],
@@ -437,8 +452,15 @@ struct MarkdownTextView: NSViewRepresentable {
         @objc func diagramDidRender() {
             diagramCoalesceTimer?.invalidate()
             diagramCoalesceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
-                self?.lastContent = nil
-                self?.elementCache.removeAll()
+                guard let self = self else { return }
+                // Snapshot scroll Y so the post-rebuild restore pins to the user's current
+                // scroll position (not initialScrollPosition, and not an anchor-char position
+                // that visibly shifts when math attachments arrive above the viewport).
+                if let sv = self.scrollView {
+                    self.pendingDiagramScrollY = sv.contentView.bounds.origin.y
+                }
+                self.lastContent = nil
+                self.elementCache.removeAll()
                 // Force SwiftUI to re-evaluate the view body so updateNSView fires and
                 // rebuilds with the now-cached image. Without this, the math/Mermaid
                 // placeholder text stays on screen until the user scrolls/types/resizes

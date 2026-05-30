@@ -35,7 +35,11 @@ enum Timing {
 enum Cache {
     static let imageCountLimit: Int = 100
     static let imageByteLimit: Int = 100 * 1024 * 1024
-    static let diagramCountLimit: Int = 100
+    // Math/Mermaid images are tiny (~5KB each). Long docs hit ~300+ inline math spans;
+    // with countLimit=100 the cache thrashed, causing constant re-render loops that
+    // visibly auto-scrolled the viewport. Bumped to a value that comfortably fits even
+    // long technical/research papers, byte-bounded by the 100MB cap below.
+    static let diagramCountLimit: Int = 2000
     static let diagramByteLimit: Int = 100 * 1024 * 1024
     /// Maximum number of per-document scroll-position entries kept in UserDefaults.
     static let scrollPositionLimit: Int = 100
