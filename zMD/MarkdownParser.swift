@@ -382,11 +382,6 @@ class MarkdownParser {
                trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
-    private func isOrderedListLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        return trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
-    }
-
     func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool, startNumber: Int?) {
         // Count leading spaces/tabs to determine nesting level
         var level = 0
