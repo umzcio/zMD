@@ -981,6 +981,20 @@ extension DocumentManager {
         }
     }
 
+    /// P5: count newlines in content[from..<to]. Used to advance a running line number across
+    /// matches without rescanning the whole prefix from startIndex for every match. Because match
+    /// positions are monotonic, the scanned regions are disjoint and cover the content at most once,
+    /// so total work is O(n) instead of O(n × matches).
+    private static func newlineCount(in content: String, from: String.Index, to: String.Index) -> Int {
+        var count = 0
+        var i = from
+        while i < to {
+            if content[i] == "\n" { count += 1 }
+            i = content.index(after: i)
+        }
+        return count
+    }
+
     private static func regexMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
         var options: NSRegularExpression.Options = []
         if !caseSensitive { options.insert(.caseInsensitive) }
@@ -989,11 +1003,14 @@ extension DocumentManager {
         let results = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
         var matches: [SearchMatch] = []
         matches.reserveCapacity(min(results.count, maxSearchMatches))
+        var lastIndex = content.startIndex
+        var runningLine = 1
         for result in results {
             if matches.count >= maxSearchMatches { break }
             guard let range = Range(result.range, in: content) else { continue }
-            let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
-            matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+            runningLine += newlineCount(in: content, from: lastIndex, to: range.lowerBound)
+            lastIndex = range.lowerBound
+            matches.append(SearchMatch(range: range, lineNumber: runningLine))
         }
         return matches
     }
@@ -1003,10 +1020,13 @@ extension DocumentManager {
         if !caseSensitive { searchOptions.insert(.caseInsensitive) }
         var matches: [SearchMatch] = []
         var searchStartIndex = content.startIndex
+        var lastIndex = content.startIndex
+        var runningLine = 1
         while searchStartIndex < content.endIndex && matches.count < maxSearchMatches {
             if let range = content.range(of: pattern, options: searchOptions, range: searchStartIndex..<content.endIndex) {
-                let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
-                matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+                runningLine += newlineCount(in: content, from: lastIndex, to: range.lowerBound)
+                lastIndex = range.lowerBound
+                matches.append(SearchMatch(range: range, lineNumber: runningLine))
                 searchStartIndex = range.upperBound
             } else {
                 break
