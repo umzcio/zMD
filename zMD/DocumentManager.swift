@@ -245,9 +245,13 @@ class DocumentManager: ObservableObject {
 
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             fileWatchers[document.id]?.ignoreNextChange = true
-            var newDocument = MarkdownDocument(id: document.id, url: document.url, content: fileContent)
-            newDocument.detectedEncoding = encoding
-            openDocuments[index] = newDocument
+            // C8: mutate in place. Rebuilding via MarkdownDocument(id:url:content:) dropped every
+            // other field (bookmarkData, directoryBookmarkData, isUntitled) — the same field-loss
+            // bug already fixed for rename/move. directoryBookmarkData is what MarkdownTextView uses
+            // for relative-image access.
+            openDocuments[index].content = fileContent
+            openDocuments[index].detectedEncoding = encoding
+            openDocuments[index].isDirty = false
         }
     }
 
