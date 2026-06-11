@@ -855,7 +855,9 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Bottom border with language label
         let langLabel = language?.lowercased() ?? "text"
-        let labelPadding = 76 - langLabel.count - 1
+        // C2: clamp at 0 — a long language label would make this count negative, and
+        // String(repeating:count:) with a negative count is a precondition failure (crash on render).
+        let labelPadding = max(0, 76 - langLabel.count - 1)
         let bottomBorder = "  ╰" + String(repeating: "─", count: labelPadding) + " " + langLabel + "╯\n"
         result.append(NSAttributedString(string: bottomBorder, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11 * zoomLevel, weight: .regular),

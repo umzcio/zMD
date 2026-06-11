@@ -255,7 +255,11 @@ class MarkdownParser {
             else if trimmedLine.hasPrefix("```") {
                 let trimmed = trimmedLine
                 let openLen = trimmed.prefix { $0 == "`" }.count
-                let language = trimmed.count > openLen ? String(trimmed.dropFirst(openLen)).trimmingCharacters(in: .whitespaces) : ""
+                let infoString = trimmed.count > openLen ? String(trimmed.dropFirst(openLen)).trimmingCharacters(in: .whitespaces) : ""
+                // C2: CommonMark uses only the first word of the info string as the language.
+                // Taking the whole string fed an arbitrarily long label to the renderer (crash on
+                // >75 chars) and defeated the syntax highlighter's language match for "```bash extra".
+                let language = infoString.split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? ""
                 var codeLines: [String] = []
                 i += 1
                 while i < lines.count {
