@@ -69,14 +69,6 @@ class SyntaxHighlighter {
         "sed", "awk", "find", "xargs", "sort", "uniq", "wc", "head", "tail"
     ])
 
-    // File extensions to highlight
-    private let fileExtensions = Set([
-        "java", "xml", "swift", "py", "js", "ts", "json", "yaml", "yml",
-        "md", "txt", "html", "css", "scss", "sh", "bash", "c", "cpp", "h",
-        "go", "rs", "rb", "php", "sql", "gradle", "pom", "properties",
-        "conf", "cfg", "ini", "toml", "lock", "gitignore", "dockerfile"
-    ])
-
     // Special action/status keywords for tree output
     private let actionKeywords = Set([
         "MAJOR", "REWRITE", "Update", "Review", "Add", "Remove", "Fix",
