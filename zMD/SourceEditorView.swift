@@ -281,7 +281,7 @@ struct SourceEditorView: NSViewRepresentable {
 
             isUserScrolling = true
             scrollDebounceTimer?.invalidate()
-            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.scrollSyncDebounce, repeats: false) { [weak self] _ in
                 self?.isUserScrolling = false
             }
 
@@ -321,13 +321,13 @@ struct SourceEditorView: NSViewRepresentable {
 
             // Debounced syntax highlighting
             highlightTimer?.invalidate()
-            highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            highlightTimer = Timer.scheduledTimer(withTimeInterval: Timing.highlightDebounce, repeats: false) { [weak self] _ in
                 self?.applyHighlighting(to: textView)
             }
 
             // Debounced autocomplete trigger (EditorTextView only).
             autocompleteTimer?.invalidate()
-            autocompleteTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self, weak textView] _ in
+            autocompleteTimer = Timer.scheduledTimer(withTimeInterval: Timing.autocompleteDebounce, repeats: false) { [weak self, weak textView] _ in
                 guard let self = self,
                       let editor = textView as? EditorTextView else { return }
                 self.triggerAutocomplete(in: editor)

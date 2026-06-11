@@ -486,7 +486,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
             // Debounce scroll position saving
             scrollDebounceTimer?.invalidate()
-            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.scrollPositionPersistDebounce, repeats: false) { [weak self] _ in
                 let position = clipView.bounds.origin.y
                 self?.onScrollPositionChanged?(position)
             }

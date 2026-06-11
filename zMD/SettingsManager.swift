@@ -19,8 +19,6 @@ enum Timing {
     static let scrollSyncResetDelay: TimeInterval = 0.1
     /// Debounce window on scroll-percent broadcasts from source/preview to suppress mutual kicks.
     static let scrollSyncDebounce: TimeInterval = 0.05
-    /// How long a heading stays "flashed" (selected) after an outline click.
-    static let headingFlashDuration: TimeInterval = 0.5
     /// Debounce window for FSEvents directory-change callbacks before rebuilding the tree.
     static let directoryWatcherDebounce: TimeInterval = 0.3
     /// Latency the FSEvents stream coalesces file events within.
