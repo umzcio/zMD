@@ -36,8 +36,8 @@ class ExportManager {
             }
             modified = mutable as String
         }
-        // Inline math (Pandoc-style restrictions matched in MarkdownTextView).
-        if let inlineRegex = try? NSRegularExpression(pattern: #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n$]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#) {
+        // Inline math — shared canonical pattern (C7).
+        if let inlineRegex = try? NSRegularExpression(pattern: MarkdownParser.inlineMathPattern) {
             let ns = modified as NSString
             let matches = inlineRegex.matches(in: modified, range: NSRange(location: 0, length: ns.length)).reversed()
             let mutable = NSMutableString(string: modified)

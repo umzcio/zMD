@@ -7,6 +7,19 @@ class MarkdownParser {
 
     private init() {}
 
+    /// C7: Single source of truth for inline-math detection, shared by the preview renderer
+    /// (MarkdownTextView), the exporters (ExportManager), and the HTML script-injection check
+    /// (toHTML). Pandoc-style restrictions:
+    ///   - opening `$` not preceded by `$` (so `$$` is display math), not followed by `$`, a space,
+    ///     or a digit (so `$1`, `$10.50` are money, not math openers);
+    ///   - content cannot cross an interior `$` (`[^\n$]`) and is capped at 200 chars to bound
+    ///     runaway lazy matches;
+    ///   - closing `$` not preceded by space, not followed by `$` or a digit.
+    /// Capture group 1 is the LaTeX body. Previously three divergent copies disagreed (`[^\n]` vs
+    /// `[^\n$]`, and a loose `.+?` with no digit guard) so preview and export classified the same
+    /// text differently.
+    static let inlineMathPattern = #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n$]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#
+
     // MARK: - Element Types
 
     enum Element: Identifiable {
@@ -468,7 +481,7 @@ class MarkdownParser {
         let elements = parse(markdown)
         let hasMermaid = elements.contains(where: { if case .mermaidBlock = $0 { return true } else { return false } })
         let hasMath = elements.contains(where: { if case .displayMath = $0 { return true } else { return false } })
-            || markdown.range(of: #"(?<!\$)\$(?!\$)(?! )(.+?)(?<! )\$(?!\$)"#, options: .regularExpression) != nil
+            || markdown.range(of: Self.inlineMathPattern, options: .regularExpression) != nil
 
         var html = """
         <!DOCTYPE html>

@@ -1393,7 +1393,7 @@ struct MarkdownTextView: NSViewRepresentable {
         //     thanks ($10) for …` matched the entire span between the two `$` as math)
         //   - closing `$` not preceded by space, not followed by `$` or digit
         //   - content capped at 200 chars to bound runaway lazy matches
-        let pattern = #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#
+        let pattern = MarkdownParser.inlineMathPattern  // C7: shared canonical pattern
         guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
