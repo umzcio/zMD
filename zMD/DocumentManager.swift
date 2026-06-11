@@ -1106,8 +1106,11 @@ extension DocumentManager: FileWatcherDelegate {
         case .reload:
             reloadDocument(document)
         case .ignore:
-            // Do nothing, but update the watcher's timestamp
-            watcher.ignoreNextChange = true
+            // L3: Do nothing. The triggering write already advanced the watcher's
+            // lastModificationDate before this dialog was shown, so its echo is suppressed by
+            // the mod-date guard in FileWatcher.handleFileChange. Arming ignoreNextChange here
+            // would instead silently swallow the NEXT genuine external edit.
+            break
         case .ignoreAll:
             ignoreAllFileChanges = true
         }
