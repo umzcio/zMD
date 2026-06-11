@@ -396,7 +396,10 @@ class MarkdownParser {
             if char == " " {
                 level += 1
             } else if char == "\t" {
-                level += 4  // Treat tab as 4 spaces
+                // C5: one tab = one nesting level (nestLevel = level / 2 below), matching a
+                // 2-space indent. Previously a tab added 4, making one tab jump TWO levels, so
+                // tab- and space-indented versions of the same list rendered at different depths.
+                level += 2
             } else {
                 break
             }
