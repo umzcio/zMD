@@ -40,4 +40,7 @@ Note: re-evaluated during the fix loop — see tracking table for final disposit
 
 ## Adjacent issues spotted but not touched (per minimum-viable-fix rule)
 
-_(populated during the fix loop if any are found)_
+- **`SourceEditorView.swift` autocomplete-dismiss threshold `elapsedSinceTextChange > 0.05`** (around the cursor-position code): this is a second, independent `0.05` literal that is semantically distinct from `Timing.scrollSyncDebounce`. It was intentionally **not** folded into a `Timing` constant during Q6 because it represents a different concept (insert-vs-navigation discrimination window), and the report did not flag it. If the `Timing` table is extended later, consider giving this its own named constant rather than reusing `scrollSyncDebounce`.
+- **`updateMatchHighlighting` foreground-color drift (documented in-code at the method)**: when search highlighting is cleared, the original token foreground color is not restored until the next full rebuild (the code comments acknowledge this as invisible in the common case). Not part of any finding; left as-is.
+
+No other adjacent problems were introduced or uncovered while making the in-scope fixes.

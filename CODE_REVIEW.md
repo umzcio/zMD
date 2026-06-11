@@ -49,6 +49,40 @@ Branch: `code-review-fixes`. Status values: PENDING / FIXED / DISPUTED / DEFERRE
 | Q8 | Four HTML/XML escaping implementations | Minor | FIXED | 4ec0395 |
 | Q9 | Dead `ToastItem.createdAt` | Minor | FIXED | b1e8cb6 |
 
+### Remediation outcome
+
+| Disposition | Major | Minor | Total |
+|-------------|:--:|:--:|:--:|
+| **Fixed**    | 10 | 19 | **29** |
+| **Disputed** | 0  | 0  | **0**  |
+| **Deferred** | 4  | 3  | **7**  |
+
+- **Fixed (29):** all 5 Security, all 8 Correctness, all 5 Concurrency/Lifecycle, the 3 localized Performance items (P3/P5/P6), and 8 of 9 Quality items.
+- **Disputed (0):** every finding re-verified true on re-read.
+- **Deferred (7):** P1, P2, P4, P7, P8, P9 (Performance — require a threading-model or rendering-pipeline redesign) and Q7 (shared-formatter extraction). Design sketches are in `FOLLOWUP.md`. These need a human decision because a minimal in-scope patch would either change the update/threading model or add a fourth copy of duplicated logic.
+
+Each fix is its own commit; the build (`xcodebuild -scheme zMD -configuration Debug`) was green after every commit, and a final `clean build` from scratch SUCCEEDED. The branch was reviewed by an independent verification pass (Phase 3): all FIXED items confirmed against their original failure scenario, no regressions, all 4 SRI hashes independently recomputed and matched.
+
+There is **no test target** in this project (only the `zMD` app target), so no automated regression tests were added — fixes on testable-in-principle surfaces (parser edge cases, escaping, interval math) are instead covered by the manual checklist below.
+
+### Manual verification checklist (run on a real machine)
+
+These touch surfaces that can't be unit-tested here (WKWebView rendering, NSSavePanel/file I/O, FSEvents, CGEvent/selection):
+
+- [ ] **S1** — Export a doc containing `$$\n</script><script>alert(1)</script>\n$$` to HTML; open the file in a browser: no alert fires, and the math area renders (no injected markup).
+- [ ] **S2** — Math (`$x^2$`, `$$…$$`) and a Mermaid diagram still render in **preview** and in **exported HTML** (confirms the pinned versions + SRI hashes load).
+- [ ] **S3** — A doc with `[x](../../../../somefile.md)` does **not** open a file outside the document's folder; a normal sibling `[y](./notes.md)` still opens.
+- [ ] **S4** — After an in-app update + relaunch, the trampoline log appears under the per-user temp dir (`$TMPDIR`), not `/tmp/zmd-relaunch.log`.
+- [ ] **L1** — Open a document with **two or more** Mermaid diagrams: each block shows its own correct diagram (no diagram appearing under the wrong block).
+- [ ] **L2** — Open a CP1252/Latin-1 file, type an emoji or CJK character, press ⌘S: it saves (toast "Saved as UTF-8…"), the status bar then shows UTF-8, and no save panel loops.
+- [ ] **L3** — Edit the open file externally → "Keep My Changes"; edit it externally **again**: the change dialog appears the second time (the edit is not silently swallowed).
+- [ ] **L4** — With auto-save on, edit the file externally right around the 2s debounce: the external change surfaces a dialog rather than being overwritten (timing-sensitive; best-effort).
+- [ ] **L5** — Disconnect the network, open a doc with a Mermaid diagram: the placeholder resolves to an error state instead of a permanent "Rendering diagram…" hang.
+- [ ] **C1** — Open a Windows/CRLF `.md` with a table, a list, and a blockquote: all render correctly (no per-row header tables, no per-item list breaks).
+- [ ] **C2** — A fenced code block whose info string exceeds 75 chars renders without crashing.
+- [ ] **C3** — A `# heading` line inside a `$$…$$` block does not appear in the outline; headings after the block scroll to the right place.
+- [ ] **P3** — The status bar "Ln X, Col Y" stays correct while typing, arrowing, clicking, and after an external reload.
+
 ---
 
 ## 1. Summary
