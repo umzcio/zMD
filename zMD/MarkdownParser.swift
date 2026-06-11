@@ -109,10 +109,21 @@ class MarkdownParser {
 
     // MARK: - Parsing
 
+    /// C1: Split into lines after normalizing CRLF/CR to LF. `CharacterSet.newlines` splits on `\r`
+    /// and `\n` individually, so every CRLF pair yields a phantom empty line — which shatters
+    /// tables (each row becomes a one-row table styled as a header), lists (flush per item),
+    /// blockquotes (split per line) and code blocks (double-spaced) in any Windows-authored file.
+    private func splitLines(_ markdown: String) -> [String] {
+        return markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+    }
+
     /// Parse markdown string into array of elements
     func parse(_ markdown: String) -> [Element] {
         var elements: [Element] = []
-        let lines = markdown.components(separatedBy: .newlines)
+        let lines = splitLines(markdown)
         var i = 0
         var listItems: [(level: Int, text: String, isOrdered: Bool, startNumber: Int?)] = []
         var paragraphLines: [String] = []
@@ -914,7 +925,7 @@ class MarkdownParser {
     /// matching GitHub's anchor-generation convention.
     func extractHeadings(_ markdown: String) -> [(id: String, level: Int, text: String, lineIndex: Int)] {
         var headings: [(id: String, level: Int, text: String, lineIndex: Int)] = []
-        let lines = markdown.components(separatedBy: .newlines)
+        let lines = splitLines(markdown)
         var slugCounts: [String: Int] = [:]
         var i = 0
 
