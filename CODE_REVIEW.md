@@ -12,42 +12,42 @@ Branch: `code-review-fixes`. Status values: PENDING / FIXED / DISPUTED / DEFERRE
 
 | ID | Title | Severity | Status | Commit |
 |----|-------|----------|--------|--------|
-| S1 | Stored XSS in HTML export via display-math `</script>` | Major | PENDING | |
-| S2 | CDN scripts without SRI; Mermaid floating version | Minor | PENDING | |
-| S3 | Relative `.md` link path traversal | Minor | PENDING | |
-| S4 | Relaunch trampoline logs to predictable `/tmp` path | Minor | PENDING | |
-| S5 | DMG download URL scheme not validated | Minor | PENDING | |
-| C1 | CRLF documents shatter tables/lists/blockquotes | Major | PENDING | |
-| C2 | Crash on fence info strings ≥76 chars | Major | PENDING | |
-| C3 | `extractHeadings` doesn't skip `$$` blocks | Minor | PENDING | |
-| C4 | Paragraph-flush predicate uses `line` vs `trimmedLine` | Minor | PENDING | |
-| C5 | Tab-indented list items jump two nesting levels | Minor | PENDING | |
-| C6 | Full-rebuild search highlighting ignores regex/case | Minor | PENDING | |
-| C7 | Three divergent inline-math regexes | Major | PENDING | |
-| C8 | `reloadDocument` drops bookmark fields | Minor | PENDING | |
-| L1 | Mermaid `evaluateJavaScript` async wrong-key cache | Major | PENDING | |
-| L2 | Non-UTF-8 document becomes unsaveable | Major | PENDING | |
-| L3 | "Keep My Changes" drops next external edit | Major | PENDING | |
-| L4 | Auto-save vs external-write delivery race | Minor | PENDING | |
-| L5 | Mermaid CDN failure → unbounded `pendingMermaid` | Minor | PENDING | |
+| S1 | Stored XSS in HTML export via display-math `</script>` | Major | FIXED | ff276c7 |
+| S2 | CDN scripts without SRI; Mermaid floating version | Minor | FIXED | 059364a |
+| S3 | Relative `.md` link path traversal | Minor | FIXED | c3e41ed |
+| S4 | Relaunch trampoline logs to predictable `/tmp` path | Minor | FIXED | 28268a2 |
+| S5 | DMG download URL scheme not validated | Minor | FIXED | 44991da |
+| C1 | CRLF documents shatter tables/lists/blockquotes | Major | FIXED | 15d08dc |
+| C2 | Crash on fence info strings ≥76 chars | Major | FIXED | ea61fc7 |
+| C3 | `extractHeadings` doesn't skip `$$` blocks | Minor | FIXED | cc4418c |
+| C4 | Paragraph-flush predicate uses `line` vs `trimmedLine` | Minor | FIXED | 7f33051 |
+| C5 | Tab-indented list items jump two nesting levels | Minor | FIXED | 7b4eba5 |
+| C6 | Full-rebuild search highlighting ignores regex/case | Minor | FIXED | f8bde86 |
+| C7 | Three divergent inline-math regexes | Major | FIXED | c73e4c2 |
+| C8 | `reloadDocument` drops bookmark fields | Minor | FIXED | cd5e5a3 |
+| L1 | Mermaid `evaluateJavaScript` async wrong-key cache | Major | FIXED | ef05852 |
+| L2 | Non-UTF-8 document becomes unsaveable | Major | FIXED | f4851ec |
+| L3 | "Keep My Changes" drops next external edit | Major | FIXED | dcce01d |
+| L4 | Auto-save vs external-write delivery race | Minor | FIXED | 46de278 |
+| L5 | Mermaid CDN failure → unbounded `pendingMermaid` | Minor | FIXED | bce1d13 |
 | P1 | Split mode: full re-parse per keystroke | Major | DEFERRED | architectural |
 | P2 | Per-keystroke O(n) work in Source mode | Major | DEFERRED | architectural |
-| P3 | Cursor line/col walks from index 0 | Major | PENDING | |
+| P3 | Cursor line/col walks from index 0 | Major | FIXED | 4943284 |
 | P4 | Full-document syntax re-highlight per pause | Major | DEFERRED | architectural |
-| P5 | Find line numbers via prefix scan | Major | PENDING | |
-| P6 | Element cache grows unbounded | Major | PENDING | |
+| P5 | Find line numbers via prefix scan | Major | FIXED | a2ee37a |
+| P6 | Element cache grows unbounded | Major | FIXED | 0510eb9 |
 | P7 | Synchronous file read/decode/write on main | Major | DEFERRED | architectural |
 | P8 | Exports run heavy work on main thread | Minor | DEFERRED | architectural |
 | P9 | Math placeholder O(n×m) + serial waits | Minor | DEFERRED | architectural |
-| Q1 | Dead duplicate parser helpers in PrintManager | Minor | PENDING | |
-| Q2 | Dead `MarkdownParser.isOrderedListLine` | Minor | PENDING | |
-| Q3 | Dead `WebRenderer.getCachedImage` | Minor | PENDING | |
-| Q4 | Dead `SyntaxHighlighter.fileExtensions` | Minor | PENDING | |
-| Q5 | Unimplemented current-line-highlight remnants | Minor | PENDING | |
-| Q6 | Half-finished `Timing` constant centralization | Minor | PENDING | |
+| Q1 | Dead duplicate parser helpers in PrintManager | Minor | FIXED | d984ee3 |
+| Q2 | Dead `MarkdownParser.isOrderedListLine` | Minor | FIXED | fa026c1 |
+| Q3 | Dead `WebRenderer.getCachedImage` | Minor | FIXED | 71f949e |
+| Q4 | Dead `SyntaxHighlighter.fileExtensions` | Minor | FIXED | ecfd7b6 |
+| Q5 | Unimplemented current-line-highlight remnants | Minor | FIXED | 038f228 |
+| Q6 | Half-finished `Timing` constant centralization | Minor | FIXED | b2501db |
 | Q7 | PrintManager's degraded inline-formatting engine | Minor | DEFERRED | architectural |
-| Q8 | Four HTML/XML escaping implementations | Minor | PENDING | |
-| Q9 | Dead `ToastItem.createdAt` | Minor | PENDING | |
+| Q8 | Four HTML/XML escaping implementations | Minor | FIXED | 4ec0395 |
+| Q9 | Dead `ToastItem.createdAt` | Minor | FIXED | b1e8cb6 |
 
 ---
 
