@@ -74,7 +74,7 @@ class ExportManager {
         for (i, hit) in math.enumerated() {
             let placeholder = "ZMDMATHPH\(i)ZMDEND"
             let replacement: String = {
-                guard let img = renderedImages[i] else { return escapeHTMLAttr(hit.latex) }
+                guard let img = renderedImages[i] else { return parser.escapeHTML(hit.latex) }
                 let targetHeight: CGFloat = hit.display ? 22 : 14
                 let aspect = img.size.height > 0 ? img.size.width / img.size.height : 1
                 let targetWidth = targetHeight * aspect
@@ -82,11 +82,11 @@ class ExportManager {
                       let png = resized.tiffRepresentation
                         .flatMap({ NSBitmapImageRep(data: $0) })
                         .flatMap({ $0.representation(using: .png, properties: [:]) }) else {
-                    return escapeHTMLAttr(hit.latex)
+                    return parser.escapeHTML(hit.latex)
                 }
                 let b64 = png.base64EncodedString()
                 let style = hit.display ? "display:block; margin:0.4em auto;" : "vertical-align:middle;"
-                return "<img src=\"data:image/png;base64,\(b64)\" width=\"\(Int(targetWidth))\" height=\"\(Int(targetHeight))\" style=\"\(style)\" alt=\"\(escapeHTMLAttr(hit.latex))\">"
+                return "<img src=\"data:image/png;base64,\(b64)\" width=\"\(Int(targetWidth))\" height=\"\(Int(targetHeight))\" style=\"\(style)\" alt=\"\(parser.escapeHTML(hit.latex))\">"
             }()
             result = result.replacingOccurrences(of: placeholder, with: replacement)
         }
@@ -104,13 +104,6 @@ class ExportManager {
                    fraction: 1.0)
         newImage.unlockFocus()
         return newImage
-    }
-
-    private func escapeHTMLAttr(_ s: String) -> String {
-        s.replacingOccurrences(of: "&", with: "&amp;")
-         .replacingOccurrences(of: "\"", with: "&quot;")
-         .replacingOccurrences(of: "<", with: "&lt;")
-         .replacingOccurrences(of: ">", with: "&gt;")
     }
 
     /// Strip CDN script/link tags and remote `<img src>` from HTML before handing it to
