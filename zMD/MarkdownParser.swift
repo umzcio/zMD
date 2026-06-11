@@ -692,7 +692,12 @@ class MarkdownParser {
             // previously HTML-escaping turned those into entities that KaTeX rendered literally.
             // The companion init script (added to the head when hasMath is true) reads these
             // tags and calls katex.render on each.
-            return "<div class=\"math-display\"><script type=\"math/tex; mode=display\">\(latex)</script></div>\n"
+            // S1: neutralize any "</script>" breakout. A browser ends a <script> element on the
+            // literal bytes "</" regardless of context, so raw LaTeX containing "</script>" would
+            // otherwise inject markup into the exported HTML. The backslash is ignored by KaTeX's
+            // TeX parser, so the rendered math is unchanged.
+            let safeLatex = latex.replacingOccurrences(of: "</", with: "<\\/")
+            return "<div class=\"math-display\"><script type=\"math/tex; mode=display\">\(safeLatex)</script></div>\n"
         case .table(let rows):
             var html = "<table>\n"
             for (rowIndex, row) in rows.enumerated() {
