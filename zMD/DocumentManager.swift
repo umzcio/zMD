@@ -523,6 +523,29 @@ class DocumentManager: ObservableObject {
 
             ToastManager.shared.show("File saved", style: .success)
         } catch {
+            // L2: A document read via a non-UTF-8 fallback (CP1252 / Mac Roman / ISO-8859-1)
+            // keeps that encoding for saving. A character the user typed that the encoding cannot
+            // represent (emoji, CJK, math symbols) makes write throw
+            // NSFileWriteInapplicableStringEncodingError. The NSSavePanel fallback below retries
+            // with the SAME encoding and fails identically forever, trapping the user — and with
+            // auto-save on it pops an unprompted, always-failing save panel mid-typing. Detect that
+            // specific error and convert to UTF-8 instead.
+            if (error as NSError).code == NSFileWriteInapplicableStringEncodingError {
+                do {
+                    try document.content.write(to: resolvedURL, atomically: true, encoding: .utf8)
+                    if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
+                    openDocuments[index].detectedEncoding = "UTF-8"
+                    openDocuments[index].isDirty = false
+                    fileWatchers[id]?.ignoreNextChange = true
+                    FolderManager.shared.noteSelfWrite(at: resolvedURL)
+                    ToastManager.shared.show("Saved as UTF-8 — the original encoding couldn't store the new characters", style: .success)
+                } catch {
+                    if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
+                    self.alertManager.showFileSaveError(url: resolvedURL, error: error)
+                }
+                return
+            }
+
             // Release security scope before falling back to NSSavePanel
             if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
 
