@@ -124,6 +124,15 @@ class FileWatcher {
         startWatching()
     }
 
+    /// L4: True if the file's modification date now differs from the one this watcher last
+    /// recorded — i.e. an external write happened that the watcher has not yet delivered or
+    /// reconciled. Used by the auto-save debounce to avoid overwriting an external edit whose
+    /// change event is still queued behind the timer on the main queue.
+    func hasPendingExternalChange() -> Bool {
+        guard let last = lastModificationDate else { return false }
+        return getModificationDate() != last
+    }
+
     private func getModificationDate() -> Date? {
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)

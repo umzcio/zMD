@@ -452,6 +452,10 @@ class DocumentManager: ObservableObject {
                 // or while the doc no longer exists in the open set.
                 guard !self.pendingExternalChange.contains(documentId) else { return }
                 guard self.openDocuments.contains(where: { $0.id == documentId }) else { return }
+                // L4: an external write may have landed during the 2s debounce with its watcher
+                // change-event still queued behind this timer. Skip the auto-save so we don't
+                // clobber it; the pending watcher event will surface the external-change dialog.
+                if self.fileWatchers[documentId]?.hasPendingExternalChange() == true { return }
                 self.saveDocument(id: documentId)
             }
         }
