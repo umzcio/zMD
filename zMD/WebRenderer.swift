@@ -88,8 +88,21 @@ class WebRenderer: NSObject {
         </head><body>
         <div id="container"></div>
         <script>
-            mermaid.initialize({ startOnLoad: false, theme: 'default' });
-            window.webkit.messageHandlers.mermaidReady.postMessage('ready');
+            // L5: post mermaidReady from window.onload (which fires even when the CDN <script>
+            // fails to load — offline or SRI mismatch), and guard mermaid.initialize. Previously
+            // a top-level `mermaid.initialize(...)` threw ReferenceError when the script failed,
+            // aborting this block before postMessage, so mermaidReady never posted and the Swift
+            // pendingMermaid queue grew unbounded with "Rendering diagram..." stuck forever.
+            // When mermaid is undefined, renderMermaid's await below throws and is caught, posting
+            // an ERROR result so the queued item completes (as nil) instead of hanging.
+            window.onload = function() {
+                try {
+                    if (typeof mermaid !== 'undefined') {
+                        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+                    }
+                } catch (e) {}
+                window.webkit.messageHandlers.mermaidReady.postMessage('ready');
+            };
 
             async function renderMermaid(code) {
                 try {
