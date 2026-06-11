@@ -120,6 +120,9 @@ struct MarkdownTextView: NSViewRepresentable {
             } else {
                 context.coordinator.matchRanges = []
             }
+            // C6: paint the flag-aware match ranges onto the freshly rebuilt storage (was previously
+            // painted inside buildAttributedString with a literal case-insensitive search).
+            context.coordinator.updateMatchHighlighting(currentIndex: currentMatchIndex, in: textView, searchText: searchText)
 
             // Restore scroll position after content is set (only on content change, not zoom)
             if contentChanged {
@@ -608,8 +611,9 @@ struct MarkdownTextView: NSViewRepresentable {
             coordinator.elementCache = coordinator.elementCache.filter { liveKeys.contains($0.key) }
         }
 
-        // Apply search highlighting (not cached — depends on current search state)
-        applySearchHighlighting(to: result)
+        // C6: search highlighting is applied after the rebuild via updateMatchHighlighting (which
+        // paints the ranges from findMatchRanges, honoring regex and case-sensitive mode), not here
+        // with a literal case-insensitive search that ignored those flags.
 
         return (result, headingRanges)
     }
@@ -1469,32 +1473,6 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     // MARK: - Search Highlighting
-
-    private func applySearchHighlighting(to result: NSMutableAttributedString) {
-        guard !searchText.isEmpty else { return }
-
-        let string = result.string as NSString
-        var searchRange = NSRange(location: 0, length: string.length)
-        var matchIndex = 0
-
-        while searchRange.location < string.length {
-            let range = string.range(of: searchText, options: .caseInsensitive, range: searchRange)
-            guard range.location != NSNotFound else { break }
-
-            let isCurrent = matchIndex == currentMatchIndex
-            // Use bright orange for current match, light yellow for others
-            let bgColor = isCurrent ? NSColor.systemOrange : NSColor.systemYellow.withAlphaComponent(0.5)
-
-            result.addAttributes([
-                .backgroundColor: bgColor,
-                .foregroundColor: NSColor.black
-            ], range: range)
-
-            searchRange.location = range.location + range.length
-            searchRange.length = string.length - searchRange.location
-            matchIndex += 1
-        }
-    }
 
     // MARK: - Helpers
 
