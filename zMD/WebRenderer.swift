@@ -42,10 +42,6 @@ class WebRenderer: NSObject {
         return prefix + hash.compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    func getCachedImage(for input: String, prefix: String) -> NSImage? {
-        return imageCache.object(forKey: cacheKey(for: input, prefix: prefix) as NSString)
-    }
-
     // MARK: - Mermaid
 
     func renderMermaid(_ code: String, completion: @escaping (NSImage?) -> Void) {
