@@ -126,6 +126,14 @@ class UpdateManager: ObservableObject {
             return
         }
 
+        // S5: defense-in-depth — refuse a non-HTTPS artifact URL before downloading. GitHub
+        // release assets are always HTTPS and ATS already blocks cleartext, but an explicit guard
+        // ensures the downloaded bundle can never arrive over an untrusted transport.
+        guard url.scheme == "https" else {
+            stage = .failed("Update download URL is not HTTPS. Download manually from GitHub.")
+            return
+        }
+
         stage = .downloading
 
         // Use a default-queue session so the completion fires off main; we hop to main only
