@@ -313,7 +313,16 @@ struct MarkdownTextView: NSViewRepresentable {
             // Handle relative .md links by opening as a new tab
             if ["md", "markdown"].contains(url.pathExtension.lowercased()),
                let base = baseURL?.deletingLastPathComponent() {
-                let resolved = base.appendingPathComponent(url.relativeString)
+                let resolved = base.appendingPathComponent(url.relativeString).standardizedFileURL
+                // S3: confine the resolved path to the document's directory subtree. Without this,
+                // a crafted link like [x](../../../../private.md) resolves outside the folder and
+                // would be opened. The trailing-slash form prevents a sibling-prefix false match
+                // (e.g. base "/a/notes" vs "/a/notes-secret/x.md").
+                let baseDir = base.standardizedFileURL
+                let basePrefix = baseDir.path.hasSuffix("/") ? baseDir.path : baseDir.path + "/"
+                guard resolved.path == baseDir.path || resolved.path.hasPrefix(basePrefix) else {
+                    return false
+                }
                 if FileManager.default.fileExists(atPath: resolved.path) {
                     DocumentManager.shared.loadDocument(from: resolved)
                     return true
