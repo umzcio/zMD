@@ -80,7 +80,7 @@ class WebRenderer: NSObject {
         let html = """
         <!DOCTYPE html>
         <html><head>
-        <script src="\(CDN.mermaidJS)"></script>
+        <script src="\(CDN.mermaidJS)" integrity="\(CDN.mermaidJSIntegrity)" crossorigin="anonymous"></script>
         <style>
             body { background: white; margin: 0; padding: 16px; }
             #container { font-family: -apple-system, sans-serif; }
@@ -255,8 +255,8 @@ class WebRenderer: NSObject {
         let html = """
         <!DOCTYPE html>
         <html><head>
-        <link rel="stylesheet" href="\(CDN.katexCSS)">
-        <script src="\(CDN.katexJS)"></script>
+        <link rel="stylesheet" href="\(CDN.katexCSS)" integrity="\(CDN.katexCSSIntegrity)" crossorigin="anonymous">
+        <script src="\(CDN.katexJS)" integrity="\(CDN.katexJSIntegrity)" crossorigin="anonymous"></script>
         <style>
             html, body { background: transparent; margin: 0; padding: 0; }
             /* color is set per-render via JS based on the user's current macOS appearance */

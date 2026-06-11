@@ -491,14 +491,14 @@ class MarkdownParser {
         """
 
         if hasMermaid {
-            html += "\n    <script src=\"\(CDN.mermaidJS)\"></script>"
+            html += "\n    <script src=\"\(CDN.mermaidJS)\" integrity=\"\(CDN.mermaidJSIntegrity)\" crossorigin=\"anonymous\"></script>"
             html += "\n    <script>mermaid.initialize({startOnLoad: true});</script>"
         }
 
         if hasMath {
-            html += "\n    <link rel=\"stylesheet\" href=\"\(CDN.katexCSS)\">"
-            html += "\n    <script src=\"\(CDN.katexJS)\"></script>"
-            html += "\n    <script src=\"\(CDN.katexAutoRenderJS)\"></script>"
+            html += "\n    <link rel=\"stylesheet\" href=\"\(CDN.katexCSS)\" integrity=\"\(CDN.katexCSSIntegrity)\" crossorigin=\"anonymous\">"
+            html += "\n    <script src=\"\(CDN.katexJS)\" integrity=\"\(CDN.katexJSIntegrity)\" crossorigin=\"anonymous\"></script>"
+            html += "\n    <script src=\"\(CDN.katexAutoRenderJS)\" integrity=\"\(CDN.katexAutoRenderJSIntegrity)\" crossorigin=\"anonymous\"></script>"
             // Auto-render handles inline `$...$` (we only emit those for inline math). For
             // display math we use <script type="math/tex; mode=display"> tags (H16) — read each
             // one and call katex.render so the body LaTeX isn't subject to HTML parsing.
