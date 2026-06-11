@@ -340,22 +340,4 @@ class PrintManager {
         }
     }
 
-    private func isListLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        return trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") ||
-               trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
-    }
-
-    private func isHorizontalRule(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.range(of: #"^([-_*])\1{2,}$"#, options: .regularExpression) != nil
-    }
-
-    private func isTableSeparator(_ line: String) -> Bool {
-        let withoutPipes = line.replacingOccurrences(of: "|", with: "")
-        let withoutDashes = withoutPipes.replacingOccurrences(of: "-", with: "")
-        let withoutColons = withoutDashes.replacingOccurrences(of: ":", with: "")
-        let withoutSpaces = withoutColons.trimmingCharacters(in: .whitespaces)
-        return withoutSpaces.isEmpty && line.contains("-")
-    }
 }
