@@ -25,7 +25,6 @@ class EditorTextView: NSTextView {
 
     var tabWidth: Int = 4
     var autoCloseBrackets: Bool = true
-    var showCurrentLineHighlight: Bool = true
 
     // MARK: - Multi-cursor
 
@@ -35,16 +34,6 @@ class EditorTextView: NSTextView {
 
     let autocomplete = AutocompleteWindowController()
     var htmlPrefixStart: Int?
-
-    // MARK: - Current line highlight
-
-    private var currentLineHighlightColor: NSColor {
-        if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-            return NSColor.white.withAlphaComponent(0.04)
-        } else {
-            return NSColor.black.withAlphaComponent(0.04)
-        }
-    }
 
     // MARK: - Auto-close pairs
 
