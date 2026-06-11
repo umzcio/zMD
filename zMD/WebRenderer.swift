@@ -177,8 +177,18 @@ class WebRenderer: NSObject {
             self?.processNextMermaidRender()
         }
 
-        webView.evaluateJavaScript("renderMermaid(`\(escapedCode)`)") { [weak self] _, error in
+        // L1: prefix with `void` so the statement result is `undefined`. renderMermaid is an async
+        // JS function; without `void`, the call evaluates to a Promise that WKWebView cannot
+        // serialize, so this completion fires with WKError 5 on EVERY render while the JS keeps
+        // running and posts its result later via the mermaidResult handler. That advanced the queue
+        // early, overwrote activeMermaidCompletion with the next item's closure, and delivered one
+        // diagram's PNG to the wrong item — poisoning the SHA256 image cache for the session. With
+        // `void`, this completion only fires on a genuine JS error.
+        webView.evaluateJavaScript("void renderMermaid(`\(escapedCode)`)") { [weak self] _, error in
             if error != nil {
+                // Genuine error: drop the active completion so a late mermaidResult cannot invoke it
+                // for the wrong item, then fail this item and advance the queue.
+                self?.activeMermaidCompletion = nil
                 item.completion(nil)
                 self?.isMermaidRendering = false
                 self?.processNextMermaidRender()
