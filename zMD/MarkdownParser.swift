@@ -971,6 +971,10 @@ class MarkdownParser {
         // then exit. Mirrors parse()'s loop so a `# X` line inside a `<div>...</div>` block
         // doesn't get counted as a heading (M4).
         var htmlBuffer: [String]? = nil
+        // C3: track open `$$` display-math blocks, mirroring parse()'s consumption, so a `# X` line
+        // inside one isn't emitted as a phantom heading — which would desync the positional
+        // heading↔slug pairing in MarkdownTextView and shift every later heading by one.
+        var inDisplayMath = false
 
         while i < lines.count {
             let line = lines[i]
@@ -988,6 +992,19 @@ class MarkdownParser {
                 continue
             }
             if openFenceLen > 0 {
+                i += 1
+                continue
+            }
+
+            // C3: display-math block enter/exit ($$ ... $$). A bare `$$` line toggles the block;
+            // lines inside are not headings. Single-line `$$...$$` is self-contained (no enclosed
+            // lines) so it needs no handling here.
+            if trimmed == "$$" && htmlBuffer == nil {
+                inDisplayMath.toggle()
+                i += 1
+                continue
+            }
+            if inDisplayMath {
                 i += 1
                 continue
             }
