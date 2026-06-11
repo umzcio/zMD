@@ -26,7 +26,6 @@ struct ToastItem: Identifiable {
     let id = UUID()
     let message: String
     let style: ToastStyle
-    let createdAt = Date()
 }
 
 class ToastManager: ObservableObject {
