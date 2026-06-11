@@ -532,6 +532,10 @@ struct MarkdownTextView: NSViewRepresentable {
         let headings = parser.extractHeadings(content)
         let result = NSMutableAttributedString()
         var headingRanges: [String: NSRange] = [:]
+        // P6: collect the ids actually present in this build so stale cache entries can be swept
+        // afterward. Keys are content-addressed, so without a sweep every edit leaves the previous
+        // version of the edited element behind, growing elementCache unboundedly for the session.
+        var liveKeys = Set<String>()
 
         // Pair headings to slug IDs as we encounter them in the parsed element stream.
         // Previously this used a positional index into `headings`, which drifted whenever
@@ -567,6 +571,7 @@ struct MarkdownTextView: NSViewRepresentable {
             default:
                 skipCache = false
             }
+            if !skipCache { liveKeys.insert(element.id) }
 
             if !skipCache, cacheValid, let cached = coordinator.elementCache[element.id] {
                 result.append(cached)
@@ -586,6 +591,12 @@ struct MarkdownTextView: NSViewRepresentable {
                 headingRanges[headings[parsedHeadingIndex].id] = NSRange(location: startPos, length: result.length - startPos)
                 parsedHeadingIndex += 1
             }
+        }
+
+        // P6: evict cache entries whose elements are no longer in the document (e.g. the previous
+        // content of an edited element), keeping the cache bounded to the current element stream.
+        if coordinator.elementCache.count > liveKeys.count {
+            coordinator.elementCache = coordinator.elementCache.filter { liveKeys.contains($0.key) }
         }
 
         // Apply search highlighting (not cached — depends on current search state)
