@@ -170,10 +170,14 @@ class MarkdownParser {
             }
 
             // Flush accumulated paragraph if we hit a block-level element
+            // C4: use trimmedLine for the heading/blockquote checks so they match the block
+            // branches below (which test trimmedLine). With `line`, an indented "  ## H" or a
+            // space-less ">quote" was treated as plain text, so the buffered paragraph was not
+            // flushed and the heading/blockquote was emitted ABOVE the text that preceded it.
             let isPlainText = !line.isEmpty && !trimmedLine.isEmpty
-                && !line.hasPrefix("#")
+                && !trimmedLine.hasPrefix("#")
                 && !trimmedLine.hasPrefix("|")
-                && !line.hasPrefix("> ")
+                && !trimmedLine.hasPrefix(">")
                 && !isListLine(line)
                 && !trimmedLine.hasPrefix("```")
                 && !isHorizontalRule(line)
