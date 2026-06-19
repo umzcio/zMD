@@ -120,6 +120,9 @@ struct MarkdownTextView: NSViewRepresentable {
             } else {
                 context.coordinator.matchRanges = []
             }
+            // C6: paint the flag-aware match ranges onto the freshly rebuilt storage (was previously
+            // painted inside buildAttributedString with a literal case-insensitive search).
+            context.coordinator.updateMatchHighlighting(currentIndex: currentMatchIndex, in: textView, searchText: searchText)
 
             // Restore scroll position after content is set (only on content change, not zoom)
             if contentChanged {
@@ -313,7 +316,16 @@ struct MarkdownTextView: NSViewRepresentable {
             // Handle relative .md links by opening as a new tab
             if ["md", "markdown"].contains(url.pathExtension.lowercased()),
                let base = baseURL?.deletingLastPathComponent() {
-                let resolved = base.appendingPathComponent(url.relativeString)
+                let resolved = base.appendingPathComponent(url.relativeString).standardizedFileURL
+                // S3: confine the resolved path to the document's directory subtree. Without this,
+                // a crafted link like [x](../../../../private.md) resolves outside the folder and
+                // would be opened. The trailing-slash form prevents a sibling-prefix false match
+                // (e.g. base "/a/notes" vs "/a/notes-secret/x.md").
+                let baseDir = base.standardizedFileURL
+                let basePrefix = baseDir.path.hasSuffix("/") ? baseDir.path : baseDir.path + "/"
+                guard resolved.path == baseDir.path || resolved.path.hasPrefix(basePrefix) else {
+                    return false
+                }
                 if FileManager.default.fileExists(atPath: resolved.path) {
                     DocumentManager.shared.loadDocument(from: resolved)
                     return true
@@ -474,7 +486,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
             // Debounce scroll position saving
             scrollDebounceTimer?.invalidate()
-            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.scrollPositionPersistDebounce, repeats: false) { [weak self] _ in
                 let position = clipView.bounds.origin.y
                 self?.onScrollPositionChanged?(position)
             }
@@ -532,6 +544,10 @@ struct MarkdownTextView: NSViewRepresentable {
         let headings = parser.extractHeadings(content)
         let result = NSMutableAttributedString()
         var headingRanges: [String: NSRange] = [:]
+        // P6: collect the ids actually present in this build so stale cache entries can be swept
+        // afterward. Keys are content-addressed, so without a sweep every edit leaves the previous
+        // version of the edited element behind, growing elementCache unboundedly for the session.
+        var liveKeys = Set<String>()
 
         // Pair headings to slug IDs as we encounter them in the parsed element stream.
         // Previously this used a positional index into `headings`, which drifted whenever
@@ -567,6 +583,7 @@ struct MarkdownTextView: NSViewRepresentable {
             default:
                 skipCache = false
             }
+            if !skipCache { liveKeys.insert(element.id) }
 
             if !skipCache, cacheValid, let cached = coordinator.elementCache[element.id] {
                 result.append(cached)
@@ -588,8 +605,15 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-        // Apply search highlighting (not cached — depends on current search state)
-        applySearchHighlighting(to: result)
+        // P6: evict cache entries whose elements are no longer in the document (e.g. the previous
+        // content of an edited element), keeping the cache bounded to the current element stream.
+        if coordinator.elementCache.count > liveKeys.count {
+            coordinator.elementCache = coordinator.elementCache.filter { liveKeys.contains($0.key) }
+        }
+
+        // C6: search highlighting is applied after the rebuild via updateMatchHighlighting (which
+        // paints the ranges from findMatchRanges, honoring regex and case-sensitive mode), not here
+        // with a literal case-insensitive search that ignored those flags.
 
         return (result, headingRanges)
     }
@@ -855,7 +879,9 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Bottom border with language label
         let langLabel = language?.lowercased() ?? "text"
-        let labelPadding = 76 - langLabel.count - 1
+        // C2: clamp at 0 — a long language label would make this count negative, and
+        // String(repeating:count:) with a negative count is a precondition failure (crash on render).
+        let labelPadding = max(0, 76 - langLabel.count - 1)
         let bottomBorder = "  ╰" + String(repeating: "─", count: labelPadding) + " " + langLabel + "╯\n"
         result.append(NSAttributedString(string: bottomBorder, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11 * zoomLevel, weight: .regular),
@@ -1391,7 +1417,7 @@ struct MarkdownTextView: NSViewRepresentable {
         //     thanks ($10) for …` matched the entire span between the two `$` as math)
         //   - closing `$` not preceded by space, not followed by `$` or digit
         //   - content capped at 200 chars to bound runaway lazy matches
-        let pattern = #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#
+        let pattern = MarkdownParser.inlineMathPattern  // C7: shared canonical pattern
         guard let regex = Self.cachedRegex(pattern) else { return }
         let string = result.string as NSString
 
@@ -1447,32 +1473,6 @@ struct MarkdownTextView: NSViewRepresentable {
     }
 
     // MARK: - Search Highlighting
-
-    private func applySearchHighlighting(to result: NSMutableAttributedString) {
-        guard !searchText.isEmpty else { return }
-
-        let string = result.string as NSString
-        var searchRange = NSRange(location: 0, length: string.length)
-        var matchIndex = 0
-
-        while searchRange.location < string.length {
-            let range = string.range(of: searchText, options: .caseInsensitive, range: searchRange)
-            guard range.location != NSNotFound else { break }
-
-            let isCurrent = matchIndex == currentMatchIndex
-            // Use bright orange for current match, light yellow for others
-            let bgColor = isCurrent ? NSColor.systemOrange : NSColor.systemYellow.withAlphaComponent(0.5)
-
-            result.addAttributes([
-                .backgroundColor: bgColor,
-                .foregroundColor: NSColor.black
-            ], range: range)
-
-            searchRange.location = range.location + range.length
-            searchRange.length = string.length - searchRange.location
-            matchIndex += 1
-        }
-    }
 
     // MARK: - Helpers
 

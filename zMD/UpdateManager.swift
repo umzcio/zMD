@@ -126,6 +126,14 @@ class UpdateManager: ObservableObject {
             return
         }
 
+        // S5: defense-in-depth — refuse a non-HTTPS artifact URL before downloading. GitHub
+        // release assets are always HTTPS and ATS already blocks cleartext, but an explicit guard
+        // ensures the downloaded bundle can never arrive over an untrusted transport.
+        guard url.scheme == "https" else {
+            stage = .failed("Update download URL is not HTTPS. Download manually from GitHub.")
+            return
+        }
+
         stage = .downloading
 
         // Use a default-queue session so the completion fires off main; we hop to main only
@@ -335,14 +343,19 @@ class UpdateManager: ObservableObject {
         // debugging if relaunch ever fails again.
         let appPath = "/Applications/zMD.app"
         let myPid = ProcessInfo.processInfo.processIdentifier
-        let logPath = "/tmp/zmd-relaunch.log"
+        // S4: log to the per-user temporary directory (/var/folders/.../T), not world-writable /tmp.
+        // The previous fixed /tmp/zmd-relaunch.log path let a local attacker pre-create it as a
+        // symlink and redirect these appends to a victim-writable file (CWE-377). The path is also
+        // single-quoted in the redirects below as defense in depth.
+        let logPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-relaunch.log").path
         let script = """
-        ( echo "[$(date)] trampoline waiting for PID \(myPid)" >> \(logPath); \
+        ( echo "[$(date)] trampoline waiting for PID \(myPid)" >> '\(logPath)'; \
           while kill -0 \(myPid) 2>/dev/null; do sleep 0.1; done; \
           sleep 0.5; \
-          echo "[$(date)] PID gone, opening \(appPath)" >> \(logPath); \
-          open -n '\(appPath)' >> \(logPath) 2>&1; \
-          echo "[$(date)] open exit=$?" >> \(logPath) ) &
+          echo "[$(date)] PID gone, opening \(appPath)" >> '\(logPath)'; \
+          open -n '\(appPath)' >> '\(logPath)' 2>&1; \
+          echo "[$(date)] open exit=$?" >> '\(logPath)' ) &
         disown
         """
         let task = Process()

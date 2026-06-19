@@ -158,6 +158,7 @@ struct SourceEditorView: NSViewRepresentable {
             let selectedRanges = textView.selectedRanges
             textView.string = content
             textView.selectedRanges = selectedRanges
+            context.coordinator.invalidateCursorPositionCache()  // P3: programmatic replace, no textDidChange
             context.coordinator.applyHighlighting(to: textView)
         }
 
@@ -212,6 +213,33 @@ struct SourceEditorView: NSViewRepresentable {
         // a 50ms window safely catches the caret-from-insert case.
         private var lastTextChangeTimestamp: Date = .distantPast
 
+        // P3: cache the last computed (caret, line) so caret movement (arrow keys, clicks) counts
+        // newlines only over the small delta region instead of rescanning [0, caret) every time.
+        // Valid only while the text is unchanged; textDidChange invalidates it. AppKit fires
+        // textDidChange before the selection-change notification for edits, so the delta path only
+        // runs over an immutable buffer and stays exact.
+        private var cursorCacheValid = false
+        private var cursorCacheCaret = 0
+        private var cursorCacheLine = 1
+
+        /// P3: invalidate the cursor (caret, line) cache. Called on user edits (textDidChange) and
+        /// on programmatic content replacement in updateNSView, which does not fire textDidChange.
+        func invalidateCursorPositionCache() {
+            cursorCacheValid = false
+        }
+
+        /// Count 0x0A (newline) UTF-16 units in text[from..<to]. Disjoint across successive caret
+        /// moves, so amortized cost tracks how far the caret travels, not document size.
+        private func newlineCount(in text: NSString, from: Int, to: Int) -> Int {
+            var count = 0
+            var i = from
+            while i < to {
+                if text.character(at: i) == 0x0A { count += 1 }
+                i += 1
+            }
+            return count
+        }
+
         init(onContentChange: ((String) -> Void)?) {
             self.onContentChange = onContentChange
             super.init()
@@ -253,7 +281,7 @@ struct SourceEditorView: NSViewRepresentable {
 
             isUserScrolling = true
             scrollDebounceTimer?.invalidate()
-            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+            scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.scrollSyncDebounce, repeats: false) { [weak self] _ in
                 self?.isUserScrolling = false
             }
 
@@ -283,6 +311,7 @@ struct SourceEditorView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
 
             lastTextChangeTimestamp = Date()
+            cursorCacheValid = false  // P3: text changed — the cached (caret, line) is now stale.
             isUpdatingFromUser = true
             onContentChange?(textView.string)
 
@@ -292,13 +321,13 @@ struct SourceEditorView: NSViewRepresentable {
 
             // Debounced syntax highlighting
             highlightTimer?.invalidate()
-            highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            highlightTimer = Timer.scheduledTimer(withTimeInterval: Timing.highlightDebounce, repeats: false) { [weak self] _ in
                 self?.applyHighlighting(to: textView)
             }
 
             // Debounced autocomplete trigger (EditorTextView only).
             autocompleteTimer?.invalidate()
-            autocompleteTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self, weak textView] _ in
+            autocompleteTimer = Timer.scheduledTimer(withTimeInterval: Timing.autocompleteDebounce, repeats: false) { [weak self, weak textView] _ in
                 guard let self = self,
                       let editor = textView as? EditorTextView else { return }
                 self.triggerAutocomplete(in: editor)
@@ -365,18 +394,29 @@ struct SourceEditorView: NSViewRepresentable {
                 let text = textView.string as NSString
                 let caret = textView.selectedRange().location
                 let clampedCaret = min(caret, text.length)
-                // line: count newlines in [0, caret)
-                var line = 1
-                var lastNewline: Int = -1
-                var i = 0
-                while i < clampedCaret {
-                    if text.character(at: i) == 0x0A {
-                        line += 1
-                        lastNewline = i
+
+                // P3: line number from the cached (caret, line) by counting only the delta region,
+                // falling back to a full count from 0 when the cache is invalid (after an edit).
+                let line: Int
+                if cursorCacheValid {
+                    let anchor = min(cursorCacheCaret, text.length)
+                    if clampedCaret >= anchor {
+                        line = cursorCacheLine + newlineCount(in: text, from: anchor, to: clampedCaret)
+                    } else {
+                        line = cursorCacheLine - newlineCount(in: text, from: clampedCaret, to: anchor)
                     }
-                    i += 1
+                } else {
+                    line = newlineCount(in: text, from: 0, to: clampedCaret) + 1
                 }
-                let col = clampedCaret - lastNewline  // 1-based (lastNewline = -1 → col = caret + 1)
+                cursorCacheCaret = clampedCaret
+                cursorCacheLine = line
+                cursorCacheValid = true
+
+                // column: scan back to the previous newline (bounded by line length, always exact).
+                var lineStart = clampedCaret
+                while lineStart > 0 && text.character(at: lineStart - 1) != 0x0A { lineStart -= 1 }
+                let col = clampedCaret - lineStart + 1  // 1-based
+
                 DispatchQueue.main.async {
                     DocumentManager.shared.currentCursorLine = line
                     DocumentManager.shared.currentCursorColumn = col

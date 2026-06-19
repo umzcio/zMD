@@ -42,10 +42,6 @@ class WebRenderer: NSObject {
         return prefix + hash.compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    func getCachedImage(for input: String, prefix: String) -> NSImage? {
-        return imageCache.object(forKey: cacheKey(for: input, prefix: prefix) as NSString)
-    }
-
     // MARK: - Mermaid
 
     func renderMermaid(_ code: String, completion: @escaping (NSImage?) -> Void) {
@@ -80,7 +76,7 @@ class WebRenderer: NSObject {
         let html = """
         <!DOCTYPE html>
         <html><head>
-        <script src="\(CDN.mermaidJS)"></script>
+        <script src="\(CDN.mermaidJS)" integrity="\(CDN.mermaidJSIntegrity)" crossorigin="anonymous"></script>
         <style>
             body { background: white; margin: 0; padding: 16px; }
             #container { font-family: -apple-system, sans-serif; }
@@ -88,8 +84,21 @@ class WebRenderer: NSObject {
         </head><body>
         <div id="container"></div>
         <script>
-            mermaid.initialize({ startOnLoad: false, theme: 'default' });
-            window.webkit.messageHandlers.mermaidReady.postMessage('ready');
+            // L5: post mermaidReady from window.onload (which fires even when the CDN <script>
+            // fails to load — offline or SRI mismatch), and guard mermaid.initialize. Previously
+            // a top-level `mermaid.initialize(...)` threw ReferenceError when the script failed,
+            // aborting this block before postMessage, so mermaidReady never posted and the Swift
+            // pendingMermaid queue grew unbounded with "Rendering diagram..." stuck forever.
+            // When mermaid is undefined, renderMermaid's await below throws and is caught, posting
+            // an ERROR result so the queued item completes (as nil) instead of hanging.
+            window.onload = function() {
+                try {
+                    if (typeof mermaid !== 'undefined') {
+                        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+                    }
+                } catch (e) {}
+                window.webkit.messageHandlers.mermaidReady.postMessage('ready');
+            };
 
             async function renderMermaid(code) {
                 try {
@@ -177,8 +186,18 @@ class WebRenderer: NSObject {
             self?.processNextMermaidRender()
         }
 
-        webView.evaluateJavaScript("renderMermaid(`\(escapedCode)`)") { [weak self] _, error in
+        // L1: prefix with `void` so the statement result is `undefined`. renderMermaid is an async
+        // JS function; without `void`, the call evaluates to a Promise that WKWebView cannot
+        // serialize, so this completion fires with WKError 5 on EVERY render while the JS keeps
+        // running and posts its result later via the mermaidResult handler. That advanced the queue
+        // early, overwrote activeMermaidCompletion with the next item's closure, and delivered one
+        // diagram's PNG to the wrong item — poisoning the SHA256 image cache for the session. With
+        // `void`, this completion only fires on a genuine JS error.
+        webView.evaluateJavaScript("void renderMermaid(`\(escapedCode)`)") { [weak self] _, error in
             if error != nil {
+                // Genuine error: drop the active completion so a late mermaidResult cannot invoke it
+                // for the wrong item, then fail this item and advance the queue.
+                self?.activeMermaidCompletion = nil
                 item.completion(nil)
                 self?.isMermaidRendering = false
                 self?.processNextMermaidRender()
@@ -245,8 +264,8 @@ class WebRenderer: NSObject {
         let html = """
         <!DOCTYPE html>
         <html><head>
-        <link rel="stylesheet" href="\(CDN.katexCSS)">
-        <script src="\(CDN.katexJS)"></script>
+        <link rel="stylesheet" href="\(CDN.katexCSS)" integrity="\(CDN.katexCSSIntegrity)" crossorigin="anonymous">
+        <script src="\(CDN.katexJS)" integrity="\(CDN.katexJSIntegrity)" crossorigin="anonymous"></script>
         <style>
             html, body { background: transparent; margin: 0; padding: 0; }
             /* color is set per-render via JS based on the user's current macOS appearance */

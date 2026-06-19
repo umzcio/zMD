@@ -7,6 +7,19 @@ class MarkdownParser {
 
     private init() {}
 
+    /// C7: Single source of truth for inline-math detection, shared by the preview renderer
+    /// (MarkdownTextView), the exporters (ExportManager), and the HTML script-injection check
+    /// (toHTML). Pandoc-style restrictions:
+    ///   - opening `$` not preceded by `$` (so `$$` is display math), not followed by `$`, a space,
+    ///     or a digit (so `$1`, `$10.50` are money, not math openers);
+    ///   - content cannot cross an interior `$` (`[^\n$]`) and is capped at 200 chars to bound
+    ///     runaway lazy matches;
+    ///   - closing `$` not preceded by space, not followed by `$` or a digit.
+    /// Capture group 1 is the LaTeX body. Previously three divergent copies disagreed (`[^\n]` vs
+    /// `[^\n$]`, and a loose `.+?` with no digit guard) so preview and export classified the same
+    /// text differently.
+    static let inlineMathPattern = #"(?<!\$)\$(?!\$)(?! )(?![0-9])([^\n$]{1,200}?)(?<! )\$(?!\$)(?![0-9])"#
+
     // MARK: - Element Types
 
     enum Element: Identifiable {
@@ -109,10 +122,21 @@ class MarkdownParser {
 
     // MARK: - Parsing
 
+    /// C1: Split into lines after normalizing CRLF/CR to LF. `CharacterSet.newlines` splits on `\r`
+    /// and `\n` individually, so every CRLF pair yields a phantom empty line — which shatters
+    /// tables (each row becomes a one-row table styled as a header), lists (flush per item),
+    /// blockquotes (split per line) and code blocks (double-spaced) in any Windows-authored file.
+    private func splitLines(_ markdown: String) -> [String] {
+        return markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+    }
+
     /// Parse markdown string into array of elements
     func parse(_ markdown: String) -> [Element] {
         var elements: [Element] = []
-        let lines = markdown.components(separatedBy: .newlines)
+        let lines = splitLines(markdown)
         var i = 0
         var listItems: [(level: Int, text: String, isOrdered: Bool, startNumber: Int?)] = []
         var paragraphLines: [String] = []
@@ -146,10 +170,14 @@ class MarkdownParser {
             }
 
             // Flush accumulated paragraph if we hit a block-level element
+            // C4: use trimmedLine for the heading/blockquote checks so they match the block
+            // branches below (which test trimmedLine). With `line`, an indented "  ## H" or a
+            // space-less ">quote" was treated as plain text, so the buffered paragraph was not
+            // flushed and the heading/blockquote was emitted ABOVE the text that preceded it.
             let isPlainText = !line.isEmpty && !trimmedLine.isEmpty
-                && !line.hasPrefix("#")
+                && !trimmedLine.hasPrefix("#")
                 && !trimmedLine.hasPrefix("|")
-                && !line.hasPrefix("> ")
+                && !trimmedLine.hasPrefix(">")
                 && !isListLine(line)
                 && !trimmedLine.hasPrefix("```")
                 && !isHorizontalRule(line)
@@ -244,7 +272,11 @@ class MarkdownParser {
             else if trimmedLine.hasPrefix("```") {
                 let trimmed = trimmedLine
                 let openLen = trimmed.prefix { $0 == "`" }.count
-                let language = trimmed.count > openLen ? String(trimmed.dropFirst(openLen)).trimmingCharacters(in: .whitespaces) : ""
+                let infoString = trimmed.count > openLen ? String(trimmed.dropFirst(openLen)).trimmingCharacters(in: .whitespaces) : ""
+                // C2: CommonMark uses only the first word of the info string as the language.
+                // Taking the whole string fed an arbitrarily long label to the renderer (crash on
+                // >75 chars) and defeated the syntax highlighter's language match for "```bash extra".
+                let language = infoString.split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? ""
                 var codeLines: [String] = []
                 i += 1
                 while i < lines.count {
@@ -350,11 +382,6 @@ class MarkdownParser {
                trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
     }
 
-    private func isOrderedListLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        return trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) != nil
-    }
-
     func extractListItemText(_ line: String) -> (level: Int, text: String, isOrdered: Bool, startNumber: Int?) {
         // Count leading spaces/tabs to determine nesting level
         var level = 0
@@ -364,7 +391,10 @@ class MarkdownParser {
             if char == " " {
                 level += 1
             } else if char == "\t" {
-                level += 4  // Treat tab as 4 spaces
+                // C5: one tab = one nesting level (nestLevel = level / 2 below), matching a
+                // 2-space indent. Previously a tab added 4, making one tab jump TWO levels, so
+                // tab- and space-indented versions of the same list rendered at different depths.
+                level += 2
             } else {
                 break
             }
@@ -453,7 +483,7 @@ class MarkdownParser {
         let elements = parse(markdown)
         let hasMermaid = elements.contains(where: { if case .mermaidBlock = $0 { return true } else { return false } })
         let hasMath = elements.contains(where: { if case .displayMath = $0 { return true } else { return false } })
-            || markdown.range(of: #"(?<!\$)\$(?!\$)(?! )(.+?)(?<! )\$(?!\$)"#, options: .regularExpression) != nil
+            || markdown.range(of: Self.inlineMathPattern, options: .regularExpression) != nil
 
         var html = """
         <!DOCTYPE html>
@@ -463,14 +493,14 @@ class MarkdownParser {
         """
 
         if hasMermaid {
-            html += "\n    <script src=\"\(CDN.mermaidJS)\"></script>"
+            html += "\n    <script src=\"\(CDN.mermaidJS)\" integrity=\"\(CDN.mermaidJSIntegrity)\" crossorigin=\"anonymous\"></script>"
             html += "\n    <script>mermaid.initialize({startOnLoad: true});</script>"
         }
 
         if hasMath {
-            html += "\n    <link rel=\"stylesheet\" href=\"\(CDN.katexCSS)\">"
-            html += "\n    <script src=\"\(CDN.katexJS)\"></script>"
-            html += "\n    <script src=\"\(CDN.katexAutoRenderJS)\"></script>"
+            html += "\n    <link rel=\"stylesheet\" href=\"\(CDN.katexCSS)\" integrity=\"\(CDN.katexCSSIntegrity)\" crossorigin=\"anonymous\">"
+            html += "\n    <script src=\"\(CDN.katexJS)\" integrity=\"\(CDN.katexJSIntegrity)\" crossorigin=\"anonymous\"></script>"
+            html += "\n    <script src=\"\(CDN.katexAutoRenderJS)\" integrity=\"\(CDN.katexAutoRenderJSIntegrity)\" crossorigin=\"anonymous\"></script>"
             // Auto-render handles inline `$...$` (we only emit those for inline math). For
             // display math we use <script type="math/tex; mode=display"> tags (H16) — read each
             // one and call katex.render so the body LaTeX isn't subject to HTML parsing.
@@ -692,7 +722,12 @@ class MarkdownParser {
             // previously HTML-escaping turned those into entities that KaTeX rendered literally.
             // The companion init script (added to the head when hasMath is true) reads these
             // tags and calls katex.render on each.
-            return "<div class=\"math-display\"><script type=\"math/tex; mode=display\">\(latex)</script></div>\n"
+            // S1: neutralize any "</script>" breakout. A browser ends a <script> element on the
+            // literal bytes "</" regardless of context, so raw LaTeX containing "</script>" would
+            // otherwise inject markup into the exported HTML. The backslash is ignored by KaTeX's
+            // TeX parser, so the rendered math is unchanged.
+            let safeLatex = latex.replacingOccurrences(of: "</", with: "<\\/")
+            return "<div class=\"math-display\"><script type=\"math/tex; mode=display\">\(safeLatex)</script></div>\n"
         case .table(let rows):
             var html = "<table>\n"
             for (rowIndex, row) in rows.enumerated() {
@@ -909,7 +944,7 @@ class MarkdownParser {
     /// matching GitHub's anchor-generation convention.
     func extractHeadings(_ markdown: String) -> [(id: String, level: Int, text: String, lineIndex: Int)] {
         var headings: [(id: String, level: Int, text: String, lineIndex: Int)] = []
-        let lines = markdown.components(separatedBy: .newlines)
+        let lines = splitLines(markdown)
         var slugCounts: [String: Int] = [:]
         var i = 0
 
@@ -931,6 +966,10 @@ class MarkdownParser {
         // then exit. Mirrors parse()'s loop so a `# X` line inside a `<div>...</div>` block
         // doesn't get counted as a heading (M4).
         var htmlBuffer: [String]? = nil
+        // C3: track open `$$` display-math blocks, mirroring parse()'s consumption, so a `# X` line
+        // inside one isn't emitted as a phantom heading — which would desync the positional
+        // heading↔slug pairing in MarkdownTextView and shift every later heading by one.
+        var inDisplayMath = false
 
         while i < lines.count {
             let line = lines[i]
@@ -948,6 +987,19 @@ class MarkdownParser {
                 continue
             }
             if openFenceLen > 0 {
+                i += 1
+                continue
+            }
+
+            // C3: display-math block enter/exit ($$ ... $$). A bare `$$` line toggles the block;
+            // lines inside are not headings. Single-line `$$...$$` is self-contained (no enclosed
+            // lines) so it needs no handling here.
+            if trimmed == "$$" && htmlBuffer == nil {
+                inDisplayMath.toggle()
+                i += 1
+                continue
+            }
+            if inDisplayMath {
                 i += 1
                 continue
             }

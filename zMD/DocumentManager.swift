@@ -245,9 +245,13 @@ class DocumentManager: ObservableObject {
 
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             fileWatchers[document.id]?.ignoreNextChange = true
-            var newDocument = MarkdownDocument(id: document.id, url: document.url, content: fileContent)
-            newDocument.detectedEncoding = encoding
-            openDocuments[index] = newDocument
+            // C8: mutate in place. Rebuilding via MarkdownDocument(id:url:content:) dropped every
+            // other field (bookmarkData, directoryBookmarkData, isUntitled) — the same field-loss
+            // bug already fixed for rename/move. directoryBookmarkData is what MarkdownTextView uses
+            // for relative-image access.
+            openDocuments[index].content = fileContent
+            openDocuments[index].detectedEncoding = encoding
+            openDocuments[index].isDirty = false
         }
     }
 
@@ -448,6 +452,10 @@ class DocumentManager: ObservableObject {
                 // or while the doc no longer exists in the open set.
                 guard !self.pendingExternalChange.contains(documentId) else { return }
                 guard self.openDocuments.contains(where: { $0.id == documentId }) else { return }
+                // L4: an external write may have landed during the 2s debounce with its watcher
+                // change-event still queued behind this timer. Skip the auto-save so we don't
+                // clobber it; the pending watcher event will surface the external-change dialog.
+                if self.fileWatchers[documentId]?.hasPendingExternalChange() == true { return }
                 self.saveDocument(id: documentId)
             }
         }
@@ -523,6 +531,29 @@ class DocumentManager: ObservableObject {
 
             ToastManager.shared.show("File saved", style: .success)
         } catch {
+            // L2: A document read via a non-UTF-8 fallback (CP1252 / Mac Roman / ISO-8859-1)
+            // keeps that encoding for saving. A character the user typed that the encoding cannot
+            // represent (emoji, CJK, math symbols) makes write throw
+            // NSFileWriteInapplicableStringEncodingError. The NSSavePanel fallback below retries
+            // with the SAME encoding and fails identically forever, trapping the user — and with
+            // auto-save on it pops an unprompted, always-failing save panel mid-typing. Detect that
+            // specific error and convert to UTF-8 instead.
+            if (error as NSError).code == NSFileWriteInapplicableStringEncodingError {
+                do {
+                    try document.content.write(to: resolvedURL, atomically: true, encoding: .utf8)
+                    if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
+                    openDocuments[index].detectedEncoding = "UTF-8"
+                    openDocuments[index].isDirty = false
+                    fileWatchers[id]?.ignoreNextChange = true
+                    FolderManager.shared.noteSelfWrite(at: resolvedURL)
+                    ToastManager.shared.show("Saved as UTF-8 — the original encoding couldn't store the new characters", style: .success)
+                } catch {
+                    if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
+                    self.alertManager.showFileSaveError(url: resolvedURL, error: error)
+                }
+                return
+            }
+
             // Release security scope before falling back to NSSavePanel
             if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
 
@@ -958,6 +989,20 @@ extension DocumentManager {
         }
     }
 
+    /// P5: count newlines in content[from..<to]. Used to advance a running line number across
+    /// matches without rescanning the whole prefix from startIndex for every match. Because match
+    /// positions are monotonic, the scanned regions are disjoint and cover the content at most once,
+    /// so total work is O(n) instead of O(n × matches).
+    private static func newlineCount(in content: String, from: String.Index, to: String.Index) -> Int {
+        var count = 0
+        var i = from
+        while i < to {
+            if content[i] == "\n" { count += 1 }
+            i = content.index(after: i)
+        }
+        return count
+    }
+
     private static func regexMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
         var options: NSRegularExpression.Options = []
         if !caseSensitive { options.insert(.caseInsensitive) }
@@ -966,11 +1011,14 @@ extension DocumentManager {
         let results = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
         var matches: [SearchMatch] = []
         matches.reserveCapacity(min(results.count, maxSearchMatches))
+        var lastIndex = content.startIndex
+        var runningLine = 1
         for result in results {
             if matches.count >= maxSearchMatches { break }
             guard let range = Range(result.range, in: content) else { continue }
-            let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
-            matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+            runningLine += newlineCount(in: content, from: lastIndex, to: range.lowerBound)
+            lastIndex = range.lowerBound
+            matches.append(SearchMatch(range: range, lineNumber: runningLine))
         }
         return matches
     }
@@ -980,10 +1028,13 @@ extension DocumentManager {
         if !caseSensitive { searchOptions.insert(.caseInsensitive) }
         var matches: [SearchMatch] = []
         var searchStartIndex = content.startIndex
+        var lastIndex = content.startIndex
+        var runningLine = 1
         while searchStartIndex < content.endIndex && matches.count < maxSearchMatches {
             if let range = content.range(of: pattern, options: searchOptions, range: searchStartIndex..<content.endIndex) {
-                let lineNumber = content[content.startIndex..<range.lowerBound].filter { $0 == "\n" }.count + 1
-                matches.append(SearchMatch(range: range, lineNumber: lineNumber))
+                runningLine += newlineCount(in: content, from: lastIndex, to: range.lowerBound)
+                lastIndex = range.lowerBound
+                matches.append(SearchMatch(range: range, lineNumber: runningLine))
                 searchStartIndex = range.upperBound
             } else {
                 break
@@ -1106,8 +1157,11 @@ extension DocumentManager: FileWatcherDelegate {
         case .reload:
             reloadDocument(document)
         case .ignore:
-            // Do nothing, but update the watcher's timestamp
-            watcher.ignoreNextChange = true
+            // L3: Do nothing. The triggering write already advanced the watcher's
+            // lastModificationDate before this dialog was shown, so its echo is suppressed by
+            // the mod-date guard in FileWatcher.handleFileChange. Arming ignoreNextChange here
+            // would instead silently swallow the NEXT genuine external edit.
+            break
         case .ignoreAll:
             ignoreAllFileChanges = true
         }
