@@ -240,45 +240,51 @@ struct ContentView: View {
                        let secondaryId = documentManager.secondaryDocumentId,
                        let secondaryDoc = documentManager.openDocuments.first(where: { $0.id == secondaryId }) {
                         HSplitView {
-                            markdownPreview(for: document)
-
+                            // Primary (left) pane
                             VStack(spacing: 0) {
-                                HStack {
-                                    Image(systemName: "doc.text")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                    Text(secondaryDoc.name)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Button(action: { documentManager.closeSplitView() }) {
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 10, weight: .medium))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
-                                Divider()
-
-                                MarkdownTextView(
-                                    content: secondaryDoc.content,
-                                    baseURL: secondaryDoc.url,
-                                    directoryBookmark: secondaryDoc.directoryBookmarkData,
-                                    scrollToHeadingId: .constant(nil),
-                                    searchText: "",
-                                    currentMatchIndex: 0,
-                                    searchMatches: [],
-                                    fontStyle: settings.fontStyle,
-                                    zoomLevel: settings.zoomLevel,
-                                    initialScrollPosition: documentManager.getScrollPosition(for: secondaryDoc.url),
-                                    onScrollPositionChanged: { position in
-                                        documentManager.setScrollPosition(position, for: secondaryDoc.url)
-                                    },
-                                    onMatchCountChanged: nil
+                                splitPaneHeader(
+                                    name: document.name,
+                                    mode: $documentManager.splitPrimaryMode,
+                                    onClose: nil
                                 )
+                                Divider()
+                                switch documentManager.splitPrimaryMode {
+                                case .rendered:
+                                    markdownPreview(for: document)
+                                case .edit:
+                                    sourceEditor(for: document)
+                                }
+                            }
+
+                            // Secondary (right) pane
+                            VStack(spacing: 0) {
+                                splitPaneHeader(
+                                    name: secondaryDoc.name,
+                                    mode: $documentManager.splitSecondaryMode,
+                                    onClose: { documentManager.closeSplitView() }
+                                )
+                                Divider()
+                                switch documentManager.splitSecondaryMode {
+                                case .rendered:
+                                    MarkdownTextView(
+                                        content: secondaryDoc.content,
+                                        baseURL: secondaryDoc.url,
+                                        directoryBookmark: secondaryDoc.directoryBookmarkData,
+                                        scrollToHeadingId: .constant(nil),
+                                        searchText: "",
+                                        currentMatchIndex: 0,
+                                        searchMatches: [],
+                                        fontStyle: settings.fontStyle,
+                                        zoomLevel: settings.zoomLevel,
+                                        initialScrollPosition: documentManager.getScrollPosition(for: secondaryDoc.url),
+                                        onScrollPositionChanged: { position in
+                                            documentManager.setScrollPosition(position, for: secondaryDoc.url)
+                                        },
+                                        onMatchCountChanged: nil
+                                    )
+                                case .edit:
+                                    sourceEditor(for: secondaryDoc)
+                                }
                             }
                         }
                     } else {
@@ -655,6 +661,39 @@ extension ContentView {
             searchMatches: documentManager.isSearching ? documentManager.searchMatches : [],
             currentMatchIndex: documentManager.currentMatchIndex
         )
+    }
+
+    /// Header bar for a two-file split pane: file name, a Rendered|Edit toggle bound to that
+    /// pane's mode, and an optional close button (used only on the secondary pane).
+    @ViewBuilder
+    func splitPaneHeader(name: String, mode: Binding<SplitPaneMode>, onClose: (() -> Void)?) -> some View {
+        HStack {
+            Image(systemName: "doc.text")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Text(name)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+            Spacer()
+            Picker("", selection: mode) {
+                Text("Rendered").tag(SplitPaneMode.rendered)
+                Text("Edit").tag(SplitPaneMode.edit)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 130)
+            if let onClose = onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
     }
 
     @ViewBuilder
