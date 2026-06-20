@@ -4,6 +4,11 @@ import AppKit
 struct SourceEditorView: NSViewRepresentable {
     @Binding var content: String
     let onContentChange: ((String) -> Void)?
+    /// Identity of the document this editor is bound to. updateNSView compares it against the
+    /// coordinator's last-bound id to detect a document switch, so the text view is re-synced (and
+    /// its undo reset) even when it holds focus — otherwise switching tabs while the editor kept
+    /// first-responder left it showing, and then saving, the PREVIOUS document's text (data loss).
+    let documentId: UUID
     var zoomLevel: CGFloat = 1.0
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
@@ -94,6 +99,7 @@ struct SourceEditorView: NSViewRepresentable {
         )
 
         textView.string = content
+        context.coordinator.boundDocumentId = documentId
         context.coordinator.applyHighlighting(to: textView)
 
         // Hand references to the parent so it can render an optional minimap alongside us.
@@ -151,10 +157,24 @@ struct SourceEditorView: NSViewRepresentable {
             scrollView.hasVerticalRuler = false
         }
 
-        // Only overwrite from binding if the textView isn't the active editor —
-        // otherwise we can clobber in-flight edits during save/isDirty updates.
+        // Sync the NSTextView from the binding. Two cases:
+        // 1. Document switch (boundDocumentId changed): the active document changed under us. A
+        //    switch is NOT an in-flight edit, so replace the content even when the editor has focus,
+        //    and reset undo (undo must not cross documents). Without this, switching tabs while the
+        //    editor kept first-responder left it showing — and then saving — the PREVIOUS document's
+        //    text into the newly-selected file (data loss).
+        // 2. Same document, editor not focused: keep the original guard so we don't clobber in-flight
+        //    typing during unrelated state updates (save/isDirty/zoom).
         let textViewHasFocus = (textView.window?.firstResponder == textView)
-        if !textViewHasFocus && textView.string != content {
+        if context.coordinator.boundDocumentId != documentId {
+            context.coordinator.boundDocumentId = documentId
+            if textView.string != content {
+                textView.string = content
+                context.coordinator.invalidateCursorPositionCache()
+                context.coordinator.applyHighlighting(to: textView)
+            }
+            textView.undoManager?.removeAllActions()
+        } else if !textViewHasFocus && textView.string != content {
             let selectedRanges = textView.selectedRanges
             textView.string = content
             textView.selectedRanges = selectedRanges
@@ -191,6 +211,9 @@ struct SourceEditorView: NSViewRepresentable {
         var scrollView: NSScrollView?
         var isUpdatingFromUser = false
         var isUserScrolling = false
+        // Identity of the document currently loaded into the text view. updateNSView compares this
+        // against the bound documentId to detect a document switch and force a content re-sync.
+        var boundDocumentId: UUID?
         var zoomLevel: CGFloat = 1.0
         var onScrollPercentChanged: ((CGFloat) -> Void)?
         let onContentChange: ((String) -> Void)?

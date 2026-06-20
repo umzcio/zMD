@@ -656,6 +656,7 @@ extension ContentView {
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
             },
+            documentId: document.id,
             zoomLevel: settings.zoomLevel,
             searchText: documentManager.isSearching ? documentManager.searchText : "",
             searchMatches: documentManager.isSearching ? documentManager.searchMatches : [],
@@ -703,6 +704,7 @@ extension ContentView {
             onContentChange: { newContent in
                 documentManager.updateContent(for: document.id, newContent: newContent)
             },
+            documentId: document.id,
             zoomLevel: settings.zoomLevel,
             onScrollPercentChanged: documentManager.isScrollSyncEnabled ? { percent in
                 guard documentManager.scrollSyncOrigin != .preview else { return }
@@ -729,6 +731,7 @@ extension ContentView {
 struct SourceEditorWithMinimap: View {
     @Binding var content: String
     let onContentChange: ((String) -> Void)?
+    let documentId: UUID
     var zoomLevel: CGFloat = 1.0
     var onScrollPercentChanged: ((CGFloat) -> Void)?
     var scrollToPercent: CGFloat?
@@ -745,6 +748,7 @@ struct SourceEditorWithMinimap: View {
             SourceEditorView(
                 content: $content,
                 onContentChange: onContentChange,
+                documentId: documentId,
                 zoomLevel: zoomLevel,
                 onScrollPercentChanged: onScrollPercentChanged,
                 scrollToPercent: scrollToPercent,
