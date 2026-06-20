@@ -14,6 +14,10 @@ class DocumentManager: ObservableObject {
     // Split view
     @Published var secondaryDocumentId: UUID?
     @Published var isSplitViewActive: Bool = false
+    // Per-pane mode for the two-file split. Each pane independently shows the rendered preview
+    // or an editable source editor. Reset to .rendered whenever the split is opened or closed.
+    @Published var splitPrimaryMode: SplitPaneMode = .rendered
+    @Published var splitSecondaryMode: SplitPaneMode = .rendered
 
     // View mode
     @Published var viewMode: ViewMode = .preview
@@ -422,11 +426,15 @@ class DocumentManager: ObservableObject {
         guard documentId != selectedDocumentId else { return }
         secondaryDocumentId = documentId
         isSplitViewActive = true
+        splitPrimaryMode = .rendered
+        splitSecondaryMode = .rendered
     }
 
     func closeSplitView() {
         secondaryDocumentId = nil
         isSplitViewActive = false
+        splitPrimaryMode = .rendered
+        splitSecondaryMode = .rendered
     }
 
     // MARK: - Content Editing & Save
@@ -879,6 +887,11 @@ struct MarkdownDocument: Identifiable {
     var name: String {
         url.lastPathComponent
     }
+}
+
+enum SplitPaneMode: String, CaseIterable {
+    case rendered
+    case edit
 }
 
 enum ViewMode: String, CaseIterable {
