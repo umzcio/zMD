@@ -22,6 +22,42 @@ struct SettingsView: View {
                 }
         }
         .frame(width: 480, height: 480)
+        .background(EscapeKeyHandler())
+    }
+}
+
+/// Invisible helper that closes the enclosing window when Escape is pressed.
+/// The Settings scene's NSWindow is created by AppKit itself, so there's no
+/// SwiftUI `@State isPresented` to flip — we have to reach the real window.
+private struct EscapeKeyHandler: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        EscapeKeyHandlingView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class EscapeKeyHandlingView: NSView {
+    private var escapeMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let escapeMonitor {
+            NSEvent.removeMonitor(escapeMonitor)
+            self.escapeMonitor = nil
+        }
+        guard let window else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+            guard event.keyCode == 53, event.window === window else { return event }
+            window?.performClose(nil)
+            return nil
+        }
+    }
+
+    deinit {
+        if let escapeMonitor {
+            NSEvent.removeMonitor(escapeMonitor)
+        }
     }
 }
 
