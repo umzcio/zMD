@@ -96,8 +96,8 @@ class SyntaxHighlighter {
 
     // MARK: - Public API
 
-    func highlight(code: String, language: String?) -> NSAttributedString {
-        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    func highlight(code: String, language: String?, fontSize: CGFloat = 13) -> NSAttributedString {
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         let result = NSMutableAttributedString(string: code, attributes: [
             .font: font,
             .foregroundColor: NSColor.textColor

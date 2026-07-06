@@ -5,7 +5,6 @@ struct SearchBar: View {
     @Binding var isSearching: Bool
     let currentMatch: Int
     let totalMatches: Int
-    let onSearch: () -> Void
     let onNext: () -> Void
     let onPrevious: () -> Void
     let onClose: () -> Void
@@ -26,7 +25,6 @@ struct SearchBar: View {
          isSearching: Binding<Bool>,
          currentMatch: Int,
          totalMatches: Int,
-         onSearch: @escaping () -> Void,
          onNext: @escaping () -> Void,
          onPrevious: @escaping () -> Void,
          onClose: @escaping () -> Void) {
@@ -34,7 +32,6 @@ struct SearchBar: View {
         self._isSearching = isSearching
         self.currentMatch = currentMatch
         self.totalMatches = totalMatches
-        self.onSearch = onSearch
         self.onNext = onNext
         self.onPrevious = onPrevious
         self.onClose = onClose
@@ -46,7 +43,6 @@ struct SearchBar: View {
          isSearching: Binding<Bool>,
          currentMatch: Int,
          totalMatches: Int,
-         onSearch: @escaping () -> Void,
          onNext: @escaping () -> Void,
          onPrevious: @escaping () -> Void,
          onClose: @escaping () -> Void,
@@ -62,7 +58,6 @@ struct SearchBar: View {
         self._isSearching = isSearching
         self.currentMatch = currentMatch
         self.totalMatches = totalMatches
-        self.onSearch = onSearch
         self.onNext = onNext
         self.onPrevious = onPrevious
         self.onClose = onClose
@@ -140,7 +135,6 @@ struct SearchBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(totalMatches == 0)
-                .keyboardShortcut("g", modifiers: [.command, .shift])
                 .help("Previous match (\u{21E7}\u{2318}G)")
 
                 // Next match button
@@ -150,7 +144,6 @@ struct SearchBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(totalMatches == 0)
-                .keyboardShortcut("g", modifiers: .command)
                 .help("Next match (\u{2318}G)")
 
                 Divider()

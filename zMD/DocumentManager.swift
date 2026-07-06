@@ -20,7 +20,12 @@ class DocumentManager: ObservableObject {
     @Published var splitSecondaryMode: SplitPaneMode = .rendered
 
     // View mode
-    @Published var viewMode: ViewMode = .preview
+    @Published var viewMode: ViewMode = .preview {
+        didSet {
+            guard viewMode != oldValue else { return }
+            reconcileSearchStateForViewMode()
+        }
+    }
 
     // Focus mode
     @Published var isFocusModeActive: Bool = false
@@ -196,11 +201,12 @@ class DocumentManager: ObservableObject {
     }
 
     func loadDocument(from url: URL, directoryBookmark: Data? = nil) {
-        // Check if already open
-        if openDocuments.contains(where: { $0.url == url }) {
-            if let doc = openDocuments.first(where: { $0.url == url }) {
-                selectedDocumentId = doc.id
-            }
+        let key = Self.canonicalKey(for: url)
+
+        // Check if already open. Use the same canonical path key as Open Recent so symlinks,
+        // standardized paths, and case variants focus the existing tab instead of duplicating it.
+        if let doc = openDocuments.first(where: { Self.canonicalKey(for: $0.url) == key }) {
+            selectedDocumentId = doc.id
             return
         }
 
@@ -444,6 +450,10 @@ class DocumentManager: ObservableObject {
         openDocuments[index].content = newContent
         openDocuments[index].isDirty = true
 
+        if documentId == selectedDocumentId && isSearching && !searchText.isEmpty {
+            performSearch(immediate: true)
+        }
+
         // Note: previously this paused the file watcher per-keystroke and only resumed it on
         // save. With auto-save off and no Cmd+S, the watcher stayed paused after the first
         // keystroke — external changes were silently never detected. `ignoreNextChange` already
@@ -470,7 +480,14 @@ class DocumentManager: ObservableObject {
     }
 
     func saveDocument(id: UUID) {
-        guard let index = openDocuments.firstIndex(where: { $0.id == id }) else { return }
+        saveDocument(id: id, completion: nil)
+    }
+
+    private func saveDocument(id: UUID, completion: ((Bool) -> Void)?) {
+        guard let index = openDocuments.firstIndex(where: { $0.id == id }) else {
+            completion?(false)
+            return
+        }
         // Cancel any pending auto-save for this doc — we're saving right now, the pending
         // timer would fire 2s later and re-save (clobbering intermediate undo state).
         autoSaveTimers[id]?.invalidate()
@@ -488,9 +505,13 @@ class DocumentManager: ObservableObject {
                 guard response == .OK, let newURL = savePanel.url else {
                     // User cancelled — surface a toast so they don't think Cmd+S succeeded.
                     ToastManager.shared.show("Save cancelled — changes still unsaved", style: .warning)
+                    completion?(false)
                     return
                 }
-                guard let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else { return }
+                guard let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else {
+                    completion?(false)
+                    return
+                }
                 do {
                     let enc = DocumentManager.encoding(for: self.openDocuments[idx].detectedEncoding)
                     try self.openDocuments[idx].content.write(to: newURL, atomically: true, encoding: enc)
@@ -502,8 +523,10 @@ class DocumentManager: ObservableObject {
                     self.startWatchingFile(for: self.openDocuments[idx])
                     self.addToRecentFiles(url: newURL)
                     ToastManager.shared.show("File saved", style: .success)
+                    completion?(true)
                 } catch {
                     self.alertManager.showFileSaveError(url: newURL, error: error)
+                    completion?(false)
                 }
             }
             return
@@ -538,6 +561,7 @@ class DocumentManager: ObservableObject {
             FolderManager.shared.noteSelfWrite(at: resolvedURL)
 
             ToastManager.shared.show("File saved", style: .success)
+            completion?(true)
         } catch {
             // L2: A document read via a non-UTF-8 fallback (CP1252 / Mac Roman / ISO-8859-1)
             // keeps that encoding for saving. A character the user typed that the encoding cannot
@@ -555,9 +579,11 @@ class DocumentManager: ObservableObject {
                     fileWatchers[id]?.ignoreNextChange = true
                     FolderManager.shared.noteSelfWrite(at: resolvedURL)
                     ToastManager.shared.show("Saved as UTF-8 — the original encoding couldn't store the new characters", style: .success)
+                    completion?(true)
                 } catch {
                     if accessGranted { resolvedURL.stopAccessingSecurityScopedResource() }
                     self.alertManager.showFileSaveError(url: resolvedURL, error: error)
+                    completion?(false)
                 }
                 return
             }
@@ -578,9 +604,13 @@ class DocumentManager: ObservableObject {
                 guard let self = self else { return }
                 guard response == .OK, let newURL = savePanel.url else {
                     ToastManager.shared.show("Save cancelled — changes still unsaved", style: .warning)
+                    completion?(false)
                     return
                 }
-                guard let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else { return }
+                guard let idx = self.openDocuments.firstIndex(where: { $0.id == id }) else {
+                    completion?(false)
+                    return
+                }
                 do {
                     try contentSnapshot.write(to: newURL, atomically: true, encoding: saveEncoding)
                     self.openDocuments[idx].isDirty = false
@@ -589,8 +619,10 @@ class DocumentManager: ObservableObject {
                     self.fileWatchers[id]?.ignoreNextChange = true
                     FolderManager.shared.noteSelfWrite(at: newURL)
                     ToastManager.shared.show("File saved", style: .success)
+                    completion?(true)
                 } catch {
                     self.alertManager.showFileSaveError(url: newURL, error: error)
+                    completion?(false)
                 }
             }
         }
@@ -605,12 +637,17 @@ class DocumentManager: ObservableObject {
         openDocuments.contains(where: { $0.isDirty })
     }
 
-    /// Ask the user whether to save, discard, or cancel before closing a dirty document.
-    /// Returns .cancel if the user aborts; returns .save AFTER the save dialog/write completes synchronously for saved docs.
-    /// For dirty untitled docs, .save routes to the save panel and we abort the close (the user can close again after the panel confirms).
-    private enum DirtyCloseAction { case proceed, cancel, deferToSavePanel }
+    enum TerminationPreparation {
+        case terminateNow
+        case terminateLater
+        case cancel
+    }
 
-    private func resolveDirtyClose(_ document: MarkdownDocument) -> DirtyCloseAction {
+    /// Ask the user whether to save, discard, or cancel before closing or quitting with a dirty document.
+    /// Save is always treated as deferred because it may need an asynchronous NSSavePanel.
+    private enum DirtyCloseAction { case proceed, discard, cancel, deferToSave }
+
+    private func resolveDirtyClose(_ document: MarkdownDocument, onSaveFinished: ((Bool) -> Void)? = nil) -> DirtyCloseAction {
         guard document.isDirty else { return .proceed }
 
         let alert = NSAlert()
@@ -624,29 +661,35 @@ class DocumentManager: ObservableObject {
 
         switch alert.runModal() {
         case .alertFirstButtonReturn: // Save
-            if document.isUntitled {
-                saveDocument(id: document.id)
-                return .deferToSavePanel
-            } else {
-                saveDocument(id: document.id)
-                return .proceed
+            saveDocument(id: document.id) { success in
+                DispatchQueue.main.async {
+                    onSaveFinished?(success)
+                }
             }
+            return .deferToSave
         case .alertSecondButtonReturn: // Don't Save
-            return .proceed
+            return .discard
         default: // Cancel
             return .cancel
         }
     }
 
     func closeDocument(_ document: MarkdownDocument) {
-        switch resolveDirtyClose(document) {
-        case .cancel, .deferToSavePanel:
+        switch resolveDirtyClose(document, onSaveFinished: { [weak self] success in
+            guard success else { return }
+            self?.closeDocumentWithoutPrompt(id: document.id)
+        }) {
+        case .cancel, .deferToSave:
             return
-        case .proceed:
-            break
+        case .proceed, .discard:
+            closeDocumentWithoutPrompt(id: document.id)
         }
+    }
 
-        if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
+    private func closeDocumentWithoutPrompt(id documentId: UUID) {
+        if let index = openDocuments.firstIndex(where: { $0.id == documentId }) {
+            let document = openDocuments[index]
+
             // Clear search state if closing the document being searched
             if document.id == selectedDocumentId && isSearching {
                 endSearch()
@@ -686,6 +729,45 @@ class DocumentManager: ObservableObject {
         }
     }
 
+    func prepareForTermination(completion: @escaping (Bool) -> Void) -> TerminationPreparation {
+        prepareForTermination(discardedDirtyDocuments: [], completion: completion)
+    }
+
+    private func prepareForTermination(discardedDirtyDocuments: Set<UUID>, completion: @escaping (Bool) -> Void) -> TerminationPreparation {
+        guard let document = openDocuments.first(where: { $0.isDirty && !discardedDirtyDocuments.contains($0.id) }) else {
+            return .terminateNow
+        }
+
+        switch resolveDirtyClose(document, onSaveFinished: { [weak self] success in
+            guard success, let self = self else {
+                completion(false)
+                return
+            }
+
+            switch self.prepareForTermination(discardedDirtyDocuments: discardedDirtyDocuments, completion: completion) {
+            case .terminateNow:
+                completion(true)
+            case .cancel:
+                completion(false)
+            case .terminateLater:
+                break
+            }
+        }) {
+        case .cancel:
+            return .cancel
+        case .deferToSave:
+            return .terminateLater
+        case .discard:
+            var nextDiscarded = discardedDirtyDocuments
+            nextDiscarded.insert(document.id)
+            return prepareForTermination(discardedDirtyDocuments: nextDiscarded, completion: completion)
+        case .proceed:
+            var nextDiscarded = discardedDirtyDocuments
+            nextDiscarded.insert(document.id)
+            return prepareForTermination(discardedDirtyDocuments: nextDiscarded, completion: completion)
+        }
+    }
+
     func closeOtherDocuments(except document: MarkdownDocument) {
         // If any of the others are dirty, require one confirmation instead of N nagging dialogs.
         let dirtyOthers = openDocuments.filter { $0.id != document.id && $0.isDirty }
@@ -722,6 +804,9 @@ class DocumentManager: ObservableObject {
 
         openDocuments.removeAll(where: { $0.id != document.id })
         selectedDocumentId = document.id
+        if isSplitViewActive {
+            closeSplitView()
+        }
     }
 
     func selectNextTab() {
@@ -910,7 +995,7 @@ enum ViewMode: String, CaseIterable {
 
 struct SearchMatch: Identifiable {
     let id = UUID()
-    let range: Range<String.Index>
+    let range: NSRange
     let lineNumber: Int
 }
 
@@ -926,6 +1011,7 @@ extension DocumentManager {
         searchText = ""
         searchMatches = []
         currentMatchIndex = 0
+        renderedMatchCount = 0
     }
 
     func endSearch() {
@@ -939,8 +1025,28 @@ extension DocumentManager {
     }
 
     func startFindAndReplace() {
+        guard viewMode != .preview else { return }
         isSearching = true
         showReplace = true
+    }
+
+    var searchControlMatchCount: Int {
+        if viewMode == .preview {
+            return renderedMatchCount
+        }
+        return searchMatches.count
+    }
+
+    private func reconcileSearchStateForViewMode() {
+        if viewMode == .preview {
+            showReplace = false
+            replaceText = ""
+            if currentMatchIndex >= renderedMatchCount {
+                currentMatchIndex = 0
+            }
+        } else if currentMatchIndex >= searchMatches.count {
+            currentMatchIndex = 0
+        }
     }
 
     /// Run the current search.
@@ -988,7 +1094,7 @@ extension DocumentManager {
                 DispatchQueue.main.async {
                     guard let self = self, self.searchToken == token else { return }
                     self.searchMatches = matches
-                    if !matches.isEmpty && self.currentMatchIndex >= matches.count {
+                    if self.currentMatchIndex >= matches.count {
                         self.currentMatchIndex = 0
                     }
                 }
@@ -996,7 +1102,7 @@ extension DocumentManager {
         } else {
             let matches = Self.plainMatches(pattern: pattern, content: content, caseSensitive: caseSensitive)
             searchMatches = matches
-            if !matches.isEmpty && currentMatchIndex >= matches.count {
+            if currentMatchIndex >= matches.count {
                 currentMatchIndex = 0
             }
         }
@@ -1031,32 +1137,35 @@ extension DocumentManager {
             guard let range = Range(result.range, in: content) else { continue }
             runningLine += newlineCount(in: content, from: lastIndex, to: range.lowerBound)
             lastIndex = range.lowerBound
-            matches.append(SearchMatch(range: range, lineNumber: runningLine))
+            matches.append(SearchMatch(range: result.range, lineNumber: runningLine))
         }
         return matches
     }
 
     private static func plainMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
-        var searchOptions: String.CompareOptions = []
+        var searchOptions: NSString.CompareOptions = []
         if !caseSensitive { searchOptions.insert(.caseInsensitive) }
+        let nsContent = content as NSString
         var matches: [SearchMatch] = []
-        var searchStartIndex = content.startIndex
         var lastIndex = content.startIndex
         var runningLine = 1
-        while searchStartIndex < content.endIndex && matches.count < maxSearchMatches {
-            if let range = content.range(of: pattern, options: searchOptions, range: searchStartIndex..<content.endIndex) {
-                runningLine += newlineCount(in: content, from: lastIndex, to: range.lowerBound)
-                lastIndex = range.lowerBound
-                matches.append(SearchMatch(range: range, lineNumber: runningLine))
-                searchStartIndex = range.upperBound
-            } else {
-                break
-            }
+        var searchRange = NSRange(location: 0, length: nsContent.length)
+        while searchRange.location < nsContent.length && matches.count < maxSearchMatches {
+            let range = nsContent.range(of: pattern, options: searchOptions, range: searchRange)
+            guard range.location != NSNotFound else { break }
+            guard let swiftRange = Range(range, in: content) else { break }
+            runningLine += newlineCount(in: content, from: lastIndex, to: swiftRange.lowerBound)
+            lastIndex = swiftRange.lowerBound
+            matches.append(SearchMatch(range: range, lineNumber: runningLine))
+            let advance = max(1, range.length)
+            searchRange.location = range.location + advance
+            searchRange.length = max(0, nsContent.length - searchRange.location)
         }
         return matches
     }
 
     func replaceCurrentMatch() {
+        guard viewMode != .preview else { return }
         guard let selectedId = selectedDocumentId,
               let index = openDocuments.firstIndex(where: { $0.id == selectedId }),
               !searchMatches.isEmpty,
@@ -1064,6 +1173,13 @@ extension DocumentManager {
 
         let match = searchMatches[currentMatchIndex]
         var content = openDocuments[index].content
+        let nsContent = content as NSString
+        guard match.range.location != NSNotFound,
+              match.range.location >= 0,
+              NSMaxRange(match.range) <= nsContent.length else {
+            performSearch(immediate: true)
+            return
+        }
 
         if isRegexSearch {
             // For regex mode, run the pattern over only the match range so capture-group
@@ -1072,17 +1188,23 @@ extension DocumentManager {
             var options: NSRegularExpression.Options = []
             if !isCaseSensitive { options.insert(.caseInsensitive) }
             if let regex = try? NSRegularExpression(pattern: searchText, options: options),
-               let nsRange = NSRange(match.range, in: content) as NSRange? {
-                let nsContent = content as NSString
-                let replaced = regex.stringByReplacingMatches(in: content, options: [], range: nsRange, withTemplate: replaceText)
+               regex.matches(in: content, options: [], range: match.range).contains(where: { NSEqualRanges($0.range, match.range) }) {
+                let replaced = regex.stringByReplacingMatches(in: content, options: [], range: match.range, withTemplate: replaceText)
                 // stringByReplacingMatches returns the entire content with that one range replaced.
                 content = replaced
-                _ = nsContent
             } else {
-                content.replaceSubrange(match.range, with: replaceText)
+                performSearch(immediate: true)
+                return
             }
         } else {
-            content.replaceSubrange(match.range, with: replaceText)
+            let currentText = nsContent.substring(with: match.range)
+            let compareOptions: NSString.CompareOptions = isCaseSensitive ? [] : [.caseInsensitive]
+            guard currentText.compare(searchText, options: compareOptions) == .orderedSame,
+                  let swiftRange = Range(match.range, in: content) else {
+                performSearch(immediate: true)
+                return
+            }
+            content.replaceSubrange(swiftRange, with: replaceText)
         }
 
         updateContent(for: selectedId, newContent: content)
@@ -1090,18 +1212,20 @@ extension DocumentManager {
     }
 
     func replaceAllMatches() {
+        guard viewMode != .preview else { return }
         guard let selectedId = selectedDocumentId,
               let index = openDocuments.firstIndex(where: { $0.id == selectedId }),
               !searchMatches.isEmpty else { return }
 
         var content = openDocuments[index].content
-        let count = searchMatches.count
+        var count = 0
 
         if isRegexSearch {
             var options: NSRegularExpression.Options = []
             if !isCaseSensitive { options.insert(.caseInsensitive) }
             if let regex = try? NSRegularExpression(pattern: searchText, options: options) {
                 let nsContent = content as NSString
+                count = min(regex.numberOfMatches(in: content, options: [], range: NSRange(location: 0, length: nsContent.length)), Self.maxSearchMatches)
                 content = regex.stringByReplacingMatches(
                     in: content,
                     options: [],
@@ -1109,16 +1233,22 @@ extension DocumentManager {
                     withTemplate: replaceText
                 )
             } else {
-                // Pattern compile failure — fall back to literal in-reverse replace.
-                for match in searchMatches.reversed() {
-                    content.replaceSubrange(match.range, with: replaceText)
-                }
+                performSearch(immediate: true)
+                return
             }
         } else {
             // Replace in reverse order to maintain valid ranges
-            for match in searchMatches.reversed() {
-                content.replaceSubrange(match.range, with: replaceText)
+            let matches = Self.plainMatches(pattern: searchText, content: content, caseSensitive: isCaseSensitive)
+            count = matches.count
+            for match in matches.reversed() {
+                guard let range = Range(match.range, in: content) else { continue }
+                content.replaceSubrange(range, with: replaceText)
             }
+        }
+
+        guard count > 0 else {
+            performSearch(immediate: true)
+            return
         }
 
         updateContent(for: selectedId, newContent: content)
@@ -1127,19 +1257,21 @@ extension DocumentManager {
     }
 
     func nextMatch() {
-        guard renderedMatchCount > 0 else { return }
-        currentMatchIndex = (currentMatchIndex + 1) % renderedMatchCount
+        let count = searchControlMatchCount
+        guard count > 0 else { return }
+        currentMatchIndex = (currentMatchIndex + 1) % count
     }
 
     func previousMatch() {
-        guard renderedMatchCount > 0 else { return }
-        currentMatchIndex = (currentMatchIndex - 1 + renderedMatchCount) % renderedMatchCount
+        let count = searchControlMatchCount
+        guard count > 0 else { return }
+        currentMatchIndex = (currentMatchIndex - 1 + count) % count
     }
 
     func setRenderedMatchCount(_ count: Int) {
         renderedMatchCount = count
         // Reset index if it's out of bounds
-        if currentMatchIndex >= count {
+        if viewMode == .preview && currentMatchIndex >= count {
             currentMatchIndex = 0
         }
     }

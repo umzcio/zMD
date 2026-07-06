@@ -166,11 +166,13 @@ class PrintManager {
 
         let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
         var itemText = trimmed
+        var orderedMarker: String?
 
         // Remove bullet marker
         if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
             itemText = String(trimmed.dropFirst(2))
         } else if let match = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+            orderedMarker = String(trimmed[match]).trimmingCharacters(in: .whitespaces)
             itemText = String(trimmed[match.upperBound...])
         }
 
@@ -189,9 +191,9 @@ class PrintManager {
         ]
 
         let bullets = ["•", "◦", "▪"]
-        let bullet = bullets[min(nestLevel, bullets.count - 1)]
+        let marker = orderedMarker ?? bullets[min(nestLevel, bullets.count - 1)]
 
-        result.append(NSAttributedString(string: "\(bullet)  ", attributes: attributes))
+        result.append(NSAttributedString(string: "\(marker)  ", attributes: attributes))
         let formatted = formatInlineMarkdown(itemText, attributes: attributes)
         result.append(formatted)
         result.append(NSAttributedString(string: "\n"))
@@ -274,70 +276,47 @@ class PrintManager {
     }
 
     private func formatInlineMarkdown(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: text, attributes: attributes)
         let baseFont = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 11)
-
-        // Bold **text**
-        applyPattern(#"\*\*(.+?)\*\*"#, to: result, attributes: [.font: NSFont.boldSystemFont(ofSize: baseFont.pointSize)])
-
-        // Italic *text*
         let italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-        applyPattern(#"\*(.+?)\*"#, to: result, attributes: [.font: italicFont])
+        let result = NSMutableAttributedString()
 
-        // Strikethrough ~~text~~
-        applyPattern(#"~~(.+?)~~"#, to: result, attributes: [.strikethroughStyle: NSUnderlineStyle.single.rawValue])
+        for token in InlineMarkdown.tokenize(text) {
+            var tokenAttributes = attributes
+            let value: String
 
-        // Inline code `text`
-        applyPattern(#"`(.+?)`"#, to: result, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
-            .backgroundColor: NSColor.lightGray.withAlphaComponent(0.2)
-        ])
-
-        // Links [text](url) - just show the text
-        applyLinkPattern(to: result)
-
-        return result
-    }
-
-    private func applyPattern(_ pattern: String, to result: NSMutableAttributedString, attributes: [NSAttributedString.Key: Any]) {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-        let string = result.string as NSString
-
-        let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()
-
-        for match in matches {
-            guard match.numberOfRanges >= 2 else { continue }
-            let fullRange = match.range(at: 0)
-            let contentRange = match.range(at: 1)
-
-            let content = string.substring(with: contentRange)
-            var newAttributes = result.attributes(at: contentRange.location, effectiveRange: nil)
-            for (key, value) in attributes {
-                newAttributes[key] = value
+            switch token {
+            case .text(let text):
+                value = text
+            case .lineBreak:
+                value = "\n"
+            case .code(let text):
+                value = text
+                tokenAttributes[.font] = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular)
+                tokenAttributes[.backgroundColor] = NSColor.lightGray.withAlphaComponent(0.2)
+            case .math(let text):
+                value = "$\(text)$"
+            case .strong(let text):
+                tokenAttributes[.font] = NSFont.boldSystemFont(ofSize: baseFont.pointSize)
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes))
+                continue
+            case .emphasis(let text):
+                tokenAttributes[.font] = italicFont
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes))
+                continue
+            case .strikethrough(let text):
+                tokenAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes))
+                continue
+            case .image(let alt, let source):
+                value = "[Image: \(alt.isEmpty ? source : alt)]"
+            case .link(let label, _):
+                result.append(formatInlineMarkdown(label, attributes: tokenAttributes))
+                continue
             }
 
-            result.replaceCharacters(in: fullRange, with: NSAttributedString(string: content, attributes: newAttributes))
+            result.append(NSAttributedString(string: value, attributes: tokenAttributes))
         }
-    }
-
-    private func applyLinkPattern(to result: NSMutableAttributedString) {
-        let pattern = #"\[(.+?)\]\((.+?)\)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-        let string = result.string as NSString
-
-        let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()
-
-        for match in matches {
-            guard match.numberOfRanges >= 3 else { continue }
-            let fullRange = match.range(at: 0)
-            let textRange = match.range(at: 1)
-
-            let text = string.substring(with: textRange)
-            var attributes = result.attributes(at: textRange.location, effectiveRange: nil)
-            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-
-            result.replaceCharacters(in: fullRange, with: NSAttributedString(string: text, attributes: attributes))
-        }
+        return result
     }
 
 }

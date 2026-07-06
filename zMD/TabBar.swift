@@ -114,17 +114,6 @@ struct TabItem: View {
                 .foregroundColor(isSelected ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
 
             Button(action: {
-                if document.isDirty {
-                    let shouldSave = AlertManager.shared.showConfirmation(
-                        title: "Save Changes?",
-                        message: "Do you want to save changes to \"\(document.name)\" before closing?",
-                        confirmButton: "Save",
-                        cancelButton: "Don't Save"
-                    )
-                    if shouldSave {
-                        documentManager.saveDocument(id: document.id)
-                    }
-                }
                 NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
                 withAnimation(.easeInOut(duration: 0.2)) {
                     documentManager.closeDocument(document)

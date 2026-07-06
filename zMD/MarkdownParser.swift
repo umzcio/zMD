@@ -71,51 +71,12 @@ class MarkdownParser {
             }
         }
 
-        var textContent: String {
-            switch self {
-            case .heading1(let text), .heading2(let text), .heading3(let text),
-                 .heading4(let text), .heading5(let text), .heading6(let text),
-                 .paragraph(let text), .blockquote(let text):
-                return text
-            case .frontmatter(let lines):
-                return lines.joined(separator: "\n")
-            case .list(let items):
-                return items.map(\.text).joined(separator: "\n")
-            case .codeBlock(let code, _):
-                return code
-            case .mermaidBlock(let code):
-                return code
-            case .displayMath(let latex):
-                return latex
-            case .table(let rows):
-                return rows.flatMap { $0 }.joined(separator: " ")
-            case .image(let alt, _):
-                return alt
-            case .horizontalRule:
-                return ""
-            case .htmlBlock(let html):
-                return html
-            }
-        }
-
         var isHeading: Bool {
             switch self {
             case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
                 return true
             default:
                 return false
-            }
-        }
-
-        var headingLevel: Int? {
-            switch self {
-            case .heading1: return 1
-            case .heading2: return 2
-            case .heading3: return 3
-            case .heading4: return 4
-            case .heading5: return 5
-            case .heading6: return 6
-            default: return nil
             }
         }
     }
@@ -184,7 +145,7 @@ class MarkdownParser {
                 && !isHTMLLine(line)
                 && trimmedLine != "$$"
                 && !(trimmedLine.hasPrefix("$$") && trimmedLine.hasSuffix("$$") && trimmedLine.count > 4)
-                && line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) == nil
+                && trimmedLine.range(of: #"^!\[([^\]]*)\]\(([^\)]+)\)$"#, options: .regularExpression) == nil
             if !isPlainText && !paragraphLines.isEmpty {
                 elements.append(.paragraph(paragraphLines.joined(separator: " ")))
                 paragraphLines = []
@@ -325,8 +286,8 @@ class MarkdownParser {
                 }
             }
             // Image
-            else if let imageMatch = line.range(of: #"!\[([^\]]*)\]\(([^\)]+)\)"#, options: .regularExpression) {
-                let matchedString = String(line[imageMatch])
+            else if let imageMatch = trimmedLine.range(of: #"^!\[([^\]]*)\]\(([^\)]+)\)$"#, options: .regularExpression) {
+                let matchedString = String(trimmedLine[imageMatch])
                 if let altRange = matchedString.range(of: #"\[([^\]]*)\]"#, options: .regularExpression),
                    let pathRange = matchedString.range(of: #"\(([^\)]+)\)"#, options: .regularExpression) {
                     let alt = String(matchedString[altRange]).dropFirst().dropLast()
@@ -759,42 +720,18 @@ class MarkdownParser {
         case .blockquote(let text):
             return "<blockquote>\(formatInlineHTML(text))</blockquote>\n"
         case .htmlBlock(let html):
-            // C2: htmlBlock content is user-controlled markdown — when re-emitted into an
-            // exported HTML file it would otherwise execute on open. Strip dangerous tags
-            // (script/iframe/object/embed/style/link/meta) and event-handler attributes
-            // before passing through. Conservative allowlist of safe block tags survives.
-            return Self.sanitizeHTMLBlock(html) + "\n"
+            // Raw HTML blocks are user-controlled. Export them as visible text rather than
+            // attempting regex sanitization of browser HTML.
+            return escapeHTML(html) + "\n"
         }
     }
 
-    /// Strip script-like tags and inline event-handler attributes from a user-supplied HTML
-    /// block before emitting in an exported document. Defensive — not a full sanitizer, but
-    /// closes the obvious XSS surface introduced by `<details ontoggle>`, `<a onclick>`,
-    /// `<iframe>`, etc. Used by C2 fix.
-    private static func sanitizeHTMLBlock(_ html: String) -> String {
-        var s = html
-        // Remove tag pairs and self-closing forms for dangerous elements (case-insensitive).
-        let dangerousTags = ["script", "iframe", "object", "embed", "applet", "style", "link", "meta", "form", "base"]
-        for tag in dangerousTags {
-            // Drop <tag ...> ... </tag>  and  <tag .../>  in any case.
-            let pairPattern = "(?is)<\\s*\(tag)\\b[^>]*>.*?<\\s*/\\s*\(tag)\\s*>"
-            s = s.replacingOccurrences(of: pairPattern, with: "", options: .regularExpression)
-            let solo = "(?i)<\\s*/?\\s*\(tag)\\b[^>]*/?\\s*>"
-            s = s.replacingOccurrences(of: solo, with: "", options: .regularExpression)
-        }
-        // Strip on*="..." / on*='...' / on*=value event-handler attributes.
-        s = s.replacingOccurrences(
-            of: #"(?i)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#,
-            with: "",
-            options: .regularExpression
-        )
-        // Neutralize javascript:/vbscript:/data:text URLs in href / src / action / formaction.
-        s = s.replacingOccurrences(
-            of: #"(?i)(href|src|action|formaction)\s*=\s*("|')\s*(javascript:|vbscript:|data:text)[^"']*\2"#,
-            with: "$1=\"#\"",
-            options: .regularExpression
-        )
-        return s
+    private static func escapeHTMLAttribute(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 
     /// C3: Allow only safe URL schemes in markdown link `href`. Anything else is rewritten
@@ -817,7 +754,7 @@ class MarkdownParser {
         // Allow data:image/* but not data:text/html or other arbitrary data: payloads.
         if scheme == "data" {
             let rest = trimmed[trimmed.index(after: colon)...].lowercased()
-            if rest.hasPrefix("image/") { return trimmed }
+            if rest.hasPrefix("image/") && !rest.hasPrefix("image/svg+xml") { return trimmed }
         }
         return "#"
     }
@@ -826,85 +763,30 @@ class MarkdownParser {
 
     /// Format inline markdown (bold, italic, code, links) to HTML
     func formatInlineHTML(_ text: String) -> String {
-        // CommonMark backslash escapes: `\X` where X is one of the escapable chars renders as
-        // literal X. Tokenize them first using BMP Private Use Area codepoints so the bold/
-        // italic/etc. regexes won't see the `*`/`_` etc. as markers, then strip the sentinels
-        // at the end. U+E000..U+F8FF are reserved for private use — never appear in real text.
-        let openSentinel = "\u{E000}"
-        let closeSentinel = "\u{E001}"
-        let brSentinel = "\u{E002}"
-        var result = text.replacingOccurrences(
-            of: #"\\([\\`*_{}\[\]()#+\-.!|~])"#,
-            with: "\(openSentinel)$1\(closeSentinel)",
-            options: .regularExpression
-        )
-        // Preserve `<br>` (case-insensitive, optional self-closing slash) through HTML escape.
-        result = result.replacingOccurrences(
-            of: #"<br\s*/?>"#,
-            with: brSentinel,
-            options: [.regularExpression, .caseInsensitive]
-        )
-        result = escapeHTML(result)
-        result = result.replacingOccurrences(of: brSentinel, with: "<br>")
-
-        // Bold **text** (must come before italic)
-        result = result.replacingOccurrences(
-            of: #"\*\*([^\*]+)\*\*"#,
-            with: "<strong>$1</strong>",
-            options: .regularExpression
-        )
-
-        // Italic *text*
-        result = result.replacingOccurrences(
-            of: #"\*([^\*]+)\*"#,
-            with: "<em>$1</em>",
-            options: .regularExpression
-        )
-
-        // Inline code — try double-backtick first so spans like ``foo`bar`baz`` survive with the
-        // inner backtick intact (L7), then single-backtick handles the common case.
-        result = result.replacingOccurrences(
-            of: #"``([^`]+(?:`[^`]+)*)``"#,
-            with: "<code>$1</code>",
-            options: .regularExpression
-        )
-        result = result.replacingOccurrences(
-            of: #"`([^`]+)`"#,
-            with: "<code>$1</code>",
-            options: .regularExpression
-        )
-
-        // Links [text](url) — C3: allowlist URL scheme so exported HTML can't execute
-        // `javascript:` or render `data:text/html` payloads when opened in a browser.
-        // We use a regex to find matches, then rewrite each one with a sanitized href.
-        if let linkRegex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^\)]+)\)"#) {
-            let ns = result as NSString
-            let matches = linkRegex.matches(in: result, range: NSRange(location: 0, length: ns.length)).reversed()
-            let mutable = NSMutableString(string: result)
-            for m in matches where m.numberOfRanges == 3 {
-                let label = ns.substring(with: m.range(at: 1))
-                let rawHref = ns.substring(with: m.range(at: 2))
-                let safeHref = Self.sanitizeURLScheme(rawHref)
-                let escapedHref = safeHref
-                    .replacingOccurrences(of: "&", with: "&amp;")
-                    .replacingOccurrences(of: "\"", with: "&quot;")
-                mutable.replaceCharacters(in: m.range, with: "<a href=\"\(escapedHref)\">\(label)</a>")
+        InlineMarkdown.tokenize(text).map { token in
+            switch token {
+            case .text(let value):
+                return escapeHTML(value)
+            case .lineBreak:
+                return "<br>"
+            case .code(let value):
+                return "<code>\(escapeHTML(value))</code>"
+            case .math(let value):
+                return "$\(escapeHTML(value))$"
+            case .strong(let value):
+                return "<strong>\(formatInlineHTML(value))</strong>"
+            case .emphasis(let value):
+                return "<em>\(formatInlineHTML(value))</em>"
+            case .strikethrough(let value):
+                return "<del>\(formatInlineHTML(value))</del>"
+            case .image(let alt, let source):
+                let safeSource = Self.sanitizeURLScheme(source)
+                return "<img src=\"\(Self.escapeHTMLAttribute(safeSource))\" alt=\"\(Self.escapeHTMLAttribute(alt))\">"
+            case .link(let label, let destination):
+                let safeDestination = Self.sanitizeURLScheme(destination)
+                return "<a href=\"\(Self.escapeHTMLAttribute(safeDestination))\">\(formatInlineHTML(label))</a>"
             }
-            result = mutable as String
-        }
-
-        // Strikethrough ~~text~~
-        result = result.replacingOccurrences(
-            of: #"~~([^~]+)~~"#,
-            with: "<del>$1</del>",
-            options: .regularExpression
-        )
-
-        // Strip backslash-escape sentinels — leaves the literal char that was escaped.
-        result = result.replacingOccurrences(of: openSentinel, with: "")
-        result = result.replacingOccurrences(of: closeSentinel, with: "")
-
-        return result
+        }.joined()
     }
 
     /// Escape HTML special characters
@@ -1035,7 +917,7 @@ class MarkdownParser {
                 if level > 0 && level <= 6 {
                     let headingBody = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
                     // Heading must have whitespace between # chars and body (CommonMark requirement).
-                    if !headingBody.isEmpty && (trimmed.dropFirst(level).first == " " || trimmed.count == level) {
+                    if !headingBody.isEmpty && trimmed.dropFirst(level).first == " " {
                         let baseSlug = Self.slugify(headingBody)
                         let count = (slugCounts[baseSlug] ?? 0) + 1
                         slugCounts[baseSlug] = count

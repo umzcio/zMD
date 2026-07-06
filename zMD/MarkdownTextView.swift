@@ -9,7 +9,6 @@ struct MarkdownTextView: NSViewRepresentable {
     @Binding var scrollToHeadingId: String?
     let searchText: String
     let currentMatchIndex: Int
-    let searchMatches: [SearchMatch]
     let fontStyle: SettingsManager.FontStyle
     let zoomLevel: CGFloat
     let initialScrollPosition: CGFloat
@@ -23,14 +22,13 @@ struct MarkdownTextView: NSViewRepresentable {
     let isRegexSearch: Bool
     let isCaseSensitive: Bool
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, searchMatches: [SearchMatch], fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
         self._scrollToHeadingId = scrollToHeadingId
         self.searchText = searchText
         self.currentMatchIndex = currentMatchIndex
-        self.searchMatches = searchMatches
         self.fontStyle = fontStyle
         self.zoomLevel = zoomLevel
         self.initialScrollPosition = initialScrollPosition
@@ -237,6 +235,8 @@ struct MarkdownTextView: NSViewRepresentable {
             cache.totalCostLimit = Cache.imageByteLimit
             return cache
         }()
+        static var remoteImageInFlight: Set<String> = []
+        static var remoteImageFailures: Set<String> = []
         // Diagram/math cache — uses the diagram-specific limits, which are much higher than
         // the image limits because math images are tiny but appear in large numbers in
         // technical docs (~300+ inline spans is common). Old shared image limit (100) thrashed.
@@ -284,9 +284,14 @@ struct MarkdownTextView: NSViewRepresentable {
             })
             scrollView.reflectScrolledClipView(scrollView.contentView)
 
-            // Briefly highlight the heading
+            // Briefly highlight the heading. The text storage can be rebuilt while the delayed
+            // clear is pending, so validate the captured range before touching the selection.
+            let storageLength = textView.textStorage?.length ?? textView.string.utf16.count
+            guard NSMaxRange(range) <= storageLength else { return }
             textView.setSelectedRange(range)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let currentLength = textView.textStorage?.length ?? textView.string.utf16.count
+                guard range.location <= currentLength else { return }
                 textView.setSelectedRange(NSRange(location: range.location, length: 0))
             }
         }
@@ -862,7 +867,7 @@ struct MarkdownTextView: NSViewRepresentable {
             ]))
 
             // Add highlighted code line
-            let highlightedLine = SyntaxHighlighter.shared.highlight(code: line, language: language)
+            let highlightedLine = SyntaxHighlighter.shared.highlight(code: line, language: language, fontSize: 13 * zoomLevel)
             let mutableLine = NSMutableAttributedString(attributedString: highlightedLine)
 
             // Add background to the line
@@ -914,7 +919,8 @@ struct MarkdownTextView: NSViewRepresentable {
             .paragraphStyle: paragraphStyle
         ]
 
-        result.append(NSAttributedString(string: text + "\n", attributes: attributes))
+        result.append(formatInlineMarkdown(text, attributes: attributes))
+        result.append(NSAttributedString(string: "\n", attributes: attributes))
     }
 
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {
@@ -1036,8 +1042,9 @@ struct MarkdownTextView: NSViewRepresentable {
             let scale = min(1.0, maxWidth / image.size.width)
             let newSize = NSSize(width: image.size.width * scale, height: image.size.height * scale)
 
-            image.size = newSize
-            attachment.image = image
+            let displayImage = (image.copy() as? NSImage) ?? image
+            displayImage.size = newSize
+            attachment.image = displayImage
 
             let imageString = NSAttributedString(attachment: attachment)
             result.append(NSAttributedString(string: "\n"))
@@ -1069,13 +1076,25 @@ struct MarkdownTextView: NSViewRepresentable {
         // Posts .diagramRendered when the image lands so the preview rebuilds and the placeholder
         // text gets replaced with the actual image. (Piggybacks on the existing diagram refresh hook.)
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
-            if let url = URL(string: path) {
-                DispatchQueue.global(qos: .userInitiated).async {
-                    guard let image = NSImage(contentsOf: url) else { return }
-                    DispatchQueue.main.async {
-                        Coordinator.imageCache.setObject(image, forKey: cacheKey as NSString)
-                        NotificationCenter.default.post(name: .diagramRendered, object: nil)
+            guard !Coordinator.remoteImageFailures.contains(cacheKey),
+                  !Coordinator.remoteImageInFlight.contains(cacheKey),
+                  let url = URL(string: path) else {
+                return nil
+            }
+
+            Coordinator.remoteImageInFlight.insert(cacheKey)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let image = NSImage(contentsOf: url)
+                DispatchQueue.main.async {
+                    Coordinator.remoteImageInFlight.remove(cacheKey)
+                    guard let image = image else {
+                        Coordinator.remoteImageFailures.insert(cacheKey)
+                        return
                     }
+                    
+                    Coordinator.remoteImageFailures.remove(cacheKey)
+                    Coordinator.imageCache.setObject(image, forKey: cacheKey as NSString)
+                    NotificationCenter.default.post(name: .diagramRendered, object: nil)
                 }
             }
             return nil
@@ -1266,63 +1285,67 @@ struct MarkdownTextView: NSViewRepresentable {
     /// Cleared at the end of formatInlineMarkdown so it never leaks to the storage.
     private static let codeSpanSentinel = NSAttributedString.Key("zMD.codeSpanSentinel")
 
-    private func formatInlineMarkdown(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        // CommonMark backslash escapes + <br>. Sentinel-out before regex passes so escaped
-        // markers (\* \_ etc.) don't trigger bold/italic, and <br> becomes a real newline in
-        // the rendered NSAttributedString instead of literal "<br>" text.
-        var processed = text.replacingOccurrences(
-            of: #"<br\s*/?>"#,
-            with: "\n",
-            options: [.regularExpression, .caseInsensitive]
-        )
-        let openSentinel = "\u{E000}"
-        let closeSentinel = "\u{E001}"
-        processed = processed.replacingOccurrences(
-            of: #"\\([\\`*_{}\[\]()#+\-.!|~])"#,
-            with: "\(openSentinel)$1\(closeSentinel)",
-            options: .regularExpression
-        )
-        let result = NSMutableAttributedString(string: processed, attributes: attributes)
+    private func formatInlineMarkdown(_ text: String, attributes: [NSAttributedString.Key: Any], stripCodeSpanSentinel: Bool = true) -> NSAttributedString {
+        let result = NSMutableAttributedString()
         let baseFont = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 16)
 
-        // Inline code FIRST. It's atomic in CommonMark — `*x*` inside a code span must remain
-        // literal asterisks. Tag the resulting content with codeSpanSentinel so downstream passes
-        // skip those ranges (H5). Try double-backtick first so `` `foo` `` content (with literal
-        // backticks inside) renders correctly; then single-backtick handles the common case (L7).
-        applyPattern(#"``([^`]+(?:`[^`]+)*)``"#, to: result, attributes: [
-            Self.codeSpanSentinel: true,
-            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
-            .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
-        ])
-        applyPattern(#"`([^`]+?)`"#, to: result, attributes: [
-            Self.codeSpanSentinel: true,
-            .font: NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular),
-            .backgroundColor: NSColor.separatorColor.withAlphaComponent(0.15)
-        ])
+        for token in InlineMarkdown.tokenize(text) {
+            var tokenAttributes = attributes
+            switch token {
+            case .text(let text):
+                result.append(NSAttributedString(string: text, attributes: tokenAttributes))
+            case .lineBreak:
+                result.append(NSAttributedString(string: "\n", attributes: tokenAttributes))
+            case .code(let text):
+                tokenAttributes[Self.codeSpanSentinel] = true
+                tokenAttributes[.font] = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize - 1, weight: .regular)
+                tokenAttributes[.backgroundColor] = NSColor.separatorColor.withAlphaComponent(0.15)
+                result.append(NSAttributedString(string: text, attributes: tokenAttributes))
+            case .math(let text):
+                result.append(NSAttributedString(string: "$\(text)$", attributes: tokenAttributes))
+            case .strong(let text):
+                tokenAttributes[.font] = baseFont.withWeight(.bold)
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes, stripCodeSpanSentinel: false))
+            case .emphasis(let text):
+                tokenAttributes[.font] = baseFont.withTraits(.italic)
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes, stripCodeSpanSentinel: false))
+            case .strikethrough(let text):
+                tokenAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes, stripCodeSpanSentinel: false))
+            case .image(let alt, let source):
+                if let image = loadImage(path: source) {
+                    let attachment = NSTextAttachment()
+                    let maxHeight = baseFont.pointSize * 2.2
+                    let scale = image.size.height > 0 ? min(1.0, maxHeight / image.size.height) : 1.0
+                    let displaySize = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+                    let displayImage = (image.copy() as? NSImage) ?? image
+                    displayImage.size = displaySize
+                    attachment.image = displayImage
+                    attachment.bounds = CGRect(x: 0, y: -4, width: displaySize.width, height: displaySize.height)
+                    let replacement = NSMutableAttributedString(attachment: attachment)
+                    replacement.addAttributes(tokenAttributes, range: NSRange(location: 0, length: replacement.length))
+                    result.append(replacement)
+                } else {
+                    let label = "[Image: \(alt.isEmpty ? source : alt)]"
+                    result.append(NSAttributedString(string: label, attributes: tokenAttributes))
+                }
+            case .link(let label, let destination):
+                tokenAttributes[.link] = URL(string: destination)
+                tokenAttributes[.foregroundColor] = NSColor.linkColor
+                tokenAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                result.append(formatInlineMarkdown(label, attributes: tokenAttributes, stripCodeSpanSentinel: false))
+            }
+        }
 
         // Inline math $...$ — moved up to run BEFORE bold/italic/strike (M3) so a math span like
         // `$a^{**}$` doesn't get its `**` consumed by the bold pass.
         applyInlineMathPattern(to: result)
 
-        // Bold **text**
-        applyPattern(#"\*\*(.+?)\*\*"#, to: result, attributes: [.font: baseFont.withWeight(.bold)], skipCodeSpans: true)
-
-        // Italic *text*
-        applyPattern(#"\*(.+?)\*"#, to: result, attributes: [.font: baseFont.withTraits(.italic)], skipCodeSpans: true)
-
-        // Strikethrough ~~text~~
-        applyPattern(#"~~(.+?)~~"#, to: result, attributes: [.strikethroughStyle: NSUnderlineStyle.single.rawValue], skipCodeSpans: true)
-
-        // Links [text](url)
-        applyLinkPattern(to: result)
-
         // Strip the sentinel before returning so it doesn't ride along into NSTextStorage.
-        let fullRange = NSRange(location: 0, length: result.length)
-        result.removeAttribute(Self.codeSpanSentinel, range: fullRange)
-
-        // Strip backslash-escape sentinels — leaves the literal escaped char.
-        result.mutableString.replaceOccurrences(of: openSentinel, with: "", options: [], range: NSRange(location: 0, length: result.length))
-        result.mutableString.replaceOccurrences(of: closeSentinel, with: "", options: [], range: NSRange(location: 0, length: result.length))
+        if stripCodeSpanSentinel {
+            let fullRange = NSRange(location: 0, length: result.length)
+            result.removeAttribute(Self.codeSpanSentinel, range: fullRange)
+        }
 
         return result
     }
@@ -1336,42 +1359,6 @@ struct MarkdownTextView: NSViewRepresentable {
         return regex
     }
 
-    private func applyPattern(_ pattern: String, to result: NSMutableAttributedString, attributes: [NSAttributedString.Key: Any], skipCodeSpans: Bool = false) {
-        guard let regex = Self.cachedRegex(pattern) else { return }
-        let string = result.string as NSString
-
-        // L8: matches are computed once over the original string and iterated in reverse so
-        // index-shifting from earlier replacements doesn't invalidate later ranges. Side effect:
-        // we don't re-tokenize after each mutation, so a replacement that creates new pairs
-        // (e.g., `**a*` followed by `*b**` joined into `**a*` + `*b**` → `**a**b**` post-replace)
-        // would not be re-matched. This is acceptable: the input must be CommonMark-correct, and
-        // emitting paired markers from a non-paired input is a pathological case.
-        let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()
-
-        for match in matches {
-            guard match.numberOfRanges >= 2 else { continue }
-            let fullRange = match.range(at: 0)
-            let contentRange = match.range(at: 1)
-
-            // H5: skip matches that overlap a previously-marked code span.
-            if skipCodeSpans && rangeIntersectsCodeSpan(fullRange, in: result) { continue }
-
-            // Get the content text
-            let content = string.substring(with: contentRange)
-
-            // Get existing attributes and merge. Do NOT inherit codeSpanSentinel from the
-            // surrounding text — we'd be tagging non-code as code.
-            var newAttributes = result.attributes(at: contentRange.location, effectiveRange: nil)
-            newAttributes.removeValue(forKey: Self.codeSpanSentinel)
-            for (key, value) in attributes {
-                newAttributes[key] = value
-            }
-
-            // Replace the full match with just the content, applying new attributes
-            result.replaceCharacters(in: fullRange, with: NSAttributedString(string: content, attributes: newAttributes))
-        }
-    }
-
     private func rangeIntersectsCodeSpan(_ range: NSRange, in attributed: NSAttributedString) -> Bool {
         guard range.location + range.length <= attributed.length else { return false }
         var found = false
@@ -1382,31 +1369,6 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
         return found
-    }
-
-    private func applyLinkPattern(to result: NSMutableAttributedString) {
-        let pattern = #"\[(.+?)\]\((.+?)\)"#
-        guard let regex = Self.cachedRegex(pattern) else { return }
-        let string = result.string as NSString
-
-        let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: string.length)).reversed()
-
-        for match in matches {
-            guard match.numberOfRanges >= 3 else { continue }
-            let fullRange = match.range(at: 0)
-            let textRange = match.range(at: 1)
-            let urlRange = match.range(at: 2)
-
-            let text = string.substring(with: textRange)
-            let url = string.substring(with: urlRange)
-
-            var attributes = result.attributes(at: textRange.location, effectiveRange: nil)
-            attributes[.link] = URL(string: url)
-            attributes[.foregroundColor] = NSColor.linkColor
-            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-
-            result.replaceCharacters(in: fullRange, with: NSAttributedString(string: text, attributes: attributes))
-        }
     }
 
     private func applyInlineMathPattern(to result: NSMutableAttributedString) {
@@ -1426,6 +1388,8 @@ struct MarkdownTextView: NSViewRepresentable {
         for match in matches {
             guard match.numberOfRanges >= 2 else { continue }
             let fullRange = match.range(at: 0)
+            if rangeIntersectsCodeSpan(fullRange, in: result) { continue }
+
             let contentRange = match.range(at: 1)
             let latex = string.substring(with: contentRange)
             let cacheKey = "math-inline-" + latex
@@ -1472,16 +1436,7 @@ struct MarkdownTextView: NSViewRepresentable {
         }
     }
 
-    // MARK: - Search Highlighting
-
     // MARK: - Helpers
-
-    private func defaultParagraphStyle() -> NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = 4
-        style.paragraphSpacing = 8
-        return style
-    }
 
 }
 

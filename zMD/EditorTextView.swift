@@ -33,7 +33,6 @@ class EditorTextView: NSTextView {
     // MARK: - Autocomplete
 
     let autocomplete = AutocompleteWindowController()
-    var htmlPrefixStart: Int?
 
     // MARK: - Auto-close pairs
 
@@ -83,7 +82,6 @@ class EditorTextView: NSTextView {
     /// stale screen point until the user clicked inside the editor again.
     override func resignFirstResponder() -> Bool {
         autocomplete.dismiss()
-        htmlPrefixStart = nil
         return super.resignFirstResponder()
     }
 
@@ -253,7 +251,6 @@ class EditorTextView: NSTextView {
         // Dismiss autocomplete on click
         if autocomplete.isVisible {
             autocomplete.dismiss()
-            htmlPrefixStart = nil
         }
 
         // Normal click: clear multi-cursors
@@ -481,13 +478,7 @@ class EditorTextView: NSTextView {
 
     override func deleteBackward(_ sender: Any?) {
         // Update autocomplete state on delete
-        if let start = htmlPrefixStart {
-            let cursorPos = selectedRange().location
-            if cursorPos <= start + 1 {
-                htmlPrefixStart = nil
-                autocomplete.dismiss()
-            }
-        } else if autocomplete.isVisible {
+        if autocomplete.isVisible {
             autocomplete.dismiss()
         }
 
@@ -909,27 +900,41 @@ class EditorTextView: NSTextView {
         let insertedLen = (text as NSString).length
         var mapping: [(original: NSRange, newLocation: Int)] = []
         var newPrimaryLocation = primary.location
+        var appliedEdits: [(original: NSRange, editRange: NSRange, delta: Int, isPrimary: Bool)] = []
 
         textStorage.beginEditing()
         undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Multi-Cursor Insert")
 
-        // Because we iterate descending, each edit's own new location depends only on its range's
-        // location and the insertedLen (not on later edits that sit at higher positions).
         for entry in allRanges {
             if shouldChangeText(in: entry.range, replacementString: text) {
                 replaceCharacters(in: entry.range, with: text)
-                let newLoc = entry.range.location + insertedLen
-                if entry.isPrimary {
-                    newPrimaryLocation = newLoc
-                } else {
-                    mapping.append((original: entry.range, newLocation: newLoc))
-                }
+                appliedEdits.append((
+                    original: entry.range,
+                    editRange: entry.range,
+                    delta: insertedLen - entry.range.length,
+                    isPrimary: entry.isPrimary
+                ))
             }
         }
 
         undoManager?.endUndoGrouping()
         textStorage.endEditing()
+
+        for edit in appliedEdits {
+            let lowerShift = appliedEdits.reduce(0) { partial, other in
+                guard other.original.location != edit.original.location || other.original.length != edit.original.length else {
+                    return partial
+                }
+                return other.editRange.location < edit.original.location ? partial + other.delta : partial
+            }
+            let newLoc = edit.original.location + lowerShift + insertedLen
+            if edit.isPrimary {
+                newPrimaryLocation = newLoc
+            } else {
+                mapping.append((original: edit.original, newLocation: newLoc))
+            }
+        }
 
         multiCursorController.updatePositions(mapping)
         setSelectedRange(NSRange(location: newPrimaryLocation, length: 0))
@@ -946,6 +951,7 @@ class EditorTextView: NSTextView {
 
         var mapping: [(original: NSRange, newLocation: Int)] = []
         var newPrimaryLocation = primary.location
+        var appliedEdits: [(original: NSRange, editRange: NSRange, delta: Int, baseLocation: Int, isPrimary: Bool)] = []
 
         textStorage.beginEditing()
         undoManager?.beginUndoGrouping()
@@ -968,17 +974,33 @@ class EditorTextView: NSTextView {
             }
             if shouldChangeText(in: deleteRange, replacementString: "") {
                 replaceCharacters(in: deleteRange, with: "")
-                let newLoc = deleteRange.location
-                if entry.isPrimary {
-                    newPrimaryLocation = newLoc
-                } else {
-                    mapping.append((original: entry.range, newLocation: newLoc))
-                }
+                appliedEdits.append((
+                    original: entry.range,
+                    editRange: deleteRange,
+                    delta: -deleteRange.length,
+                    baseLocation: deleteRange.location,
+                    isPrimary: entry.isPrimary
+                ))
             }
         }
 
         undoManager?.endUndoGrouping()
         textStorage.endEditing()
+
+        for edit in appliedEdits {
+            let lowerShift = appliedEdits.reduce(0) { partial, other in
+                guard other.original.location != edit.original.location || other.original.length != edit.original.length else {
+                    return partial
+                }
+                return other.editRange.location < edit.baseLocation ? partial + other.delta : partial
+            }
+            let newLoc = edit.baseLocation + lowerShift
+            if edit.isPrimary {
+                newPrimaryLocation = newLoc
+            } else {
+                mapping.append((original: edit.original, newLocation: newLoc))
+            }
+        }
 
         multiCursorController.updatePositions(mapping)
         setSelectedRange(NSRange(location: newPrimaryLocation, length: 0))

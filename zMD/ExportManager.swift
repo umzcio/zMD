@@ -6,8 +6,15 @@ class ExportManager {
     static let shared = ExportManager()
     private let parser = MarkdownParser.shared
     private let alertManager = AlertManager.shared
+    private let docxExportQueue = DispatchQueue(label: "zMD.docxExport", qos: .userInitiated)
 
     private init() {}
+
+    private func exportFileName(_ fileName: String, extension newExtension: String) -> String {
+        let baseName = (fileName as NSString).deletingPathExtension
+        let stem = baseName.isEmpty ? fileName : baseName
+        return "\(stem).\(newExtension)"
+    }
 
     /// Strip `$..$` and `$$..$$` math from the SOURCE MARKDOWN before HTML conversion, replacing
     /// each with a safe placeholder. Returns the modified markdown + an ordered list of math
@@ -19,62 +26,156 @@ class ExportManager {
     /// spans. A math span like `$*p < .05. **p < .01. ***p < .001.$` ends up with `<em>` and
     /// `<strong>` tags woven through the LaTeX, which KaTeX then can't parse. Pre-extracting
     /// at the markdown layer keeps the LaTeX pristine.
-    private func extractMathFromMarkdown(_ markdown: String) -> (modified: String, math: [(latex: String, display: Bool)]) {
+    struct MathExtraction {
+        let modified: String
+        let math: [(latex: String, display: Bool)]
+        let placeholderPrefix: String
+
+        func placeholder(at index: Int) -> String {
+            "\(placeholderPrefix)\(index)ZMDEND"
+        }
+    }
+
+    func extractMathFromMarkdown(_ markdown: String) -> MathExtraction {
         var math: [(latex: String, display: Bool)] = []
+        let placeholderPrefix = Self.mathPlaceholderPrefix(avoiding: markdown)
 
         // Display math first ($$..$$, may span newlines)
         var modified = markdown
+        var protectedRanges = protectedMarkdownRanges(in: modified)
         if let displayRegex = try? NSRegularExpression(pattern: #"\$\$([\s\S]+?)\$\$"#) {
             let ns = modified as NSString
             let matches = displayRegex.matches(in: modified, range: NSRange(location: 0, length: ns.length)).reversed()
             let mutable = NSMutableString(string: modified)
             for m in matches {
+                if rangeIntersects(m.range, protectedRanges) { continue }
                 let latex = ns.substring(with: m.range(at: 1))
-                let placeholder = "ZMDMATHPH\(math.count)ZMDEND"
+                let placeholder = "\(placeholderPrefix)\(math.count)ZMDEND"
                 math.append((latex, true))
                 mutable.replaceCharacters(in: m.range, with: placeholder)
             }
             modified = mutable as String
         }
         // Inline math — shared canonical pattern (C7).
+        protectedRanges = protectedMarkdownRanges(in: modified)
         if let inlineRegex = try? NSRegularExpression(pattern: MarkdownParser.inlineMathPattern) {
             let ns = modified as NSString
             let matches = inlineRegex.matches(in: modified, range: NSRange(location: 0, length: ns.length)).reversed()
             let mutable = NSMutableString(string: modified)
             for m in matches {
+                if rangeIntersects(m.range, protectedRanges) { continue }
                 let latex = ns.substring(with: m.range(at: 1))
-                let placeholder = "ZMDMATHPH\(math.count)ZMDEND"
+                let placeholder = "\(placeholderPrefix)\(math.count)ZMDEND"
                 math.append((latex, false))
                 mutable.replaceCharacters(in: m.range, with: placeholder)
             }
             modified = mutable as String
         }
-        return (modified, math)
+        return MathExtraction(modified: modified, math: math, placeholderPrefix: placeholderPrefix)
+    }
+
+    private static func mathPlaceholderPrefix(avoiding source: String) -> String {
+        var prefix: String
+        repeat {
+            let token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            prefix = "ZMDMATHPH_\(token)_"
+        } while source.contains(prefix)
+        return prefix
+    }
+
+    private func protectedMarkdownRanges(in markdown: String) -> [NSRange] {
+        let ns = markdown as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        var ranges: [NSRange] = []
+        var inFence = false
+        var fenceStart = 0
+        var fenceMarker = ""
+
+        ns.enumerateSubstrings(in: fullRange, options: [.byLines, .substringNotRequired]) { _, lineRange, enclosingRange, _ in
+            let line = ns.substring(with: lineRange)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !inFence {
+                if let marker = Self.openingFenceMarker(in: trimmed) {
+                    inFence = true
+                    fenceStart = enclosingRange.location
+                    fenceMarker = marker
+                }
+            } else if Self.isClosingFence(trimmed, for: fenceMarker) {
+                ranges.append(NSRange(location: fenceStart, length: NSMaxRange(enclosingRange) - fenceStart))
+                inFence = false
+                fenceMarker = ""
+            }
+        }
+
+        if inFence {
+            ranges.append(NSRange(location: fenceStart, length: ns.length - fenceStart))
+        }
+
+        let fencedRanges = ranges
+        for pattern in [#"``([^`]+(?:`[^`]+)*)``"#, #"`[^`\n]+`"#] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for match in regex.matches(in: markdown, range: fullRange) where !rangeIntersects(match.range, fencedRanges) {
+                ranges.append(match.range)
+            }
+        }
+
+        return ranges
+    }
+
+    private static func openingFenceMarker(in trimmedLine: String) -> String? {
+        guard let first = trimmedLine.first, first == "`" || first == "~" else { return nil }
+        let marker = String(trimmedLine.prefix { $0 == first })
+        return marker.count >= 3 ? marker : nil
+    }
+
+    private static func isClosingFence(_ trimmedLine: String, for openingMarker: String) -> Bool {
+        guard let markerCharacter = openingMarker.first else { return false }
+        let closingMarker = String(trimmedLine.prefix { $0 == markerCharacter })
+        guard closingMarker.count >= openingMarker.count else { return false }
+        let remainder = trimmedLine.dropFirst(closingMarker.count)
+        return remainder.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func rangeIntersects(_ range: NSRange, _ ranges: [NSRange]) -> Bool {
+        ranges.contains { NSIntersectionRange(range, $0).length > 0 }
     }
 
     /// Render each math expression to a base64 PNG `<img>` and substitute into the HTML where
     /// the matching `ZMDMATHPHnZMDEND` placeholder appears. Forces light-theme glyphs so they
     /// stay readable on the white PDF/RTF page.
-    private func substituteMathPlaceholdersInHTML(_ html: String, math: [(latex: String, display: Bool)]) -> String {
-        guard !math.isEmpty else { return html }
+    private func substituteMathPlaceholdersInHTML(_ html: String, extraction: MathExtraction) -> String {
+        guard !extraction.math.isEmpty else { return html }
 
-        var renderedImages: [Int: NSImage] = [:]
-        let semaphore = DispatchSemaphore(value: 0)
-        for (i, hit) in math.enumerated() {
+        var renderedImages = Array<NSImage?>(repeating: nil, count: extraction.math.count)
+        let renderedImagesLock = NSLock()
+        let group = DispatchGroup()
+        var acceptingResults = true
+
+        for (i, hit) in extraction.math.enumerated() {
+            group.enter()
             DispatchQueue.main.async {
                 WebRenderer.shared.renderMath(hit.latex, displayMode: hit.display, forceLightTheme: true) { image in
-                    renderedImages[i] = image
-                    semaphore.signal()
+                    renderedImagesLock.lock()
+                    if acceptingResults {
+                        renderedImages[i] = image
+                    }
+                    renderedImagesLock.unlock()
+                    group.leave()
                 }
             }
-            _ = semaphore.wait(timeout: .now() + 5)
         }
 
+        _ = group.wait(timeout: .now() + 5)
+        renderedImagesLock.lock()
+        acceptingResults = false
+        let renderedImagesSnapshot = renderedImages
+        renderedImagesLock.unlock()
+
         var result = html
-        for (i, hit) in math.enumerated() {
-            let placeholder = "ZMDMATHPH\(i)ZMDEND"
+        for (i, hit) in extraction.math.enumerated() {
+            let placeholder = extraction.placeholder(at: i)
             let replacement: String = {
-                guard let img = renderedImages[i] else { return parser.escapeHTML(hit.latex) }
+                guard let img = renderedImagesSnapshot[i] else { return parser.escapeHTML(hit.latex) }
                 let targetHeight: CGFloat = hit.display ? 22 : 14
                 let aspect = img.size.height > 0 ? img.size.width / img.size.height : 1
                 let targetWidth = targetHeight * aspect
@@ -162,7 +263,7 @@ class ExportManager {
     func exportToPDF(content: String, fileName: String, baseURL: URL? = nil) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.pdf]
-        savePanel.nameFieldStringValue = fileName.replacingOccurrences(of: ".md", with: ".pdf")
+        savePanel.nameFieldStringValue = exportFileName(fileName, extension: "pdf")
         savePanel.title = "Export as PDF"
 
         savePanel.begin { response in
@@ -174,10 +275,10 @@ class ExportManager {
             DispatchQueue.global(qos: .userInitiated).async {
                 // Extract math from MARKDOWN before HTML conversion so the inline-formatting
                 // pass doesn't weave <em>/<strong> into LaTeX containing `*` characters.
-                let (preprocessed, math) = self.extractMathFromMarkdown(content)
-                var html = self.parser.toHTML(preprocessed, includeStyles: true)
+                let extraction = self.extractMathFromMarkdown(content)
+                var html = self.parser.toHTML(extraction.modified, includeStyles: true)
                 html = self.absolutizeImageSrcs(html, baseURL: baseURL)
-                html = self.substituteMathPlaceholdersInHTML(html, math: math)
+                html = self.substituteMathPlaceholdersInHTML(html, extraction: extraction)
                 html = self.stripNetworkResourcesForAttributedString(html)
 
                 DispatchQueue.main.async {
@@ -229,7 +330,9 @@ class ExportManager {
                     }
 
                     let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
+                    let previousContext = NSGraphicsContext.current
                     NSGraphicsContext.current = nsContext
+                    defer { NSGraphicsContext.current = previousContext }
 
                     // Calculate total height needed
                     let layoutManager = NSLayoutManager()
@@ -240,7 +343,7 @@ class ExportManager {
                     textStorage.addLayoutManager(layoutManager)
 
                     let glyphRange = layoutManager.glyphRange(for: textContainer)
-                    let usedRect = layoutManager.usedRect(for: textContainer)
+                    _ = layoutManager.usedRect(for: textContainer)
 
                     // Page by glyph range, not by clipping. Walk line fragments to compute the
                     // glyph range that fits on each page, then `drawGlyphs(forGlyphRange:at:)`
@@ -312,28 +415,36 @@ class ExportManager {
     func exportToHTML(content: String, fileName: String, includeStyles: Bool = true) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.html]
-        savePanel.nameFieldStringValue = fileName.replacingOccurrences(of: ".md", with: ".html")
+        savePanel.nameFieldStringValue = exportFileName(fileName, extension: "html")
         savePanel.title = includeStyles ? "Export as HTML" : "Export as HTML (without styles)"
 
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
 
-            let html = self.parser.toHTML(content, includeStyles: includeStyles)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let extraction = self.extractMathFromMarkdown(content)
+                var html = self.parser.toHTML(extraction.modified, includeStyles: includeStyles)
+                html = self.substituteMathPlaceholdersInHTML(html, extraction: extraction)
 
-            do {
-                try html.write(to: url, atomically: true, encoding: .utf8)
-                ToastManager.shared.show("Exported as HTML", style: .success)
-            } catch {
-                self.alertManager.showExportError("HTML", error: error)
+                do {
+                    try html.write(to: url, atomically: true, encoding: .utf8)
+                    DispatchQueue.main.async {
+                        ToastManager.shared.show("Exported as HTML", style: .success)
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.alertManager.showExportError("HTML", error: error)
+                    }
+                }
             }
         }
     }
 
     // MARK: - Word/RTF Export
-    func exportToWord(content: String, fileName: String) {
+    func exportToWord(content: String, fileName: String, baseURL: URL? = nil) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.rtf]
-        savePanel.nameFieldStringValue = fileName.replacingOccurrences(of: ".md", with: ".rtf")
+        savePanel.nameFieldStringValue = exportFileName(fileName, extension: "rtf")
         savePanel.title = "Export as RTF (Word Compatible)"
 
         savePanel.begin { response in
@@ -342,9 +453,10 @@ class ExportManager {
             // Pre-render math on a background queue so the semaphore wait doesn't deadlock
             // with WebRenderer dispatching back to main. Then RTF gen on main.
             DispatchQueue.global(qos: .userInitiated).async {
-                let (preprocessed, math) = self.extractMathFromMarkdown(content)
-                var html = self.parser.toHTML(preprocessed, includeStyles: true)
-                html = self.substituteMathPlaceholdersInHTML(html, math: math)
+                let extraction = self.extractMathFromMarkdown(content)
+                var html = self.parser.toHTML(extraction.modified, includeStyles: true)
+                html = self.absolutizeImageSrcs(html, baseURL: baseURL)
+                html = self.substituteMathPlaceholdersInHTML(html, extraction: extraction)
                 html = self.stripNetworkResourcesForAttributedString(html)
 
                 DispatchQueue.main.async {
@@ -384,18 +496,22 @@ class ExportManager {
     func exportToDOCX(content: String, fileName: String, baseURL: URL? = nil) {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [UTType(filenameExtension: "docx")].compactMap { $0 }
-        savePanel.nameFieldStringValue = fileName.replacingOccurrences(of: ".md", with: ".docx")
+        savePanel.nameFieldStringValue = exportFileName(fileName, extension: "docx")
         savePanel.title = "Export as Word Document (DOCX)"
 
         savePanel.begin { response in
             guard response == .OK, let url = savePanel.url else { return }
 
-            DispatchQueue.main.async {
+            self.docxExportQueue.async {
                 do {
                     try self.createCustomDOCX(content: content, outputURL: url, fileName: fileName, baseURL: baseURL)
-                    ToastManager.shared.show("Exported as Word", style: .success)
+                    DispatchQueue.main.async {
+                        ToastManager.shared.show("Exported as Word", style: .success)
+                    }
                 } catch {
-                    self.alertManager.showExportError("DOCX", error: error)
+                    DispatchQueue.main.async {
+                        self.alertManager.showExportError("DOCX", error: error)
+                    }
                 }
             }
         }
@@ -516,7 +632,7 @@ class ExportManager {
         try documentRels.write(to: wordRelsDir.appendingPathComponent("document.xml.rels"), atomically: true, encoding: .utf8)
 
         // Create word/header1.xml
-        let docTitle = xmlEscape(fileName?.replacingOccurrences(of: ".md", with: "") ?? "Document")
+        let docTitle = xmlEscape(fileName.map { ($0 as NSString).deletingPathExtension } ?? "Document")
         let headerXML = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -608,6 +724,15 @@ class ExportManager {
                         <w:ind w:left="1440" w:hanging="360"/>
                     </w:pPr>
                 </w:lvl>
+                <w:lvl w:ilvl="2">
+                    <w:start w:val="1"/>
+                    <w:numFmt w:val="bullet"/>
+                    <w:lvlText w:val="\u{25AA}"/>
+                    <w:lvlJc w:val="left"/>
+                    <w:pPr>
+                        <w:ind w:left="2160" w:hanging="360"/>
+                    </w:pPr>
+                </w:lvl>
             </w:abstractNum>
             <w:abstractNum w:abstractNumId="1">
                 <w:multiLevelType w:val="hybridMultilevel"/>
@@ -627,6 +752,15 @@ class ExportManager {
                     <w:lvlJc w:val="left"/>
                     <w:pPr>
                         <w:ind w:left="1440" w:hanging="360"/>
+                    </w:pPr>
+                </w:lvl>
+                <w:lvl w:ilvl="2">
+                    <w:start w:val="1"/>
+                    <w:numFmt w:val="lowerRoman"/>
+                    <w:lvlText w:val="%3."/>
+                    <w:lvlJc w:val="left"/>
+                    <w:pPr>
+                        <w:ind w:left="2160" w:hanging="360"/>
                     </w:pPr>
                 </w:lvl>
             </w:abstractNum>
@@ -963,7 +1097,7 @@ class ExportManager {
 
     private func createHeadingParagraph(text: String, level: Int) -> String {
         return """
-        <w:p><w:pPr><w:pStyle w:val="Heading\(level)"/></w:pPr>\(createRunsForFormattedText(formatInlineMarkdownForDOCX(text)))</w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading\(level)"/></w:pPr>\(createRunsForFormattedText(text))</w:p>
         """
     }
 
@@ -987,7 +1121,7 @@ class ExportManager {
 
     private func createBlockquoteParagraph(text: String) -> String {
         return """
-        <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:ind w:left="360"/><w:spacing w:after="120"/></w:pPr><w:r><w:rPr><w:i/><w:color w:val="555555"/></w:rPr><w:t xml:space="preserve">\(xmlEscape(text))</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:ind w:left="360"/><w:spacing w:after="120"/></w:pPr>\(createRunsForFormattedText(text, extraRunProperties: "<w:i/><w:color w:val=\"555555\"/>"))</w:p>
         """
     }
 
@@ -1071,99 +1205,106 @@ class ExportManager {
     }
 
     private func createHeaderCellRun(text: String) -> String {
-        return "<w:r><w:rPr><w:b/><w:bCs/><w:color w:val=\"FFFFFF\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(text))</w:t></w:r>"
+        return createRunsForFormattedText(text, extraRunProperties: "<w:b/><w:bCs/><w:color w:val=\"FFFFFF\"/>")
     }
 
-    private func createRunsForFormattedText(_ text: String) -> String {
-        // Parse inline markdown formatting (bold, italic, code, links)
+    static func safeDOCXHyperlinkURL(_ url: String) -> String? {
+        let safeURL = MarkdownParser.sanitizeURLScheme(url)
+        if safeURL == "#" || safeURL.hasPrefix("#") { return nil }
+        return safeURL
+    }
+
+    private func createRunsForFormattedText(_ text: String, extraRunProperties: String = "", allowLinks: Bool = true) -> String {
         var result = ""
 
-        // Pattern matches: [text](url), **bold**, *italic*, or `code`
-        // We need to handle them in order of appearance
-        let combinedPattern = #"(\[([^\]]+)\]\(([^\)]+)\))|(\*\*([^\*]+)\*\*)|(\*([^\*]+)\*)|(`([^`]+)`)"#
-
-        guard let regex = try? NSRegularExpression(pattern: combinedPattern) else {
-            return createSimpleRun(text: text)
+        let content: String
+        if let taskMarker = taskListMarker(in: text) {
+            result += createSimpleRun(text: taskMarker.checked ? "\u{2611} " : "\u{2610} ", extraRunProperties: extraRunProperties)
+            content = taskMarker.remaining
+        } else {
+            content = text
         }
 
-        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
-
-        if matches.isEmpty {
-            return createSimpleRun(text: text)
-        }
-
-        var lastEnd = text.startIndex
-
-        for match in matches {
-            guard let range = Range(match.range, in: text) else { continue }
-
-            // Add text before this match
-            if lastEnd < range.lowerBound {
-                result += createSimpleRun(text: String(text[lastEnd..<range.lowerBound]))
+        for token in InlineMarkdown.tokenize(content) {
+            switch token {
+            case .text(let text):
+                result += createSimpleRun(text: text, extraRunProperties: extraRunProperties)
+            case .lineBreak:
+                result += createLineBreakRun(extraRunProperties: extraRunProperties)
+            case .code(let text):
+                result += createCodeRun(text: text, extraRunProperties: extraRunProperties)
+            case .math(let text):
+                result += createSimpleRun(text: "$\(text)$", extraRunProperties: extraRunProperties)
+            case .strong(let text):
+                result += createRunsForFormattedText(text, extraRunProperties: extraRunProperties + "<w:b/>", allowLinks: allowLinks)
+            case .emphasis(let text):
+                result += createRunsForFormattedText(text, extraRunProperties: extraRunProperties + "<w:i/>", allowLinks: allowLinks)
+            case .strikethrough(let text):
+                result += createRunsForFormattedText(text, extraRunProperties: extraRunProperties + "<w:strike/>", allowLinks: allowLinks)
+            case .image(let alt, let source):
+                result += createSimpleRun(text: "[Image: \(alt.isEmpty ? source : alt)]", extraRunProperties: extraRunProperties)
+            case .link(let label, let destination):
+                if allowLinks {
+                    result += createLinkRun(text: label, url: destination, extraRunProperties: extraRunProperties)
+                } else {
+                    result += createRunsForFormattedText(label, extraRunProperties: extraRunProperties, allowLinks: false)
+                }
             }
-
-            // Determine match type and add formatted run
-            if let linkTextRange = Range(match.range(at: 2), in: text),
-               let linkURLRange = Range(match.range(at: 3), in: text) {
-                // Link [text](url)
-                result += createLinkRun(text: String(text[linkTextRange]), url: String(text[linkURLRange]))
-            } else if let boldContentRange = Range(match.range(at: 5), in: text) {
-                // Bold **text**
-                result += createBoldRun(text: String(text[boldContentRange]))
-            } else if let italicContentRange = Range(match.range(at: 7), in: text) {
-                // Italic *text*
-                result += createItalicRun(text: String(text[italicContentRange]))
-            } else if let codeContentRange = Range(match.range(at: 9), in: text) {
-                // Code `text`
-                result += createCodeRun(text: String(text[codeContentRange]))
-            }
-
-            lastEnd = range.upperBound
-        }
-
-        // Add remaining text
-        if lastEnd < text.endIndex {
-            result += createSimpleRun(text: String(text[lastEnd...]))
         }
 
         return result
     }
 
-    private func createSimpleRun(text: String) -> String {
+    private func taskListMarker(in text: String) -> (checked: Bool, remaining: String)? {
+        guard let regex = try? NSRegularExpression(pattern: #"^\s*\[([ xX])\]\s+"#),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let markerRange = Range(match.range(at: 1), in: text),
+              let fullRange = Range(match.range(at: 0), in: text) else {
+            return nil
+        }
+        return (String(text[markerRange]).lowercased() == "x", String(text[fullRange.upperBound...]))
+    }
+
+    private func runProperties(_ properties: String) -> String {
+        properties.isEmpty ? "" : "<w:rPr>\(properties)</w:rPr>"
+    }
+
+    private func createSimpleRun(text: String, extraRunProperties: String = "") -> String {
         guard !text.isEmpty else { return "" }
         return """
             <w:r>
+                \(runProperties(extraRunProperties))
                 <w:t xml:space="preserve">\(xmlEscape(text))</w:t>
             </w:r>
         """
     }
 
-    private func createBoldRun(text: String) -> String {
+    private func createLineBreakRun(extraRunProperties: String = "") -> String {
+        return """
+            <w:r>
+                \(runProperties(extraRunProperties))
+                <w:br/>
+            </w:r>
+        """
+    }
+
+    private func createFormattedRun(text: String, properties: String, extraRunProperties: String = "") -> String {
         return """
             <w:r>
                 <w:rPr>
-                    <w:b/>
+                    \(extraRunProperties)
+                    \(properties)
                 </w:rPr>
                 <w:t>\(xmlEscape(text))</w:t>
             </w:r>
         """
     }
 
-    private func createItalicRun(text: String) -> String {
+    private func createCodeRun(text: String, extraRunProperties: String = "") -> String {
         return """
             <w:r>
                 <w:rPr>
-                    <w:i/>
-                </w:rPr>
-                <w:t>\(xmlEscape(text))</w:t>
-            </w:r>
-        """
-    }
-
-    private func createCodeRun(text: String) -> String {
-        return """
-            <w:r>
-                <w:rPr>
+                    \(extraRunProperties)
                     <w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/>
                     <w:shd w:val="clear" w:color="auto" w:fill="F5F5F5"/>
                 </w:rPr>
@@ -1172,38 +1313,24 @@ class ExportManager {
         """
     }
 
-    private func createLinkRun(text: String, url: String) -> String {
+    private func createLinkRun(text: String, url: String, extraRunProperties: String = "") -> String {
+        guard let safeURL = Self.safeDOCXHyperlinkURL(url) else {
+            return createRunsForFormattedText(text, extraRunProperties: extraRunProperties, allowLinks: false)
+        }
+
         // Generate unique relationship ID for this hyperlink
         let rId = "rId\(nextHyperlinkId)"
         nextHyperlinkId += 1
 
         // Track this hyperlink for the relationships file
-        hyperlinkRelationships.append((id: rId, url: url))
+        hyperlinkRelationships.append((id: rId, url: safeURL))
+        let linkRunProperties = extraRunProperties + "<w:color w:val=\"0563C1\"/><w:u w:val=\"single\"/>"
 
         return """
             <w:hyperlink r:id="\(rId)" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-                <w:r>
-                    <w:rPr>
-                        <w:color w:val="0563C1"/>
-                        <w:u w:val="single"/>
-                    </w:rPr>
-                    <w:t>\(xmlEscape(text))</w:t>
-                </w:r>
+                \(createRunsForFormattedText(text, extraRunProperties: linkRunProperties, allowLinks: false))
             </w:hyperlink>
         """
-    }
-
-    private func formatInlineMarkdownForDOCX(_ text: String) -> String {
-        // Strip markdown formatting for headings (will be applied via DOCX styles).
-        // M13: strikethrough handled. L15: bold pattern uses `(?:[^*]|\*(?!\*))+?` to allow
-        // single `*` characters inside the bold span — previously `**foo*bar*baz**` had its
-        // inner `*bar*` eaten by the italic pass after bold matched only `**foo*`.
-        return text
-            .replacingOccurrences(of: #"\*\*((?:[^*]|\*(?!\*))+?)\*\*"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"\*([^\*]+)\*"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"~~([^~]+)~~"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"``([^`]+(?:`[^`]+)*)``"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
     }
 
     private func xmlEscape(_ text: String) -> String {
@@ -1269,4 +1396,3 @@ class ExportManager {
     }
 
 }
-

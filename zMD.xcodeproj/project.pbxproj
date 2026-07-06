@@ -15,6 +15,7 @@
 		F1A2B3C4D5E6F7081 /* AlertManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7080 /* AlertManager.swift */; };
 		F1A2B3C4D5E6F7083 /* FileWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7082 /* FileWatcher.swift */; };
 		F1A2B3C4D5E6F7085 /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7084 /* MarkdownParser.swift */; };
+		E77A00000000000000000101 /* InlineMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A00000000000000000100 /* InlineMarkdown.swift */; };
 		F1A2B3C4D5E6F7087 /* MarkdownTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */; };
 		F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */; };
 		F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F708A /* QuickOpenView.swift */; };
@@ -44,7 +45,18 @@
 		3297275B1BF8697ADFFD1F05 /* MarkdownToolbarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E98BC2A82B061C62DF83B82 /* MarkdownToolbarView.swift */; };
 		FAD1ED55FFD8ACC66802BC3E /* MinimapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE9957878B9A42255F3208D /* MinimapView.swift */; };
 		8B2C3D4E5F6A71B2C3D4E5F6 /* AutocompleteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1B2C3D4E5F60A1B2C3D4E5 /* AutocompleteView.swift */; };
+		E77A00000000000000000202 /* InlineMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A00000000000000000201 /* InlineMarkdownTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		E77A00000000000000000209 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AAAAAAAA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A6666666;
+			remoteInfo = zMD;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		C007183B47884CF6A423E3DE /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
@@ -54,6 +66,7 @@
 		F1A2B3C4D5E6F7080 /* AlertManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F7082 /* FileWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcher.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F7084 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
+		E77A00000000000000000100 /* InlineMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMarkdown.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTextView.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F708A /* QuickOpenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickOpenView.swift; sourceTree = "<group>"; };
@@ -85,10 +98,19 @@
 		6E98BC2A82B061C62DF83B82 /* MarkdownToolbarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownToolbarView.swift; sourceTree = "<group>"; };
 		3DE9957878B9A42255F3208D /* MinimapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimapView.swift; sourceTree = "<group>"; };
 		7A1B2C3D4E5F60A1B2C3D4E5 /* AutocompleteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutocompleteView.swift; sourceTree = "<group>"; };
+		E77A00000000000000000201 /* InlineMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMarkdownTests.swift; sourceTree = "<group>"; };
+		E77A00000000000000000203 /* zMDTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = zMDTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A2222222 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E77A00000000000000000204 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -102,6 +124,7 @@
 			isa = PBXGroup;
 			children = (
 				A4444444 /* zMD */,
+				E77A00000000000000000200 /* zMDTests */,
 				A5555555 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -121,6 +144,7 @@
 				F1A2B3C4D5E6F7080 /* AlertManager.swift */,
 				F1A2B3C4D5E6F7082 /* FileWatcher.swift */,
 				F1A2B3C4D5E6F7084 /* MarkdownParser.swift */,
+				E77A00000000000000000100 /* InlineMarkdown.swift */,
 				F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */,
 				F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */,
 				F1A2B3C4D5E6F708A /* QuickOpenView.swift */,
@@ -155,8 +179,17 @@
 			isa = PBXGroup;
 			children = (
 A1111111 /* zMD.app */,
+				E77A00000000000000000203 /* zMDTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E77A00000000000000000200 /* zMDTests */ = {
+			isa = PBXGroup;
+			children = (
+				E77A00000000000000000201 /* InlineMarkdownTests.swift */,
+			);
+			path = zMDTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -179,6 +212,23 @@ A1111111 /* zMD.app */,
 			productReference = A1111111 /* zMD.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E77A00000000000000000207 /* zMDTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E77A0000000000000000020C /* Build configuration list for PBXNativeTarget "zMDTests" */;
+			buildPhases = (
+				E77A00000000000000000205 /* Sources */,
+				E77A00000000000000000204 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E77A00000000000000000208 /* PBXTargetDependency */,
+			);
+			name = zMDTests;
+			productName = zMDTests;
+			productReference = E77A00000000000000000203 /* zMDTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -191,6 +241,10 @@ A1111111 /* zMD.app */,
 				TargetAttributes = {
 					A6666666 = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					E77A00000000000000000207 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = A6666666;
 					};
 				};
 			};
@@ -208,6 +262,7 @@ A1111111 /* zMD.app */,
 			projectRoot = "";
 			targets = (
 				A6666666 /* zMD */,
+				E77A00000000000000000207 /* zMDTests */,
 			);
 		};
 /* End PBXProject section */
@@ -242,6 +297,7 @@ A1111111 /* zMD.app */,
 				F1A2B3C4D5E6F7081 /* AlertManager.swift in Sources */,
 				F1A2B3C4D5E6F7083 /* FileWatcher.swift in Sources */,
 				F1A2B3C4D5E6F7085 /* MarkdownParser.swift in Sources */,
+				E77A00000000000000000101 /* InlineMarkdown.swift in Sources */,
 				F1A2B3C4D5E6F7087 /* MarkdownTextView.swift in Sources */,
 				F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */,
 				F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */,
@@ -267,7 +323,23 @@ A1111111 /* zMD.app */,
 				8B2C3D4E5F6A71B2C3D4E5F6 /* AutocompleteView.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E77A00000000000000000205 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E77A00000000000000000202 /* InlineMarkdownTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E77A00000000000000000208 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A6666666 /* zMD */;
+			targetProxy = E77A00000000000000000209 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		CCCCCCCC /* Debug */ = {
@@ -418,7 +490,7 @@ A1111111 /* zMD.app */,
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 2.6.0;
+				MARKETING_VERSION = 2.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -452,11 +524,53 @@ A1111111 /* zMD.app */,
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 2.6.0;
+				MARKETING_VERSION = 2.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		E77A0000000000000000020A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = 5JJ6G6A84S;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/zMD.app/Contents/MacOS/zMD";
+			};
+			name = Debug;
+		};
+		E77A0000000000000000020B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = 5JJ6G6A84S;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/zMD.app/Contents/MacOS/zMD";
 			};
 			name = Release;
 		};
@@ -468,6 +582,15 @@ A1111111 /* zMD.app */,
 			buildConfigurations = (
 				EEEEEEEE /* Debug */,
 				FFFFFFFF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E77A0000000000000000020C /* Build configuration list for PBXNativeTarget "zMDTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E77A0000000000000000020A /* Debug */,
+				E77A0000000000000000020B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -29,11 +29,6 @@ struct QuickOpenView: NSViewRepresentable {
     }
 }
 
-enum QuickOpenMode {
-    case fileSearch
-    case headingSearch
-}
-
 struct QuickOpenItem {
     let title: String
     let subtitle: String
@@ -57,7 +52,6 @@ class QuickOpenNSView: NSView {
     private var modeLabel: NSTextField!
     private var filteredItems: [QuickOpenItem] = []
     private var searchText = ""
-    private var mode: QuickOpenMode = .fileSearch
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -218,12 +212,10 @@ class QuickOpenNSView: NSView {
         // Determine mode from search text prefix
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("@") || trimmed.hasPrefix("#") {
-            mode = .headingSearch
             modeLabel.stringValue = "HEADINGS"
             modeLabel.isHidden = false
             updateHeadingResults(query: String(trimmed.dropFirst()))
         } else {
-            mode = .fileSearch
             modeLabel.isHidden = true
             updateFileResults(query: trimmed)
         }
@@ -391,7 +383,9 @@ class QuickOpenNSView: NSView {
         let boldFont = NSFont.systemFont(ofSize: baseFont.pointSize, weight: .bold)
         for index in match.matchedIndices {
             guard index < text.count else { continue }
-            let range = NSRange(location: index, length: 1)
+            let charStart = text.index(text.startIndex, offsetBy: index)
+            let charEnd = text.index(after: charStart)
+            let range = NSRange(charStart..<charEnd, in: text)
             result.addAttributes([
                 .font: boldFont,
                 .foregroundColor: NSColor.controlAccentColor

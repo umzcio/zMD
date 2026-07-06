@@ -23,7 +23,7 @@ class WebRenderer: NSObject {
         return cache
     }()
     private var pendingMermaid: [(String, (NSImage?) -> Void)] = []
-    private var pendingKatex: [(String, Bool, (NSImage?) -> Void)] = []
+    private var pendingKatex: [(String, Bool, Bool, (NSImage?) -> Void)] = []
 
     // Render queues to prevent concurrent requests from overwriting completions
     private var mermaidRenderQueue: [(code: String, key: String, completion: (NSImage?) -> Void)] = []
@@ -226,7 +226,7 @@ class WebRenderer: NSObject {
 
         if !katexReady {
             _zmdNoop("[WebRenderer] renderMath QUEUED (KaTeX not ready) for: \(latex)")
-            pendingKatex.append((latex, displayMode, completion))
+            pendingKatex.append((latex, displayMode, forceLightTheme, completion))
             setupKatexWebView()
             return
         }
@@ -247,9 +247,7 @@ class WebRenderer: NSObject {
 
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 400), configuration: config)
         webView.navigationDelegate = self
-        // Make the WebView non-opaque so captured snapshots are transparent — otherwise the
-        // rendered math has a white sticker background that looks awful in dark mode.
-        webView.setValue(false, forKey: "drawsBackground")
+        configureTransparentBackground(for: webView)
         katexWebView = webView
 
         // Why takeSnapshot instead of canvas/toDataURL: the previous implementation rendered
@@ -306,6 +304,18 @@ class WebRenderer: NSObject {
         webView.loadHTMLString(html, baseURL: nil)
     }
 
+    private func configureTransparentBackground(for webView: WKWebView) {
+        // Make snapshots transparent. `underPageBackgroundColor` is public; the older
+        // `drawsBackground` switch is private, so only touch it if the selector exists.
+        if #available(macOS 12.0, *) {
+            webView.underPageBackgroundColor = .clear
+        }
+
+        if webView.responds(to: NSSelectorFromString("setDrawsBackground:")) {
+            webView.setValue(false, forKey: "drawsBackground")
+        }
+    }
+
     private func executeKatexRender(latex: String, displayMode: Bool, isDark: Bool, key: String, completion: @escaping (NSImage?) -> Void) {
         katexRenderQueue.append((latex: latex, displayMode: displayMode, isDark: isDark, key: key, completion: completion))
         processNextKatexRender()
@@ -342,6 +352,7 @@ class WebRenderer: NSObject {
         // surrounding NSTextView.
         webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(item.displayMode), \(item.isDark))") { [weak self] _, error in
             if error != nil {
+                self?.activeKatexCompletion = nil
                 item.completion(nil)
                 self?.isKatexRendering = false
                 self?.processNextKatexRender()
@@ -405,8 +416,8 @@ extension WebRenderer: WKScriptMessageHandler {
             katexReady = true
             let pending = pendingKatex
             pendingKatex = []
-            for (latex, displayMode, completion) in pending {
-                renderMath(latex, displayMode: displayMode, completion: completion)
+            for (latex, displayMode, forceLightTheme, completion) in pending {
+                renderMath(latex, displayMode: displayMode, forceLightTheme: forceLightTheme, completion: completion)
             }
 
         case "katexResult":

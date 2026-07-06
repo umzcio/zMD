@@ -29,7 +29,11 @@ class FolderManager: ObservableObject {
     private static let selfWriteSuppressionWindow: TimeInterval = 0.8
 
     func noteSelfWrite(at url: URL) {
-        guard let folder = folderURL, url.path.hasPrefix(folder.path) else { return }
+        guard let folder = folderURL else { return }
+        let folderPath = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        let folderPrefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
+        let filePath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard filePath == folderPath || filePath.hasPrefix(folderPrefix) else { return }
         lastSelfWriteAt = Date()
     }
 
@@ -136,11 +140,6 @@ class FolderManager: ObservableObject {
     }
 
     // MARK: - File Tree
-
-    func refreshFileTree() {
-        guard let folderURL = folderURL else { return }
-        fileTree = buildTree(at: folderURL, relativeTo: folderURL)
-    }
 
     private func buildTree(at url: URL, relativeTo root: URL) -> [FileTreeItem] {
         let fileManager = FileManager.default

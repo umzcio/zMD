@@ -48,7 +48,9 @@ class MinimapView: NSView {
         let text = textView.string
         let lines = text.components(separatedBy: "\n")
         let lineHeight: CGFloat = 2
-        let imageHeight = max(1, CGFloat(lines.count) * lineHeight)
+        let maxBitmapHeight: CGFloat = 20_000
+        let naturalImageHeight = max(1, CGFloat(lines.count) * lineHeight)
+        let imageHeight = min(naturalImageHeight, maxBitmapHeight)
         let imageWidth = minimapWidth
 
         guard imageHeight > 0 else {
@@ -77,7 +79,8 @@ class MinimapView: NSView {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
 
-            let y = CGFloat(index) * lineHeight
+            let y = floor((CGFloat(index) / max(1, CGFloat(lines.count))) * imageHeight)
+            guard y < imageHeight else { continue }
             let indent = CGFloat(line.count - line.drop(while: { $0 == " " || $0 == "\t" }).count)
             let barX = min(indent * 0.5, imageWidth * 0.3)
             let barWidth = min(CGFloat(trimmed.count) * 0.5, imageWidth - barX - 4)
@@ -102,7 +105,7 @@ class MinimapView: NSView {
             }
 
             context.setFillColor(color)
-            context.fill(CGRect(x: barX + 4, y: y, width: max(2, barWidth), height: max(1, lineHeight - 0.5)))
+            context.fill(CGRect(x: barX + 4, y: y, width: max(2, barWidth), height: max(1, min(lineHeight - 0.5, ceil(imageHeight / max(1, CGFloat(lines.count)))))))
         }
 
         cachedImage = context.makeImage()

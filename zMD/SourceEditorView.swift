@@ -479,8 +479,10 @@ struct SourceEditorView: NSViewRepresentable {
                 let plainColor = NSColor.systemYellow.withAlphaComponent(0.4)
                 let activeColor = NSColor.controlAccentColor.withAlphaComponent(0.5)
                 for (i, match) in searchMatches.enumerated() {
-                    guard let nsRange = NSRange(match.range, in: text) as NSRange?,
-                          nsRange.location + nsRange.length <= storage.length else { continue }
+                    let nsRange = match.range
+                    guard nsRange.location != NSNotFound,
+                          nsRange.location >= 0,
+                          NSMaxRange(nsRange) <= storage.length else { continue }
                     let color = (i == currentMatchIndex) ? activeColor : plainColor
                     storage.addAttribute(.backgroundColor, value: color, range: nsRange)
                 }

@@ -164,7 +164,7 @@ class CommandRegistry {
             CommandAction(name: "Export as Word (.rtf)", category: .export, shortcut: nil, icon: "doc.fill", isEnabled: hasDoc) {
                 if let id = documentManager.selectedDocumentId,
                    let doc = documentManager.openDocuments.first(where: { $0.id == id }) {
-                    ExportManager.shared.exportToWord(content: doc.content, fileName: doc.name)
+                    ExportManager.shared.exportToWord(content: doc.content, fileName: doc.name, baseURL: doc.url)
                 }
             },
             CommandAction(name: "Print", category: .export, shortcut: "\u{2318}P", icon: "printer", isEnabled: hasDoc) {

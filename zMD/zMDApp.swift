@@ -232,7 +232,7 @@ struct zMDApp: App {
                     Button("Word (.rtf)...") {
                         if let selectedId = documentManager.selectedDocumentId,
                            let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
-                            ExportManager.shared.exportToWord(content: document.content, fileName: document.name)
+                            ExportManager.shared.exportToWord(content: document.content, fileName: document.name, baseURL: document.url)
                         }
                     }
                     .disabled(documentManager.openDocuments.isEmpty)
@@ -462,6 +462,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        switch DocumentManager.shared.prepareForTermination(completion: { shouldTerminate in
+            sender.reply(toApplicationShouldTerminate: shouldTerminate)
+        }) {
+        case .terminateNow:
+            return .terminateNow
+        case .terminateLater:
+            return .terminateLater
+        case .cancel:
+            return .terminateCancel
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Register for Apple Events to handle file opening
         NSAppleEventManager.shared().setEventHandler(
@@ -513,18 +526,6 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
         if !documentManager.openDocuments.isEmpty {
             if let selectedId = documentManager.selectedDocumentId,
                let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
-                // Warn about unsaved changes
-                if document.isDirty {
-                    let shouldSave = AlertManager.shared.showConfirmation(
-                        title: "Save Changes?",
-                        message: "Do you want to save changes to \"\(document.name)\" before closing?",
-                        confirmButton: "Save",
-                        cancelButton: "Don't Save"
-                    )
-                    if shouldSave {
-                        documentManager.saveDocument(id: document.id)
-                    }
-                }
                 documentManager.closeDocument(document)
             }
             // Don't close the window, just closed the document

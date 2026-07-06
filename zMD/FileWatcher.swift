@@ -12,9 +12,6 @@ class FileWatcher {
     /// Whether to ignore the next change (used after we reload the file)
     var ignoreNextChange = false
 
-    /// Whether file watching is currently paused
-    private var isPaused = false
-
     init(url: URL) {
         self.url = url
         self.lastModificationDate = getModificationDate()
@@ -34,8 +31,9 @@ class FileWatcher {
             return
         }
 
+        let watchedFileDescriptor = fileDescriptor
         dispatchSource = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
+            fileDescriptor: watchedFileDescriptor,
             eventMask: [.write, .delete, .rename, .attrib],
             queue: .main
         )
@@ -44,12 +42,8 @@ class FileWatcher {
             self?.handleFileChange()
         }
 
-        dispatchSource?.setCancelHandler { [weak self] in
-            guard let self = self else { return }
-            if self.fileDescriptor != -1 {
-                close(self.fileDescriptor)
-                self.fileDescriptor = -1
-            }
+        dispatchSource?.setCancelHandler {
+            close(watchedFileDescriptor)
         }
 
         dispatchSource?.resume()
@@ -58,28 +52,12 @@ class FileWatcher {
     func stopWatching() {
         dispatchSource?.cancel()
         dispatchSource = nil
-
-        if fileDescriptor != -1 {
-            close(fileDescriptor)
-            fileDescriptor = -1
-        }
-    }
-
-    func pause() {
-        isPaused = true
-    }
-
-    func resume() {
-        isPaused = false
-        // Update modification date to current
-        lastModificationDate = getModificationDate()
+        fileDescriptor = -1
     }
 
     // MARK: - Private Methods
 
     private func handleFileChange() {
-        guard !isPaused else { return }
-
         // Capture event mask before anything else — the source may emit only one event per cycle.
         let events = dispatchSource?.data ?? []
         let inodeChanged = events.contains(.rename) || events.contains(.delete)
