@@ -136,7 +136,9 @@ struct SourceEditorView: NSViewRepresentable {
                 .font: newFont,
                 .foregroundColor: NSColor.textColor
             ]
-            context.coordinator.applyHighlighting(to: textView)
+            // Full-range: every character's font must update together on zoom, or off-screen text
+            // would keep the old font size until scrolled into view (visible reflow/jump).
+            context.coordinator.applyHighlighting(to: textView, range: NSRange(location: 0, length: (textView.string as NSString).length))
             // Redraw gutter to pick up its new scaled font size.
             if let gutter = scrollView.verticalRulerView {
                 gutter.needsDisplay = true
@@ -171,7 +173,13 @@ struct SourceEditorView: NSViewRepresentable {
             if textView.string != content {
                 textView.string = content
                 context.coordinator.invalidateCursorPositionCache()
-                context.coordinator.applyHighlighting(to: textView)
+                // Full-range: this is a document switch, not the true first paint (that's
+                // makeNSView) — the scroll view's bounds at this point may still reflect the
+                // PREVIOUS document's scroll offset until scrollToPercent (below, later in this
+                // function) settles, so a viewport-bounded pass here risks highlighting the wrong
+                // region of the newly-loaded document. Switches aren't per-keystroke, so the cost
+                // this plan targets doesn't apply here.
+                context.coordinator.applyHighlighting(to: textView, range: NSRange(location: 0, length: (textView.string as NSString).length))
             }
             textView.undoManager?.removeAllActions()
         } else if !textViewHasFocus && textView.string != content {
@@ -179,7 +187,11 @@ struct SourceEditorView: NSViewRepresentable {
             textView.string = content
             textView.selectedRanges = selectedRanges
             context.coordinator.invalidateCursorPositionCache()  // P3: programmatic replace, no textDidChange
-            context.coordinator.applyHighlighting(to: textView)
+            // Full-range for the same reason as the document-switch branch above: this is a
+            // content resync (e.g. external file-change reload), not per-keystroke typing, and
+            // correctness of the freshly-reloaded content matters more than the viewport-bounded
+            // perf win.
+            context.coordinator.applyHighlighting(to: textView, range: NSRange(location: 0, length: (textView.string as NSString).length))
         }
 
         // Search highlight diff — repaint only when something actually changed. Without this guard,
@@ -228,6 +240,11 @@ struct SourceEditorView: NSViewRepresentable {
         private var highlightTimer: Timer?
         private var autocompleteTimer: Timer?
         private var scrollDebounceTimer: Timer?
+        // Debounced re-highlight fired when the viewport settles after a scroll (user-dragged or
+        // programmatic/sync), so text scrolled into view for the first time gets its markdown
+        // syntax colored. Kept short (see scrollViewDidScroll) — long enough to coalesce continuous
+        // scroll events, short enough that the highlight catches up quickly once scrolling stops.
+        private var scrollHighlightTimer: Timer?
         private var isProgrammaticScroll = false
 
         // Search highlight state mirrored from SourceEditorView so applyHighlighting can paint
@@ -291,6 +308,8 @@ struct SourceEditorView: NSViewRepresentable {
             autocompleteTimer = nil
             scrollDebounceTimer?.invalidate()
             scrollDebounceTimer = nil
+            scrollHighlightTimer?.invalidate()
+            scrollHighlightTimer = nil
             NotificationCenter.default.removeObserver(self)
             textView?.delegate = nil
             textView = nil
@@ -298,6 +317,18 @@ struct SourceEditorView: NSViewRepresentable {
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
+            // Debounced viewport re-highlight — fires for BOTH user-dragged scrolling and
+            // programmatic/sync scrolling (e.g. split-view scroll sync, scroll-to-match), since
+            // either can bring markdown-syntax text that was never highlighted into view.
+            // Deliberately placed ahead of the `isProgrammaticScroll` guard below (which only exists
+            // to suppress the scroll-percent broadcast, to avoid feedback loops between synced
+            // panes) so a synced scroll still gets its newly-visible text colored.
+            scrollHighlightTimer?.invalidate()
+            scrollHighlightTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
+                guard let self = self, let textView = self.textView else { return }
+                self.applyHighlighting(to: textView)
+            }
+
             guard !isProgrammaticScroll else { return }
             guard let scrollView = scrollView,
                   let documentView = scrollView.documentView else { return }
@@ -455,10 +486,68 @@ struct SourceEditorView: NSViewRepresentable {
             }
         }
 
-        func applyHighlighting(to textView: NSTextView) {
+        /// Full-document character range for `textView`'s current string. Used by call sites that
+        /// deliberately opt OUT of viewport-bounded highlighting (see `applyHighlighting`'s `range`
+        /// parameter doc comment for which ones and why).
+        private func fullDocumentRange(for textView: NSTextView) -> NSRange {
+            NSRange(location: 0, length: (textView.string as NSString).length)
+        }
+
+        /// The glyph range currently visible in `textView`'s enclosing scroll view, expanded by a
+        /// margin on both sides so a small scroll doesn't immediately expose unstyled text before
+        /// the next highlight pass (`scrollViewDidScroll`'s debounced call) catches up.
+        ///
+        /// Falls back to the full document range if the view isn't hosted in a scroll view yet, or
+        /// its layout manager/text container aren't available — e.g. keeps prior full-document
+        /// behavior rather than risking an empty/wrong range.
+        private func visibleHighlightRange(for textView: NSTextView) -> NSRange {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let scrollView = textView.enclosingScrollView else {
+                return fullDocumentRange(for: textView)
+            }
+            let visibleRect = scrollView.contentView.bounds
+            let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+            let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+
+            // Margin: highlight a bit beyond the visible rect so a small scroll doesn't
+            // immediately show unstyled text before the next highlight pass runs.
+            let margin = 2000
+            let docLength = (textView.string as NSString).length
+            let expandedLocation = max(0, charRange.location - margin)
+            let expandedEnd = min(docLength, NSMaxRange(charRange) + margin)
+            return NSRange(location: expandedLocation, length: max(0, expandedEnd - expandedLocation))
+        }
+
+        /// Re-run the 11 markdown-syntax regex passes (headings, bold, italic, strikethrough,
+        /// inline code, code fences, links, blockquotes, lists, checkboxes) plus the search-match
+        /// background paint, in that order so search highlighting layers on top of token coloring.
+        ///
+        /// - Parameter range: character range to scan. Pass `nil` (the default) to bound the scan to
+        ///   the currently visible viewport (± a margin) — this is the perf-motivated default: cost
+        ///   then tracks what's on screen, not document length, and `scrollViewDidScroll` schedules a
+        ///   debounced follow-up call as new text scrolls into view.
+        ///
+        ///   Pass an explicit full-document range (`fullDocumentRange(for:)`) instead when every
+        ///   character must be correctly styled immediately, independent of scroll position:
+        ///   - zoom-level change: every character's font must update together, or previously-styled
+        ///     off-screen text would keep the old font size until scrolled into view, producing a
+        ///     visible reflow/jump when it finally re-highlights.
+        ///   - loading a different document into this editor, or resyncing this document's content
+        ///     after an external change: correctness of the freshly-loaded content matters more than
+        ///     the (infrequent, not per-keystroke) cost here, and — unlike the true first-paint case
+        ///     in `makeNSView` — the scroll position at the moment this runs may still reflect the
+        ///     previous document/previous content, so a viewport-bounded pass could highlight the
+        ///     wrong region entirely.
+        ///
+        ///   The debounced `textDidChange` path, the true initial paint in `makeNSView`, and the
+        ///   scroll-triggered follow-up all pass `nil` (bounded) — these are the call sites this
+        ///   plan targets: per-keystroke and per-scroll cost that must track viewport, not document
+        ///   size.
+        func applyHighlighting(to textView: NSTextView, range: NSRange? = nil) {
             guard let storage = textView.textStorage else { return }
             let text = storage.string
-            let fullRange = NSRange(location: 0, length: (text as NSString).length)
+            let highlightRange = range ?? visibleHighlightRange(for: textView)
 
             storage.beginEditing()
 
@@ -466,20 +555,20 @@ struct SourceEditorView: NSViewRepresentable {
             storage.addAttributes([
                 .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
                 .foregroundColor: NSColor.textColor
-            ], range: fullRange)
+            ], range: highlightRange)
 
             let nsText = text as NSString
-            highlightPattern(#"^#{1,6}\s+.*$"#, in: storage, text: nsText, color: .systemBlue, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold))
-            highlightPattern(#"\*\*[^\*]+\*\*"#, in: storage, text: nsText, color: .textColor, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold))
-            highlightPattern(#"(?<!\*)\*(?!\*)([^\*]+)(?<!\*)\*(?!\*)"#, in: storage, text: nsText, color: .textColor, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular).withTraits(.italic))
-            highlightPattern(#"~~[^~]+~~"#, in: storage, text: nsText, color: .systemGray)
-            highlightPattern(#"`[^`]+`"#, in: storage, text: nsText, color: .systemOrange)
-            highlightPattern(#"^```.*$"#, in: storage, text: nsText, color: .systemGray)
-            highlightPattern(#"\[[^\]]+\]\([^\)]+\)"#, in: storage, text: nsText, color: .systemTeal)
-            highlightPattern(#"^>\s+.*$"#, in: storage, text: nsText, color: .systemGreen)
-            highlightPattern(#"^[\t ]*[-*+]\s"#, in: storage, text: nsText, color: .systemPurple)
-            highlightPattern(#"^[\t ]*\d+\.\s"#, in: storage, text: nsText, color: .systemPurple)
-            highlightPattern(#"\[[ xX]\]"#, in: storage, text: nsText, color: .systemIndigo)
+            highlightPattern(#"^#{1,6}\s+.*$"#, in: storage, text: nsText, range: highlightRange, color: .systemBlue, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold))
+            highlightPattern(#"\*\*[^\*]+\*\*"#, in: storage, text: nsText, range: highlightRange, color: .textColor, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold))
+            highlightPattern(#"(?<!\*)\*(?!\*)([^\*]+)(?<!\*)\*(?!\*)"#, in: storage, text: nsText, range: highlightRange, color: .textColor, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular).withTraits(.italic))
+            highlightPattern(#"~~[^~]+~~"#, in: storage, text: nsText, range: highlightRange, color: .systemGray)
+            highlightPattern(#"`[^`]+`"#, in: storage, text: nsText, range: highlightRange, color: .systemOrange)
+            highlightPattern(#"^```.*$"#, in: storage, text: nsText, range: highlightRange, color: .systemGray)
+            highlightPattern(#"\[[^\]]+\]\([^\)]+\)"#, in: storage, text: nsText, range: highlightRange, color: .systemTeal)
+            highlightPattern(#"^>\s+.*$"#, in: storage, text: nsText, range: highlightRange, color: .systemGreen)
+            highlightPattern(#"^[\t ]*[-*+]\s"#, in: storage, text: nsText, range: highlightRange, color: .systemPurple)
+            highlightPattern(#"^[\t ]*\d+\.\s"#, in: storage, text: nsText, range: highlightRange, color: .systemPurple)
+            highlightPattern(#"\[[ xX]\]"#, in: storage, text: nsText, range: highlightRange, color: .systemIndigo)
 
             // Paint search match backgrounds last so they layer on top of token coloring.
             // Active match gets the system control-accent color for visibility against any token.
@@ -491,8 +580,8 @@ struct SourceEditorView: NSViewRepresentable {
         /// Repaint ONLY the search-match background highlighting — no markdown-syntax regex passes.
         /// Search-state changes (new query, updated match list, Next/Previous navigation) never
         /// change the document's markdown syntax, so they call this instead of `applyHighlighting`
-        /// to avoid re-tokenizing the whole document just to move which range shows the "current
-        /// match" color.
+        /// to avoid re-tokenizing the whole (or even viewport-bounded) document just to move which
+        /// range shows the "current match" color.
         ///
         /// Whatever markdown-syntax font/color attributes are already in the storage are left
         /// exactly as they are; only `.backgroundColor` is touched.
@@ -520,7 +609,7 @@ struct SourceEditorView: NSViewRepresentable {
 
         private static var regexCache: [String: NSRegularExpression] = [:]
 
-        private func highlightPattern(_ pattern: String, in storage: NSTextStorage, text: NSString, color: NSColor, font: NSFont? = nil) {
+        private func highlightPattern(_ pattern: String, in storage: NSTextStorage, text: NSString, range: NSRange, color: NSColor, font: NSFont? = nil) {
             let regex: NSRegularExpression
             if let cached = Self.regexCache[pattern] {
                 regex = cached
@@ -530,7 +619,7 @@ struct SourceEditorView: NSViewRepresentable {
                 regex = created
             }
 
-            for match in regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)) {
+            for match in regex.matches(in: text as String, range: range) {
                 storage.addAttribute(.foregroundColor, value: color, range: match.range)
                 if let font = font {
                     storage.addAttribute(.font, value: font, range: match.range)
