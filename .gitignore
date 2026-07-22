@@ -87,3 +87,6 @@ Temporary Items
 tmp/
 
 *.profraw
+
+# local docs — not published
+docs/*
