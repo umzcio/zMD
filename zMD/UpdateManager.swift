@@ -126,6 +126,16 @@ class UpdateManager: ObservableObject {
             return
         }
 
+        // Downgrade guard: refuse to install unless the downloaded release is actually newer
+        // than what's running. `isNewerVersion` is normally only consulted before *showing* the
+        // update prompt — this re-checks right before the install itself, so a stale/tampered
+        // `downloadURL` (e.g. a compromised release feed pointing at an old, legitimately-signed
+        // DMG) can't be installed just because `downloadAndInstall()` got invoked somehow.
+        guard isNewerVersion(remote: latestVersion, current: currentVersion) else {
+            stage = .failed("This update is not newer than the installed version. Refusing to install.")
+            return
+        }
+
         // S5: defense-in-depth — refuse a non-HTTPS artifact URL before downloading. GitHub
         // release assets are always HTTPS and ATS already blocks cleartext, but an explicit guard
         // ensures the downloaded bundle can never arrive over an untrusted transport.
@@ -392,7 +402,9 @@ class UpdateManager: ObservableObject {
         }
     }
 
-    private func isNewerVersion(remote: String, current: String) -> Bool {
+    // Not private: exercised directly from InlineMarkdownTests via `@testable import zMD`,
+    // matching the pattern used for ExportManager.safeDOCXHyperlinkURL / extractMathFromMarkdown.
+    func isNewerVersion(remote: String, current: String) -> Bool {
         // Strip semver pre-release/build metadata (everything after the first '-' or '+') so
         // `2.5.3-rc1` parses as `[2,5,3]` instead of `[2,5]` (L9). The current shipped version
         // never has metadata, so this only affects how we compare against tagged pre-releases.

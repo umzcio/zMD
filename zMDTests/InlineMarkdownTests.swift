@@ -85,6 +85,49 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertNotEqual(extraction.placeholder(at: 0), "ZMDMATHPH0ZMDEND")
         XCTAssertTrue(extraction.modified.contains(extraction.placeholder(at: 0)))
     }
+
+    func testIsNewerVersionRejectsEqualAndOlderVersions() {
+        let manager = UpdateManager.shared
+        XCTAssertFalse(manager.isNewerVersion(remote: "2.7.1", current: "2.7.1"))
+        XCTAssertFalse(manager.isNewerVersion(remote: "2.6.0", current: "2.7.1"))
+        XCTAssertTrue(manager.isNewerVersion(remote: "2.7.2", current: "2.7.1"))
+        XCTAssertTrue(manager.isNewerVersion(remote: "3.0.0", current: "2.7.1"))
+    }
+
+    // Regression test for the stuck-"ready"-stage bug: sheet reaches .ready -> user clicks
+    // "Later" (onLater's unconditional reset, mirrored here since onLater itself lives in a
+    // SwiftUI closure in zMDApp.swift and isn't independently callable) -> "Check for Updates"
+    // reopens the sheet -> user clicks "Update Now" again. Before the fix, onLater only reset
+    // `stage` on `.failed`, so `.ready` stuck around forever and downloadAndInstall()'s
+    // re-entrancy guard (`stage == .idle`) permanently no-oped "Update Now".
+    func testLaterFromReadyUnsticksDownloadAndInstall() {
+        let manager = UpdateManager.shared
+        let previousStage = manager.stage
+        let previousDownloadURL = manager.downloadURL
+        let previousLatestVersion = manager.latestVersion
+        defer {
+            manager.stage = previousStage
+            manager.downloadURL = previousDownloadURL
+            manager.latestVersion = previousLatestVersion
+        }
+
+        manager.stage = .ready
+        // This is exactly onLater's new body from zMDApp.swift.
+        manager.stage = .idle
+        XCTAssertEqual(manager.stage, .idle, "stage should be unstuck after Later")
+
+        // Now simulate clicking "Update Now" again: downloadAndInstall()'s re-entrancy guard
+        // must NOT bounce it back out immediately (that was the bug). Use a version that's not
+        // newer so the *new* downgrade guard (Step 2) is what stops it, not a stale .ready stage.
+        manager.latestVersion = manager.currentVersion
+        manager.downloadURL = URL(string: "https://example.com/zMD.dmg")
+        manager.downloadAndInstall()
+        if case .failed(let message) = manager.stage {
+            XCTAssertTrue(message.contains("not newer"), "should fail on the downgrade guard, not the stale re-entrancy guard: \(message)")
+        } else {
+            XCTFail("expected .failed from the downgrade guard, got \(manager.stage)")
+        }
+    }
 }
 
 final class RuntimeSmokeTests: XCTestCase {
