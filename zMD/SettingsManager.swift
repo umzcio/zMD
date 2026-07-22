@@ -29,6 +29,41 @@ enum Timing {
     static let scrollPositionPersistDebounce: TimeInterval = 0.5
 }
 
+/// Animation tokens. Every animation in the app should use one of these
+/// rather than a hand-typed curve/duration, so motion stays cohesive and the
+/// system Reduce Motion setting is honored in one place.
+enum Motion {
+    /// True when macOS's "Reduce motion" accessibility setting is on.
+    static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// Hover states, tiny state flips. 100–150ms class.
+    static var fast: Animation { .easeOut(duration: 0.12) }
+    /// Things appearing/entering (entrances want ease-out: fast start,
+    /// settled end).
+    static var entrance: Animation { .easeOut(duration: 0.2) }
+    /// On-screen movement/morphs (sidebars toggling, view-mode switches).
+    static var standard: Animation { .easeInOut(duration: 0.2) }
+    /// Large layout morphs (focus mode). Upper bound of the UI budget.
+    static var morph: Animation { .easeInOut(duration: 0.3) }
+
+    /// A movement transition that degrades to a plain fade under Reduce
+    /// Motion — keeps the state-change feedback, drops the position change.
+    static func slideOrFade(edge: Edge) -> AnyTransition {
+        reduceMotion
+            ? .opacity
+            : .opacity.combined(with: .move(edge: edge))
+    }
+
+    /// A scale entrance that degrades to a plain fade under Reduce Motion.
+    static func scaleOrFade(_ scale: CGFloat = 0.95) -> AnyTransition {
+        reduceMotion
+            ? .opacity
+            : .opacity.combined(with: .scale(scale: scale))
+    }
+}
+
 /// Cache limits for in-memory image + diagram storage.
 enum Cache {
     static let imageCountLimit: Int = 100

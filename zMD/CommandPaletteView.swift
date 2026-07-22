@@ -260,7 +260,7 @@ struct CommandPaletteOverlay: View {
                     }
                     .frame(maxHeight: 320)
                     .onChange(of: selectedIndex) { _ in
-                        withAnimation(.easeOut(duration: 0.1)) {
+                        withAnimation(Motion.fast) {
                             proxy.scrollTo(selectedIndex, anchor: .center)
                         }
                     }

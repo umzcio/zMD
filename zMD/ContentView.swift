@@ -59,7 +59,7 @@ struct ContentView: View {
                             }
                         }
                         .padding(8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .transition(Motion.slideOrFade(edge: .top))
 
                         Divider()
                     }
@@ -83,8 +83,8 @@ struct ContentView: View {
                     WelcomeView()
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: documentManager.isFocusModeActive)
-            .animation(.easeInOut(duration: 0.15), value: documentManager.isSearching)
+            .animation(Motion.morph, value: documentManager.isFocusModeActive)
+            .animation(Motion.fast, value: documentManager.isSearching)
             .frame(minWidth: 600, minHeight: 400)
 
             // Focus mode exit pill + Escape handler. Attach a hidden cancelAction button so
@@ -92,7 +92,7 @@ struct ContentView: View {
             if documentManager.isFocusModeActive {
                 // Invisible Escape-to-exit button; accessibility: labeled for screen readers.
                 Button("Exit Focus Mode") {
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(Motion.morph) {
                         documentManager.isFocusModeActive = false
                     }
                 }
@@ -119,7 +119,7 @@ struct ContentView: View {
                             .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
                         }
                         .buttonStyle(PlainButtonStyle())
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .transition(Motion.slideOrFade(edge: .top))
                     }
                     Spacer()
                 }
@@ -127,7 +127,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .onHover { hovering in
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(Motion.standard) {
                         showFocusExitPill = hovering
                     }
                 }
@@ -174,7 +174,7 @@ struct ContentView: View {
             showCommandPalette = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleFocusMode)) { _ in
-            withAnimation(.easeInOut(duration: 0.3)) {
+            withAnimation(Motion.morph) {
                 documentManager.isFocusModeActive.toggle()
             }
         }
@@ -215,7 +215,7 @@ struct ContentView: View {
                 FolderSidebarView()
                     .environmentObject(documentManager)
                     .environmentObject(folderManager)
-                    .transition(.move(edge: .leading))
+                    .transition(Motion.slideOrFade(edge: .leading))
                 Divider()
             }
 
@@ -230,7 +230,7 @@ struct ContentView: View {
                         // doesn't fire reliably across tab swaps on macOS 13).
                         OutlineView(content: document.content, selectedHeadingId: $selectedHeadingId)
                             .id(document.id)
-                            .transition(.move(edge: .trailing))
+                            .transition(Motion.slideOrFade(edge: .trailing))
                         Divider()
                     }
 
@@ -287,15 +287,15 @@ struct ContentView: View {
                         }
                     } else {
                         viewModeContent(for: document)
-                            .animation(.easeInOut(duration: 0.15), value: documentManager.viewMode)
+                            .animation(Motion.fast, value: documentManager.viewMode)
                     }
                 }
             } else {
                 EmptyDocumentView()
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: folderManager.isShowingFolderSidebar)
-        .animation(.easeInOut(duration: 0.2), value: showOutline)
+        .animation(Motion.standard, value: folderManager.isShowingFolderSidebar)
+        .animation(Motion.standard, value: showOutline)
     }
 
     @ViewBuilder
@@ -456,7 +456,7 @@ struct WelcomeView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .onHover { hovering in
-                    withAnimation(.easeInOut(duration: 0.15)) {
+                    withAnimation(Motion.fast) {
                         buttonHovered = hovering
                     }
                 }
@@ -498,7 +498,7 @@ struct WelcomeView: View {
                         Spacer()
 
                         Button("Clear") {
-                            withAnimation(.easeOut(duration: 0.2)) {
+                            withAnimation(Motion.entrance) {
                                 documentManager.clearRecentFiles()
                             }
                         }
@@ -586,7 +586,7 @@ struct RecentFileButtonStyle: ButtonStyle {
                     .padding(.horizontal, 4)
             )
             .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.1)) {
+                withAnimation(Motion.fast) {
                     isHovered = hovering
                 }
             }

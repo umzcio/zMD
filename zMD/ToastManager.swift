@@ -65,7 +65,7 @@ class ToastManager: ObservableObject {
             guard let self = self else { return }
             self.dismissTimers[id]?.invalidate()
             self.dismissTimers.removeValue(forKey: id)
-            withAnimation(.easeOut(duration: 0.25)) {
+            withAnimation(Motion.entrance) {
                 self.toasts.removeAll { $0.id == id }
             }
         }
@@ -92,7 +92,11 @@ struct ToastView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
         .transition(.asymmetric(
-            insertion: .move(edge: .trailing).combined(with: .scale(scale: 0.8)).combined(with: .opacity),
+            // Under Reduce Motion, collapse the slide+scale entrance to a plain fade —
+            // keep the arrival feedback, drop the movement.
+            insertion: Motion.reduceMotion
+                ? .opacity
+                : .move(edge: .trailing).combined(with: .scale(scale: 0.8)).combined(with: .opacity),
             removal: .opacity
         ))
     }

@@ -95,7 +95,7 @@ struct OutlineItemView: View {
         }
         .buttonStyle(PlainButtonStyle())
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.1)) {
+            withAnimation(Motion.fast) {
                 isHovered = hovering
             }
         }

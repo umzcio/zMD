@@ -20,7 +20,7 @@ struct FolderSidebarView: View {
                 Spacer()
                 Button(action: {
                     NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(Motion.standard) {
                         folderManager.closeFolder()
                     }
                 }) {
@@ -35,7 +35,7 @@ struct FolderSidebarView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .onHover { hovering in
-                    withAnimation(.easeInOut(duration: 0.1)) {
+                    withAnimation(Motion.fast) {
                         closeButtonHovered = hovering
                     }
                 }
@@ -89,7 +89,7 @@ struct FileTreeItemView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: {
                 if item.isDirectory {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(Motion.standard) {
                         if isExpanded {
                             expandedDirectories.remove(item.id)
                         } else {
@@ -133,7 +133,7 @@ struct FileTreeItemView: View {
             }
             .buttonStyle(PlainButtonStyle())
             .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.1)) {
+                withAnimation(Motion.fast) {
                     isHovered = hovering
                 }
             }
@@ -149,7 +149,7 @@ struct FileTreeItemView: View {
                         onFileSelected: onFileSelected,
                         activeURL: activeURL
                     )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(Motion.slideOrFade(edge: .top))
                 }
             }
         }

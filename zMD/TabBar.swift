@@ -14,13 +14,10 @@ struct TabBar: View {
                             document: document,
                             isSelected: documentManager.selectedDocumentId == document.id
                         )
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.8)),
-                            removal: .opacity.combined(with: .scale(scale: 0.8))
-                        ))
+                        .transition(Motion.scaleOrFade())
                     }
                 }
-                .animation(.easeInOut(duration: 0.2), value: documentManager.openDocuments.map(\.id))
+                .animation(Motion.standard, value: documentManager.openDocuments.map(\.id))
             }
 
             Spacer()
@@ -41,7 +38,7 @@ struct TabBar: View {
             }
             .buttonStyle(PlainButtonStyle())
             .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
+                withAnimation(Motion.fast) {
                     addButtonHovered = hovering
                 }
             }
@@ -61,7 +58,7 @@ struct TabBar: View {
 
             // Outline toggle button
             Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(Motion.standard) {
                     showOutline.toggle()
                 }
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -115,7 +112,7 @@ struct TabItem: View {
 
             Button(action: {
                 NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(Motion.standard) {
                     documentManager.closeDocument(document)
                 }
             }) {
@@ -140,7 +137,7 @@ struct TabItem: View {
         .contentShape(Rectangle())
         .help(document.url.path)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(Motion.fast) {
                 isHovered = hovering
             }
         }
@@ -154,7 +151,7 @@ struct TabItem: View {
         .onDrop(of: [.text], isTargeted: $isDragTarget) { _ in
             guard let sourceId = documentManager.draggingDocumentId,
                   let targetIndex = documentManager.openDocuments.firstIndex(where: { $0.id == document.id }) else { return false }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(Motion.standard) {
                 documentManager.moveDocument(withId: sourceId, toIndex: targetIndex)
             }
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
