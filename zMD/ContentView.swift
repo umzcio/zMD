@@ -434,7 +434,7 @@ struct WelcomeView: View {
                     )
                     .foregroundColor(.accentColor)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(PressableButtonStyle())
 
                 Button(action: {
                     documentManager.openFile()
@@ -454,7 +454,7 @@ struct WelcomeView: View {
                     .foregroundColor(.white)
                     .scaleEffect(buttonHovered ? 1.03 : 1.0)
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(PressableButtonStyle())
                 .onHover { hovering in
                     withAnimation(Motion.fast) {
                         buttonHovered = hovering
@@ -584,6 +584,16 @@ struct WelcomeView: View {
                 showRecents = true
             }
         }
+    }
+}
+
+/// Standard press feedback: subtle scale-down while pressed. Feel target:
+/// felt more than seen — confirmation, not animation.
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(Motion.fast, value: configuration.isPressed)
     }
 }
 
