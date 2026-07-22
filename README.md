@@ -58,6 +58,7 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 
 ### Preview Rendering
 - **Typora-style typography** — rendered headings, proper line-height, collapsed syntax markers
+- **Emphasis via asterisks** — `*italic*` / `**bold**`; underscore emphasis (`_text_`) is not supported by design
 - **Syntax highlighting** for Swift, Python, JavaScript, TypeScript, C/C++, Bash, SQL, JSON, HTML, XML, YAML
 - **Mermaid diagrams** — flowcharts, sequence diagrams, class diagrams rendered inline
 - **LaTeX math** — inline `$...$` and block `$$...$$` via KaTeX
