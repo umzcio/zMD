@@ -16,7 +16,7 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 |------|-------|----------|--------|------------|--------|
 | 001 | Folder-scan symlink cycle crash | P1 | S | — | DONE (see note) |
 | 002 | Rotate notary credentials + script hygiene | P1 | S | — | DONE — manual rotation in App Store Connect still needed, see note |
-| 003 | Scope diagram-render cache invalidation | P1 | S | — | IN PROGRESS |
+| 003 | Scope diagram-render cache invalidation | P1 | S | — | DONE (see note) |
 | 004 | Fix updater stuck stage + downgrade guard | P1 | S | — | DONE |
 | 005 | Parser characterization tests + escape-delimiter fix | P1 | M | — | DONE |
 | 006 | Add CI workflow | P1 | S | — | DONE — first live GitHub Actions run not yet observed, see note |
@@ -37,9 +37,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 
 ## Execution notes (P1 batch, 2026-07-21)
 
-Plans 001, 002, 004, 005, 006 were executed by parallel subagents in isolated
-git worktrees, reviewed, and merged into `master`. Full build + 27-test suite
-passes, binary launches cleanly. Plan 003 is still running.
+Plans 001, 002, 003, 004, 005, 006 were executed by parallel subagents in
+isolated git worktrees, reviewed, and merged into `master`. Full build +
+test suite passes, binary launches cleanly.
 
 - **001**: fix and regression test both landed and are correct (explicit
   `.isSymbolicLinkKey` guard, defense-in-depth). However, per the plan's own
@@ -59,6 +59,27 @@ passes, binary launches cleanly. Plan 003 is still running.
   `scripts/.notary-config.local`.** The Key ID and issuer UUID are recoverable
   from this repo's pre-cleanup git history and should be treated as burned
   regardless of whether anyone has actually read those commits.
+- **003**: fix landed — `documentId` threaded through `MarkdownTextView` ->
+  `Coordinator`, stamped on every posted `.diagramRendered` notification,
+  filtered inside `diagramDidRender(_:)` so a render only invalidates the
+  pane currently showing that document (re-checked at coalesce-timer fire
+  time too, closing a tab-switch-during-the-100ms-window race).
+  `DocumentManager.diagramRenderTick` became a per-document
+  `diagramRenderTicks: [UUID: Int]`. Required touching `ContentView.swift`
+  (3 call sites) to thread the id through — out of the plan's originally
+  stated file scope, because the plan assumed `Coordinator` already tracked
+  document identity under some existing property name; it did not (only a
+  stale, never-refreshed `baseURL`). Build and the full test suite
+  (15 tests) pass. Manual GUI verification was partial: confirmed via
+  screenshots that two tabs open with correct per-tab content and that
+  Ctrl+Tab switching works cleanly against the new documentId-aware
+  Coordinator reuse path with no crash or content mixup; could not observe
+  a live Mermaid render complete in this sandboxed session (WKWebView/CDN
+  render hung indefinitely on "Rendering diagram..." even after 30+s), so
+  the specific claim "tab B doesn't rebuild when tab A's diagram renders"
+  rests on code-path tracing (documented in the executor's report) rather
+  than an observed live repro. No regression risk identified from either
+  the build or the trace.
 - **006**: CI workflow file is written and its build/test commands were
   reproduced locally with the unsigned-CI override flags, but no actual
   GitHub Actions run has been observed yet (requires a push). Recommend
