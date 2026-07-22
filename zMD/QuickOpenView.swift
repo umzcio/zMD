@@ -539,9 +539,7 @@ struct QuickOpenOverlay: View {
                     Spacer()
                 }
                 .padding(.top, 80)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.easeOut(duration: 0.2), value: isPresented)
     }
 }
