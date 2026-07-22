@@ -14,12 +14,12 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Folder-scan symlink cycle crash | P1 | S | — | TODO |
-| 002 | Rotate notary credentials + script hygiene | P1 | S | — | DONE |
-| 003 | Scope diagram-render cache invalidation | P1 | S | — | TODO |
-| 004 | Fix updater stuck stage + downgrade guard | P1 | S | — | TODO |
-| 005 | Parser characterization tests + escape-delimiter fix | P1 | M | — | TODO |
-| 006 | Add CI workflow | P1 | S | — | TODO |
+| 001 | Folder-scan symlink cycle crash | P1 | S | — | DONE (see note) |
+| 002 | Rotate notary credentials + script hygiene | P1 | S | — | DONE — manual rotation in App Store Connect still needed, see note |
+| 003 | Scope diagram-render cache invalidation | P1 | S | — | IN PROGRESS |
+| 004 | Fix updater stuck stage + downgrade guard | P1 | S | — | DONE |
+| 005 | Parser characterization tests + escape-delimiter fix | P1 | M | — | DONE |
+| 006 | Add CI workflow | P1 | S | — | DONE — first live GitHub Actions run not yet observed, see note |
 | 007 | Folder-sidebar lifecycle fixes (suppression drop, scan race, tests) | P2 | M | 001 (soft) | TODO |
 | 008 | Fix stale CLAUDE.md claims | P2 | S | — | TODO |
 | 009 | Debounce split-mode preview reparse | P2 | M | 003 (soft) | TODO |
@@ -34,6 +34,35 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | 018 | Import/plugin seam spike (direction, investigation-only) | P3 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
+
+## Execution notes (P1 batch, 2026-07-21)
+
+Plans 001, 002, 004, 005, 006 were executed by parallel subagents in isolated
+git worktrees, reviewed, and merged into `master`. Full build + 27-test suite
+passes, binary launches cleanly. Plan 003 is still running.
+
+- **001**: fix and regression test both landed and are correct (explicit
+  `.isSymbolicLinkKey` guard, defense-in-depth). However, per the plan's own
+  Step 2 instruction to confirm the test fails when the fix is reverted, the
+  executor found it does **not** fail pre-fix in this environment —
+  `URL.resourceValues(.isDirectoryKey).isDirectory` already returns `false`
+  for the symlink itself here, so the pre-fix code was excluding it via a
+  different path before ever reaching the vulnerable recursion. This
+  contradicts the original audit's stated mechanism. The fix is still worth
+  keeping (explicit is better than relying on that unresolved-key behavior),
+  but the crash severity/reproducibility as originally described is
+  unconfirmed in this environment — worth a closer look if it matters.
+- **002**: script-hygiene changes landed (mktemp log path, no more credential
+  echo on failure). The credential rotation itself is a manual step only the
+  account holder can do: **revoke the notary API key in App Store Connect →
+  Users and Access → Integrations → API Keys, generate a replacement, update
+  `scripts/.notary-config.local`.** The Key ID and issuer UUID are recoverable
+  from this repo's pre-cleanup git history and should be treated as burned
+  regardless of whether anyone has actually read those commits.
+- **006**: CI workflow file is written and its build/test commands were
+  reproduced locally with the unsigned-CI override flags, but no actual
+  GitHub Actions run has been observed yet (requires a push). Recommend
+  watching the first real run after this lands on `origin`.
 
 ## Dependency notes
 
