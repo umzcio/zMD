@@ -20,12 +20,12 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | 004 | Fix updater stuck stage + downgrade guard | P1 | S | — | DONE |
 | 005 | Parser characterization tests + escape-delimiter fix | P1 | M | — | DONE |
 | 006 | Add CI workflow | P1 | S | — | DONE — first live GitHub Actions run not yet observed, see note |
-| 007 | Folder-sidebar lifecycle fixes (suppression drop, scan race, tests) | P2 | M | 001 (soft) | TODO |
-| 008 | Fix stale CLAUDE.md claims | P2 | S | — | TODO |
+| 007 | Folder-sidebar lifecycle fixes (suppression drop, scan race, tests) | P2 | M | 001 (soft) | DONE |
+| 008 | Fix stale CLAUDE.md claims | P2 | S | — | DONE |
 | 009 | Debounce split-mode preview reparse | P2 | M | 003 (soft) | DONE (see note) |
-| 010 | Bound syntax highlighting to viewport | P2 | M | — | TODO |
-| 011 | Normalize CR/line-separator in math token bridge | P2 | S | — | TODO |
-| 012 | CDN dependency update (mermaid/katex) + cadence | P2 | S–M | — | TODO |
+| 010 | Bound syntax highlighting to viewport | P2 | M | — | DONE (see note) |
+| 011 | Normalize CR/line-separator in math token bridge | P2 | S | — | DONE |
+| 012 | CDN dependency update (mermaid/katex) + cadence | P2 | S–M | — | DONE (see note) |
 | 013 | DocumentManager testability seam, Phase 1 | P3 | L | 005 (soft) | TODO |
 | 014 | Consolidate confirmation alerts into AlertManager | P3 | S | 013 (soft) | TODO |
 | 015 | Implement `==highlight==` token (direction) | P3 | S–M | — | TODO |
@@ -104,6 +104,55 @@ test suite passes, binary launches cleanly.
   dropped update by construction. Recommend a human do the actual "type in
   split mode, watch it feel smoother" check before relying on this for a
   release.
+- **007**: both bugs fixed in `zMD/FolderManager.swift` (independent of
+  001's symlink guard — different functions, clean auto-merge). Suppression-
+  window drop fixed with a coalesced deferred-rescan timer (also cancelled
+  in `closeFolder()` so it can't fire after the folder closes); scan-
+  ordering race fixed with a monotonic `scanGeneration` token shared by
+  `setFolder` and `refreshFileTreeAsync` via a new `performTreeScan(for:)`
+  helper. The regression test required real empirical calibration — the
+  plan's literal timing didn't reliably reproduce the bug here (a "phantom"
+  first FSEvents callback from the folder's own population, and a second
+  FS notification from atomic writes, both masked it by accident); the
+  executor instrumented real FSEvents timing, adjusted the wait/write
+  strategy, and confirmed the test reliably fails without the fix and
+  passes with it. Merge required manually resolving a textual conflict in
+  `InlineMarkdownTests.swift` (multiple plans append test classes to the
+  same file); resolved by keeping both `FolderManagerTests` (001) and
+  `FolderManagerLifecycleTests` (007) as complete, separate classes —
+  verified against the branch's own final file content, only cosmetic
+  comment differences.
+- **008**: `CLAUDE.md`'s stale entitlements claim and outdated two-layer
+  rendering description both fixed to reflect `InlineMarkdown.swift` (the
+  shared inline tokenizer) and `SourceEditorView.swift`'s place in the view
+  hierarchy. Doc-only, zero risk.
+- **010**: split into two commits — decoupled search-match navigation from
+  markdown-syntax re-highlighting (Next/Previous no longer re-tokenizes),
+  then bounded the remaining highlight passes to the visible viewport ± a
+  2000-char margin, with a debounced scroll-triggered follow-up. Three call
+  sites (zoom change, document switch, external-content resync) were
+  deliberately kept full-range with documented reasoning — the plan
+  explicitly permitted this judgment call. One pre-existing bug noted but
+  left unfixed (out of scope): clearing a search query never removes stale
+  match-highlight background color. No GUI session available for manual
+  verification; reasoning-through documented in the commit, human should
+  spot-check scrolling/search feel before release.
+- **012**: mermaid bumped 10.9.1 → **11.16.0 (major version)**, katex
+  0.16.9 → 0.18.1 (minor). All four new SRI hashes were independently
+  recomputed from the live CDN content by the coordinating session (not
+  just trusted from the executor) — confirmed matching. API-compatibility
+  for the major mermaid bump was checked by exercising the app's exact
+  `mermaid.initialize()`/`mermaid.render()` calls against the new version
+  in a real browser session (all diagrams rendered correctly); KaTeX
+  inline/display math were confirmed rendering correctly live in the built
+  app by the coordinating session. Mermaid's live in-app render could not
+  be directly observed by either the executor or the coordinating session
+  — the app's hidden Mermaid WKWebView stalls indefinitely on "Rendering
+  diagram..." in this sandboxed environment, a pre-existing quirk already
+  documented against the *old* pinned version in Plan 003's notes above,
+  not something this version bump introduced. Recommend a human do one
+  live Mermaid smoke-test in a normal (non-sandboxed) session before this
+  ships in a release, given the major-version risk.
 
 ## Dependency notes
 
