@@ -154,14 +154,31 @@ enum InlineMarkdown {
     private static func delimitedToken(in text: String, at index: String.Index, delimiter: String) -> (content: String, end: String.Index)? {
         guard text[index...].hasPrefix(delimiter),
               let contentStart = text.index(index, offsetBy: delimiter.count, limitedBy: text.endIndex),
-              contentStart < text.endIndex,
-              let closeRange = text[contentStart...].range(of: delimiter),
-              contentStart < closeRange.lowerBound else {
+              contentStart < text.endIndex else {
             return nil
         }
 
-        let content = String(text[contentStart..<closeRange.lowerBound])
-        return (content, closeRange.upperBound)
+        var searchStart = contentStart
+        while searchStart < text.endIndex,
+              let closeRange = text[searchStart...].range(of: delimiter) {
+            guard contentStart < closeRange.lowerBound else { return nil }
+
+            // A closing delimiter preceded by an unescaped backslash is itself
+            // escaped text, not a real close — keep scanning past it.
+            let precedingBackslashes = text[contentStart..<closeRange.lowerBound]
+                .reversed()
+                .prefix(while: { $0 == "\\" })
+                .count
+            if precedingBackslashes % 2 == 1 {
+                searchStart = closeRange.upperBound
+                continue
+            }
+
+            let content = String(text[contentStart..<closeRange.lowerBound])
+            return (content, closeRange.upperBound)
+        }
+
+        return nil
     }
 
     private static func imageToken(in text: String, at index: String.Index) -> (alt: String, source: String, end: String.Index)? {

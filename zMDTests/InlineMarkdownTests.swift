@@ -77,6 +77,13 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertNil(ExportManager.safeDOCXHyperlinkURL("#fragment"))
     }
 
+    func testEmphasisSkipsEscapedDelimiter() {
+        XCTAssertEqual(
+            InlineMarkdown.tokenize("*a\\*b*"),
+            [.emphasis("a\\*b")]
+        )
+    }
+
     func testMathExtractionDoesNotReuseUserAuthoredPlaceholderText() {
         let extraction = ExportManager.shared.extractMathFromMarkdown("literal ZMDMATHPH0ZMDEND and $x + y$")
 
