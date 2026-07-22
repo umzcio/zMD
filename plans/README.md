@@ -215,12 +215,12 @@ in/out asymmetry, find-bar slide, scroll-to-heading easing.
 
 | Plan | Title | Severity | Depends on | Status |
 |------|-------|----------|------------|--------|
-| 019 | Quick Open instant presentation (match ⌘K) | HIGH | — | TODO |
-| 020 | Motion tokens + system Reduce Motion support | MEDIUM | — | TODO |
-| 021 | Dirty-dot pulse easing + fade-out on save | MEDIUM | 020 (soft) | TODO |
-| 022 | Entrance scale normalization (tabs, toasts) | LOW | 020 (soft) | TODO |
-| 023 | Welcome stagger + spring tightening | LOW | 020 (soft) | TODO |
-| 024 | Press feedback on welcome primary buttons | LOW (additive) | 020 (soft) | TODO |
+| 019 | Quick Open instant presentation (match ⌘K) | HIGH | — | DONE — feel-check pending |
+| 020 | Motion tokens + system Reduce Motion support | MEDIUM | — | DONE — Reduce Motion feel-check pending |
+| 021 | Dirty-dot pulse easing + fade-out on save | MEDIUM | 020 (soft) | DONE — feel-check pending |
+| 022 | Entrance scale normalization (tabs, toasts) | LOW | 020 (soft) | DONE — feel-check pending |
+| 023 | Welcome stagger + spring tightening | LOW | 020 (soft) | DONE — feel-check pending |
+| 024 | Press feedback on welcome primary buttons | LOW (additive) | 020 (soft) | DONE — feel-check pending |
 
 Execution order: 019 first (standalone deletion), then 020 (establishes the
 `Motion` tokens the rest reference), then 021–024 in any order. The soft
