@@ -102,6 +102,13 @@ struct MarkdownTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
+        // Captured BEFORE the reassignment below so we can tell a tab/document switch apart
+        // from a same-document content edit (Plan 009) — the coordinator is reused across
+        // document switches within a pane (see comment below), so `documentId` itself always
+        // reads as "current" by the time the debounce decision is made unless we snapshot the
+        // prior value first.
+        let previousDocumentId = context.coordinator.documentId
+
         // Coordinator instances are reused across document switches within the same pane
         // (same view identity, new `content`/`documentId` params) — refresh this on every
         // pass so the diagram-render filter always reflects what's CURRENTLY displayed, not
@@ -115,54 +122,30 @@ struct MarkdownTextView: NSViewRepresentable {
             || context.coordinator.lastIsCaseSensitive != isCaseSensitive
         let matchIndexChanged = context.coordinator.lastMatchIndex != currentMatchIndex
         let zoomChanged = context.coordinator.lastZoomLevel != zoomLevel
+        let documentSwitched = previousDocumentId != documentId
+        // `lastContent == nil` covers both "first render of a fresh/reused Coordinator" and
+        // "diagram-render-forced rebuild" (diagramDidRender resets `lastContent` to nil to force
+        // a rebuild, Plan 003) — neither is live typing, so both must rebuild immediately rather
+        // than ride the typing debounce below.
+        let isFreshOrForcedRebuild = context.coordinator.lastContent == nil
 
         // Keep the Coordinator's mode flags in sync so a future tick can detect the NEXT toggle.
         context.coordinator.lastIsRegex = isRegexSearch
         context.coordinator.lastIsCaseSensitive = isCaseSensitive
 
-        // Full rebuild when content or zoom changes
+        // Full rebuild when content or zoom changes. Debounce ONLY a same-document content edit
+        // (live typing) with no zoom change — everything else (zoom, tab/document switch, first
+        // render, diagram-render-forced rebuild) rebuilds with zero delay (Plan 009).
         if contentChanged || zoomChanged {
             context.coordinator.lastZoomLevel = zoomLevel
-            let (attributedString, headingRanges) = buildAttributedString(coordinator: context.coordinator)
-            textView.textStorage?.setAttributedString(attributedString)
-            context.coordinator.headingRanges = headingRanges
-            context.coordinator.lastContent = content
-            context.coordinator.lastSearchText = searchText
-
-            // Find and store all match ranges in the rendered text
-            if !searchText.isEmpty {
-                context.coordinator.findMatchRanges(for: searchText, isRegex: isRegexSearch, isCaseSensitive: isCaseSensitive, in: textView)
-            } else {
-                context.coordinator.matchRanges = []
-            }
-            // C6: paint the flag-aware match ranges onto the freshly rebuilt storage (was previously
-            // painted inside buildAttributedString with a literal case-insensitive search).
-            context.coordinator.updateMatchHighlighting(currentIndex: currentMatchIndex, in: textView, searchText: searchText)
-
-            // Restore scroll position after content is set (only on content change, not zoom)
-            if contentChanged {
-                DispatchQueue.main.async {
-                    if let pinY = context.coordinator.pendingDiagramScrollY {
-                        // Diagram-render rebuild: clamp scroll back to the exact Y the user
-                        // was at before the rebuild. Doc layout may have shifted slightly
-                        // (math attachments arrived) but pinning Y means no visible scroll jump.
-                        context.coordinator.pendingDiagramScrollY = nil
-                        context.coordinator.restoreScrollPosition(pinY, in: scrollView)
-                    } else if initialScrollPosition > 10 && searchText.isEmpty {
-                        context.coordinator.restoreScrollPosition(initialScrollPosition, in: scrollView)
-                    } else if searchText.isEmpty {
-                        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
-                        scrollView.reflectScrolledClipView(scrollView.contentView)
-                    }
-                }
-            }
-
-            // Scroll to first match if searching
-            if !searchText.isEmpty && !context.coordinator.matchRanges.isEmpty {
-                DispatchQueue.main.async {
-                    context.coordinator.scrollToMatch(at: currentMatchIndex, in: textView)
-                }
-            }
+            let isPureContentEdit = contentChanged && !zoomChanged && !documentSwitched && !isFreshOrForcedRebuild
+            context.coordinator.scheduleRebuild(
+                for: self,
+                textView: textView,
+                scrollView: scrollView,
+                contentChanged: contentChanged,
+                immediate: !isPureContentEdit
+            )
         }
         // Lightweight search update — no full rebuild needed
         else if searchChanged {
@@ -249,6 +232,12 @@ struct MarkdownTextView: NSViewRepresentable {
         var isUserScrolling = false
         private var scrollDebounceTimer: Timer?
         private var syncDebounceTimer: Timer?
+        // Coalesces the preview rebuild (full re-parse + NSAttributedString build) while the
+        // user is actively typing in split/source mode, so each keystroke doesn't force a
+        // synchronous main-thread re-parse of the whole document (Plan 009). Only gates *this
+        // pane's reaction* to a content change — DocumentManager.updateContent stays fully
+        // synchronous, so save/source-editor content is never delayed or dropped.
+        private var rebuildDebounceTimer: Timer?
         // Image cache shared across renders
         static var imageCache: NSCache<NSString, NSImage> = {
             let cache = NSCache<NSString, NSImage>()
@@ -277,6 +266,77 @@ struct MarkdownTextView: NSViewRepresentable {
         // visibly shift it. The visible content at that Y may be slightly different post-rebuild
         // (math images replaced text placeholders) but the viewport doesn't jump.
         var pendingDiagramScrollY: CGFloat?
+
+        // MARK: - Preview Rebuild (debounced during typing, Plan 009)
+
+        /// Entry point `updateNSView` routes every full-rebuild trigger through. `immediate`
+        /// distinguishes live typing (debounced 150ms, coalescing a burst of keystrokes into one
+        /// rebuild) from everything else — zoom changes, tab/document switches, first render, and
+        /// diagram-render-forced rebuilds (Plan 003) — which must land with zero delay. `parent`
+        /// is captured as a value-type snapshot at the moment of the call, so a debounced timer
+        /// firing later always rebuilds against the content that was current when it was
+        /// (re)scheduled — each keystroke re-invalidates and reschedules with the latest snapshot,
+        /// so the final edit after typing stops is never dropped.
+        func scheduleRebuild(for parent: MarkdownTextView, textView: NSTextView, scrollView: NSScrollView, contentChanged: Bool, immediate: Bool) {
+            if immediate {
+                rebuildDebounceTimer?.invalidate()
+                rebuildDebounceTimer = nil
+                performRebuild(for: parent, textView: textView, scrollView: scrollView, contentChanged: contentChanged)
+                return
+            }
+            rebuildDebounceTimer?.invalidate()
+            rebuildDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+                self?.rebuildDebounceTimer = nil
+                self?.performRebuild(for: parent, textView: textView, scrollView: scrollView, contentChanged: contentChanged)
+            }
+        }
+
+        /// Does the actual re-parse + NSAttributedString rebuild, plus every side effect that
+        /// used to sit directly in `updateNSView`'s `if contentChanged || zoomChanged` block
+        /// (search-match repopulation/highlighting, scroll-position restore, scroll-to-match) —
+        /// moved here so they run against the freshly rebuilt text storage regardless of whether
+        /// this was reached immediately or after the debounce delay.
+        private func performRebuild(for parent: MarkdownTextView, textView: NSTextView, scrollView: NSScrollView, contentChanged: Bool) {
+            let (attributedString, headingRanges) = parent.buildAttributedString(coordinator: self)
+            textView.textStorage?.setAttributedString(attributedString)
+            self.headingRanges = headingRanges
+            self.lastContent = parent.content
+            self.lastSearchText = parent.searchText
+
+            // Find and store all match ranges in the rendered text
+            if !parent.searchText.isEmpty {
+                findMatchRanges(for: parent.searchText, isRegex: parent.isRegexSearch, isCaseSensitive: parent.isCaseSensitive, in: textView)
+            } else {
+                matchRanges = []
+            }
+            // C6: paint the flag-aware match ranges onto the freshly rebuilt storage.
+            updateMatchHighlighting(currentIndex: parent.currentMatchIndex, in: textView, searchText: parent.searchText)
+
+            // Restore scroll position after content is set (only on content change, not zoom)
+            if contentChanged {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    if let pinY = self.pendingDiagramScrollY {
+                        // Diagram-render rebuild: clamp scroll back to the exact Y the user
+                        // was at before the rebuild.
+                        self.pendingDiagramScrollY = nil
+                        self.restoreScrollPosition(pinY, in: scrollView)
+                    } else if parent.initialScrollPosition > 10 && parent.searchText.isEmpty {
+                        self.restoreScrollPosition(parent.initialScrollPosition, in: scrollView)
+                    } else if parent.searchText.isEmpty {
+                        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                        scrollView.reflectScrolledClipView(scrollView.contentView)
+                    }
+                }
+            }
+
+            // Scroll to first match if searching
+            if !parent.searchText.isEmpty && !matchRanges.isEmpty {
+                DispatchQueue.main.async { [weak self] in
+                    self?.scrollToMatch(at: parent.currentMatchIndex, in: textView)
+                }
+            }
+        }
 
         func scrollToHeading(id: String, in textView: NSTextView) {
             guard let range = headingRanges[id],

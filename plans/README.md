@@ -22,7 +22,7 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | 006 | Add CI workflow | P1 | S | — | DONE — first live GitHub Actions run not yet observed, see note |
 | 007 | Folder-sidebar lifecycle fixes (suppression drop, scan race, tests) | P2 | M | 001 (soft) | TODO |
 | 008 | Fix stale CLAUDE.md claims | P2 | S | — | TODO |
-| 009 | Debounce split-mode preview reparse | P2 | M | 003 (soft) | TODO |
+| 009 | Debounce split-mode preview reparse | P2 | M | 003 (soft) | DONE (see note) |
 | 010 | Bound syntax highlighting to viewport | P2 | M | — | TODO |
 | 011 | Normalize CR/line-separator in math token bridge | P2 | S | — | TODO |
 | 012 | CDN dependency update (mermaid/katex) + cadence | P2 | S–M | — | TODO |
@@ -84,6 +84,26 @@ test suite passes, binary launches cleanly.
   reproduced locally with the unsigned-CI override flags, but no actual
   GitHub Actions run has been observed yet (requires a push). Recommend
   watching the first real run after this lands on `origin`.
+- **009**: fix landed in `zMD/MarkdownTextView.swift` only —
+  `DocumentManager.updateContent` untouched, as required. The rebuild
+  trigger in `Coordinator.updateNSView` now routes through
+  `scheduleRebuild(...)`, which debounces 150ms only when the change is a
+  same-document content edit with no zoom change (`isPureContentEdit`);
+  everything else — zoom, tab/document switch (detected by snapshotting
+  `documentId` before it's overwritten each pass, since the Coordinator is
+  reused across document switches within a pane), first render, and
+  diagram-render-forced rebuilds (Plan 003 resets `lastContent` to `nil` to
+  force one) — rebuilds immediately via the same `lastContent == nil` /
+  document-switch checks, composing with 003's per-document diagram-render
+  filtering without needing to touch `diagramDidRender(_:)` itself. Build
+  and full test suite (all suites) pass. Manual perf verification is
+  reasoned-through rather than observed live (no interactive GUI session in
+  this environment): traced that each keystroke re-invalidates and
+  reschedules the timer with a fresh value-type snapshot of the view struct,
+  so the final edit after typing stops is always what gets rendered — no
+  dropped update by construction. Recommend a human do the actual "type in
+  split mode, watch it feel smoother" check before relying on this for a
+  release.
 
 ## Dependency notes
 
