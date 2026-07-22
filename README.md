@@ -23,11 +23,11 @@
 
 ## Origin
 
-zMD started as a frustration: every "lightweight" markdown editor on macOS is a 200 MB Electron bundle with a subscription page baked in. I wanted the Typora experience (live-rendered, typography-first, no visible syntax noise) without the web tech tax — something that launches instantly, respects the system, and doesn't phone home.
+zMD is a simple markdown reader for macOS, with just enough editing built in when you need to make a change. Open a file, it renders instantly; switch to Source or Split when you want to edit; export to PDF/HTML/Word when you're done.
 
-So this is a native SwiftUI app, under 5 MB, signed and distributed as a direct `.dmg` (not via the Mac App Store, so no sandbox), built around Apple's `NSTextView` for rendering and editing. No Electron, no Tauri, no web views (except for Mermaid and LaTeX, which need a JS runtime). Typora-inspired formatting. Word-class export. Atom-style autocomplete. Free and open.
+It's a native SwiftUI app built around Apple's `NSTextView` rather than a web view — no Electron, no Tauri. Under 5 MB, signed, distributed as a direct `.dmg`.
 
-If you read markdown, write markdown, or hand markdown to other humans as PDFs and Word docs, this is for you.
+If you read markdown, occasionally edit it, or hand markdown to other humans as PDFs and Word docs, this is for you.
 
 ---
 
@@ -123,47 +123,6 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 
 ---
 
-## Architecture
-
-```
-                    +-----------------------------+
-                    |       zMDApp (entry)        |
-                    |   menu commands + shortcuts |
-                    +--------------+--------------+
-                                   |
-                    +--------------+--------------+
-                    |        ContentView          |
-                    |  tab bar + folder sidebar   |
-                    |  outline + status bar       |
-                    +--------------+--------------+
-                                   |
-              +--------------------+--------------------+
-              |                                         |
-   +----------+-----------+               +-------------+----------+
-   |  MarkdownTextView    |               |   SourceEditorView     |
-   |  (preview renderer)  |               |   (editor + gutter)    |
-   |  NSTextView + cache  |               |   NSTextView + hl      |
-   +----------+-----------+               +-------------+----------+
-              |                                         |
-              +--------------------+--------------------+
-                                   |
-                    +--------------+--------------+
-                    |       MarkdownParser        |
-                    |   line-based -> [Element]   |
-                    |   shared parse for both     |
-                    |   preview and export        |
-                    +--------------+--------------+
-                                   |
-        +--------------+-----------+-----------+--------------+
-        |              |                       |              |
-   +----+-----+   +----+-----+           +----+-----+    +----+-----+
-   |  PDF     |   |  HTML    |           |  DOCX    |    |  RTF     |
-   |  export  |   |  export  |           |  export  |    |  export  |
-   +----------+   +----------+           +----------+    +----------+
-```
-
----
-
 ## Quick Start
 
 ### Install
@@ -217,37 +176,9 @@ Produces `build/zMD.dmg` with the drag-to-Applications installer layout.
 
 ---
 
-## Design Decisions
-
-**Why native instead of Electron?** Typora-style markdown editors should feel like *text*, not like a web page in a wrapper. `NSTextView` is 30+ years of Apple engineering optimized for editing. It renders instantly, handles selection/copy/dictation/accessibility for free, and has zero web-tech overhead. The whole app is under 5 MB.
-
-**Why a shared parser for preview AND export?** When the HTML export of a document doesn't match the preview, you've just created two bugs at once. `MarkdownParser` is the single source of truth — both the in-app `NSTextView` renderer and the HTML/PDF/DOCX/RTF exporters consume the same `[Element]` tree.
-
-**Why a custom parser instead of cmark/swift-markdown?** The custom parser is line-based, ~400 LOC, and produces a structure optimized for `NSAttributedString` rendering with incremental element-level caching. Off-the-shelf parsers produce AST trees that need further transformation and don't handle my edge cases (frontmatter, indented code fences inside lists, inline Mermaid).
-
-**Why `NSTextView` for both the editor AND the rendered preview?** Consistency. Both views use the same text layout engine, so selection, find, scroll, and styling all behave identically. The preview is an `NSTextView` with `isEditable = false` and pre-built `NSAttributedString` content.
-
-**Why incremental element-level caching?** Re-rendering a 5,000-line document on every keystroke is brutal. Instead, each parsed `Element` has a content-hash ID, and its rendered `NSAttributedString` is cached. On edit, only changed elements re-render. Cache invalidates on zoom, font change, or diagram render completion.
-
-**Why not use a markdown library like GitHub-flavored?** Simplicity and control. The parser is ~400 lines. If an edge case breaks, I can fix it in minutes. No dependency churn, no vendored binaries, no build-system complexity.
-
----
-
-## Roadmap
-
-Current focus areas (see [issues](https://github.com/umzcio/zMD/issues) for granular tracking):
-
-- **Editor features** — multi-cursor, block-level drag-reorder, table editing, Vim mode (optional)
-- **Preview** — wiki-style `[[backlinks]]`, footnote popovers, export to Reveal.js slideshow
-- **Plugins** — Lua or JavaScript plugin system for custom renderers / export filters
-- **Integrations** — Obsidian / Logseq import, Notion export, Zotero citation pull
-- **Performance** — async parser for 10k+ line documents, progressive rendering
-
----
-
 ## License
 
-[MIT](LICENSE.md) — free to use, modify, and redistribute. If you ship it commercially, drop me a line — I'd love to hear about it. Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md).
+[MIT](LICENSE.md). Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
