@@ -514,18 +514,20 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         func updateMatchHighlighting(currentIndex: Int, in textView: NSTextView, searchText: String) {
-            guard let storage = textView.textStorage else { return }
+            guard let layoutManager = textView.layoutManager,
+                  let storage = textView.textStorage else { return }
 
-            // Clear ONLY the ranges we previously painted. Previously this stripped
-            // .backgroundColor across the entire storage, which also erased legitimate
-            // backgrounds on inline code, code blocks, and table cells (H3). Restore the
-            // original token color afterward in case our overlay had stomped it.
+            // Paint search highlights as the layout manager's TEMPORARY attributes, never
+            // into the text storage. Storage-level painting caused a visible bug: the black
+            // .foregroundColor forced onto matches could not be reliably cleared (the
+            // original token color is unknown at clear time), so every character that
+            // matched an earlier prefix of the query ("h", "hi", …) stayed permanently
+            // black — invisible in dark mode — until the next full rebuild. Temporary
+            // attributes are render-only overlays; removing them restores the underlying
+            // storage attributes exactly, with no bookkeeping of original colors needed.
             for r in searchHighlightRanges where r.location + r.length <= storage.length {
-                storage.removeAttribute(.backgroundColor, range: r)
-                // .foregroundColor was force-overridden to black during highlight; we don't
-                // know the original here, so leave it — the next full rebuild will repaint
-                // with the correct token color. For the common case (search on, search off,
-                // edit) this drift is invisible because typing triggers a rebuild anyway.
+                layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r)
+                layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: r)
             }
             searchHighlightRanges.removeAll(keepingCapacity: true)
 
@@ -534,10 +536,10 @@ struct MarkdownTextView: NSViewRepresentable {
                 guard range.location + range.length <= storage.length else { continue }
                 let isCurrent = index == currentIndex
                 let bgColor = isCurrent ? NSColor.systemOrange : NSColor.systemYellow.withAlphaComponent(0.5)
-                storage.addAttributes([
+                layoutManager.addTemporaryAttributes([
                     .backgroundColor: bgColor,
                     .foregroundColor: NSColor.black
-                ], range: range)
+                ], forCharacterRange: range)
                 searchHighlightRanges.append(range)
             }
         }
