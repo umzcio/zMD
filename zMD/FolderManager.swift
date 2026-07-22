@@ -151,10 +151,18 @@ class FolderManager: ObservableObject {
         var files: [FileTreeItem] = []
 
         for item in contents {
-            let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let resourceValues = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let isDir = resourceValues?.isDirectory ?? false
+            let isSymlink = resourceValues?.isSymbolicLink ?? false
             let relativePath = item.path.replacingOccurrences(of: root.path, with: "")
 
             if isDir {
+                // Skip symlinked directories — buildTree resolves .isDirectoryKey through
+                // symlinks with no cycle detection, so a directory symlink pointing back at
+                // an ancestor (or itself) recurses until the stack overflows and the app
+                // crashes. Since restoreFolder() re-opens the last folder on every launch,
+                // an unguarded cycle here is a crash-on-launch loop a user can't self-fix.
+                guard !isSymlink else { continue }
                 let children = buildTree(at: item, relativeTo: root)
                 // Only include directories that contain markdown files (directly or nested)
                 if containsMarkdownFiles(children) {
