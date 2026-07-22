@@ -14,7 +14,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-stable-c8a96e?style=flat-square" alt="Stable" />
-  <img src="https://img.shields.io/badge/version-2.5-c8a96e?style=flat-square" alt="v2.5" />
+  <img src="https://img.shields.io/github/v/release/umzcio/zMD?style=flat-square&color=c8a96e&label=version" alt="Latest release" />
   <img src="https://img.shields.io/badge/platform-macOS_13%2B-4a9eff?style=flat-square" alt="macOS 13+" />
   <img src="https://img.shields.io/badge/stack-SwiftUI%20%7C%20AppKit%20%7C%20NSTextView-34d399?style=flat-square" alt="Stack" />
 </p>
