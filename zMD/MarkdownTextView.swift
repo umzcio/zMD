@@ -6,6 +6,11 @@ struct MarkdownTextView: NSViewRepresentable {
     let content: String
     let baseURL: URL?
     let directoryBookmark: Data?
+    /// Identifies which open document this pane is currently displaying. Threaded through to
+    /// the Coordinator and stamped on every posted `.diagramRendered` notification so a
+    /// diagram/math render completing in one pane cannot invalidate another pane's cache
+    /// (Plan 003 — was previously a global, unscoped notification).
+    let documentId: UUID
     @Binding var scrollToHeadingId: String?
     let searchText: String
     let currentMatchIndex: Int
@@ -22,10 +27,11 @@ struct MarkdownTextView: NSViewRepresentable {
     let isRegexSearch: Bool
     let isCaseSensitive: Bool
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
+        self.documentId = documentId
         self._scrollToHeadingId = scrollToHeadingId
         self.searchText = searchText
         self.currentMatchIndex = currentMatchIndex
@@ -64,6 +70,7 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
         context.coordinator.baseURL = baseURL
+        context.coordinator.documentId = documentId
         context.coordinator.onScrollPositionChanged = onScrollPositionChanged
         context.coordinator.onMatchCountChanged = onMatchCountChanged
         context.coordinator.onScrollPercentChanged = onScrollPercentChanged
@@ -77,10 +84,14 @@ struct MarkdownTextView: NSViewRepresentable {
             object: scrollView.contentView
         )
 
-        // Listen for diagram render completions
+        // Listen for diagram render completions. Registered with object: nil (rather than
+        // filtering here via NotificationCenter's own object-equality matching) because the
+        // poster's object is a UUID value type — NotificationCenter's object filter is not
+        // documented/reliable for value-type identity, so filtering happens explicitly inside
+        // diagramDidRender(_:) instead (Plan 003).
         NotificationCenter.default.addObserver(
             context.coordinator,
-            selector: #selector(Coordinator.diagramDidRender),
+            selector: #selector(Coordinator.diagramDidRender(_:)),
             name: .diagramRendered,
             object: nil
         )
@@ -90,6 +101,12 @@ struct MarkdownTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+
+        // Coordinator instances are reused across document switches within the same pane
+        // (same view identity, new `content`/`documentId` params) — refresh this on every
+        // pass so the diagram-render filter always reflects what's CURRENTLY displayed, not
+        // whichever document this pane showed when the NSView was first created (Plan 003).
+        context.coordinator.documentId = documentId
 
         // Check if content changed
         let contentChanged = context.coordinator.lastContent != content
@@ -205,6 +222,10 @@ struct MarkdownTextView: NSViewRepresentable {
         var textView: NSTextView?
         var scrollView: NSScrollView?
         var baseURL: URL?
+        // Which open document this pane is CURRENTLY displaying — refreshed on every
+        // updateNSView pass (see comment there). Used to filter incoming .diagramRendered
+        // notifications so a render belonging to a different document/pane is ignored (Plan 003).
+        var documentId: UUID?
         var headingRanges: [String: NSRange] = [:]
         var lastContent: String?
         var lastSearchText: String?
@@ -466,10 +487,22 @@ struct MarkdownTextView: NSViewRepresentable {
         // threshold and comfortably groups the burst from a normal multi-diagram doc.
         private var diagramCoalesceTimer: Timer?
 
-        @objc func diagramDidRender() {
+        // Plan 003: every open pane's coordinator registers for this notification (object: nil
+        // — see registration comment in makeNSView), so without filtering, a diagram/math
+        // render completing in ANY tab/pane would clear every OTHER open pane's elementCache
+        // and force a full re-parse, even for documents with no diagrams at all. Filter to only
+        // the document this pane is currently displaying.
+        @objc func diagramDidRender(_ notification: Notification) {
+            guard let renderedDocumentId = notification.object as? UUID,
+                  let myDocumentId = self.documentId,
+                  renderedDocumentId == myDocumentId else { return }
             diagramCoalesceTimer?.invalidate()
             diagramCoalesceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
+                // Re-check identity at fire time, not just at notification-arrival time: the
+                // user can switch this pane to a different document within the 100ms coalesce
+                // window, and this timer must not then clear the now-displayed document's cache.
+                guard self.documentId == myDocumentId else { return }
                 // Snapshot scroll Y so the post-rebuild restore pins to the user's current
                 // scroll position (not initialScrollPosition, and not an anchor-char position
                 // that visibly shifts when math attachments arrive above the viewport).
@@ -482,7 +515,10 @@ struct MarkdownTextView: NSViewRepresentable {
                 // rebuilds with the now-cached image. Without this, the math/Mermaid
                 // placeholder text stays on screen until the user scrolls/types/resizes
                 // (regression I introduced when adding the 100ms coalesce in Phase 5).
-                DocumentManager.shared.diagramRenderTick &+= 1
+                // Keyed per-document (Plan 003) so this bump only invalidates this document's
+                // own tick, not a shared counter every open pane's ObservableObject subscriber
+                // would otherwise treat as "something changed, re-render everything".
+                DocumentManager.shared.diagramRenderTicks[myDocumentId, default: 0] &+= 1
             }
         }
 
@@ -1083,6 +1119,10 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             Coordinator.remoteImageInFlight.insert(cacheKey)
+            // Captured locally (not via implicit `self`) so the notification carries the
+            // document this image load belongs to — a different pane's coordinator ignores it
+            // (Plan 003).
+            let docId = documentId
             DispatchQueue.global(qos: .userInitiated).async {
                 let image = NSImage(contentsOf: url)
                 DispatchQueue.main.async {
@@ -1091,10 +1131,10 @@ struct MarkdownTextView: NSViewRepresentable {
                         Coordinator.remoteImageFailures.insert(cacheKey)
                         return
                     }
-                    
+
                     Coordinator.remoteImageFailures.remove(cacheKey)
                     Coordinator.imageCache.setObject(image, forKey: cacheKey as NSString)
-                    NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                    NotificationCenter.default.post(name: .diagramRendered, object: docId)
                 }
             }
             return nil
@@ -1172,11 +1212,14 @@ struct MarkdownTextView: NSViewRepresentable {
             placeholder.append(NSAttributedString(string: "\n", attributes: [:]))
             result.append(placeholder)
 
+            // Captured locally so the notification carries the document this diagram belongs
+            // to — a different pane's coordinator ignores it (Plan 003).
+            let docId = documentId
             Task { @MainActor in
                 WebRenderer.shared.renderMermaid(code) { image in
                     guard let image = image else { return }
                     Coordinator.diagramCache.setObject(image, forKey: cacheKey as NSString)
-                    NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                    NotificationCenter.default.post(name: .diagramRendered, object: docId)
                 }
             }
         }
@@ -1201,11 +1244,14 @@ struct MarkdownTextView: NSViewRepresentable {
                 .paragraphStyle: paragraphStyle
             ]))
 
+            // Captured locally so the notification carries the document this math block
+            // belongs to — a different pane's coordinator ignores it (Plan 003).
+            let docId = documentId
             Task { @MainActor in
                 WebRenderer.shared.renderMath(latex, displayMode: true) { image in
                     guard let image = image else { return }
                     Coordinator.diagramCache.setObject(image, forKey: cacheKey as NSString)
-                    NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                    NotificationCenter.default.post(name: .diagramRendered, object: docId)
                 }
             }
         }
@@ -1425,11 +1471,14 @@ struct MarkdownTextView: NSViewRepresentable {
                 attributes[.foregroundColor] = NSColor.systemPurple
                 result.replaceCharacters(in: fullRange, with: NSAttributedString(string: latex, attributes: attributes))
 
+                // Captured locally so the notification carries the document this inline math
+                // belongs to — a different pane's coordinator ignores it (Plan 003).
+                let docId = documentId
                 Task { @MainActor in
                     WebRenderer.shared.renderMath(latex, displayMode: false) { image in
                         guard let image = image else { return }
                         Coordinator.diagramCache.setObject(image, forKey: cacheKey as NSString)
-                        NotificationCenter.default.post(name: .diagramRendered, object: nil)
+                        NotificationCenter.default.post(name: .diagramRendered, object: docId)
                     }
                 }
             }

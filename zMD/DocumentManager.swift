@@ -35,11 +35,17 @@ class DocumentManager: ObservableObject {
     @Published var currentCursorLine: Int = 1
     @Published var currentCursorColumn: Int = 1
 
-    // Bumped by MarkdownTextView.Coordinator after the diagram-render coalesce timer fires.
-    // Forces SwiftUI to re-evaluate the view body so updateNSView runs and rebuilds the
-    // attributed string from cache (now containing the rendered Mermaid/KaTeX images).
-    // Without this, math/diagrams stay as the purple placeholder text on static docs.
-    @Published var diagramRenderTick: Int = 0
+    // Bumped by MarkdownTextView.Coordinator after the diagram-render coalesce timer fires,
+    // keyed by the document whose diagram/math just rendered. Forces SwiftUI to re-evaluate
+    // the view body so updateNSView runs and rebuilds the attributed string from cache (now
+    // containing the rendered Mermaid/KaTeX images). Without this, math/diagrams stay as the
+    // purple placeholder text on static docs.
+    // Per-document (Plan 003): was previously a single shared Int. The coordinator-side
+    // notification handler now filters by document id before this is ever touched, so only
+    // the originating document's entry is bumped; other open panes' coordinators return early
+    // and never reach this. Entries are not removed when a document closes — the map holds
+    // one small Int per document ever opened this session, which is negligible.
+    @Published var diagramRenderTicks: [UUID: Int] = [:]
 
     // Scroll sync in split mode
     @Published var isScrollSyncEnabled: Bool = true
