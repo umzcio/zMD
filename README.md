@@ -247,7 +247,7 @@ Current focus areas (see [issues](https://github.com/umzcio/zMD/issues) for gran
 
 ## License
 
-Free to use, modify, and redistribute. If you ship it commercially, drop me a line — I'd love to hear about it.
+[MIT](LICENSE.md) — free to use, modify, and redistribute. If you ship it commercially, drop me a line — I'd love to hear about it. Want to contribute? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
