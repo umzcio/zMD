@@ -91,18 +91,15 @@ struct TabItem: View {
                 Circle()
                     .fill(Color.accentColor)
                     .frame(width: 6, height: 6)
-                    .scaleEffect(dirtyPulse ? 1.5 : 1.0)
-                    .opacity(dirtyPulse ? 0.6 : 1.0)
+                    .scaleEffect(dirtyPulse ? 1.0 : 1.4)
+                    .opacity(dirtyPulse ? 1.0 : 0.6)
                     .onAppear {
-                        withAnimation(.easeOut(duration: 0.4)) {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
                             dirtyPulse = true
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            withAnimation(.easeIn(duration: 0.2)) {
-                                dirtyPulse = false
-                            }
-                        }
                     }
+                    .onDisappear { dirtyPulse = false }
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
             }
 
             Text(document.name)
@@ -124,6 +121,7 @@ struct TabItem: View {
             .frame(width: 14, height: 14)
             .opacity(isHovered || isSelected ? 1.0 : 0.0)
         }
+        .animation(Motion.fast, value: document.isDirty)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
