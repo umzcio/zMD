@@ -18,10 +18,19 @@ class WebRenderer: NSObject {
     private var katexReady = false
     private var imageCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 100
-        cache.totalCostLimit = 100 * 1024 * 1024
+        // Use the shared Cache constants — this cache previously hardcoded countLimit=100, the
+        // exact thrash value Cache.diagramCountLimit was raised to 2000 to fix.
+        cache.countLimit = Cache.diagramCountLimit
+        cache.totalCostLimit = Cache.diagramByteLimit
         return cache
     }()
+
+    /// Estimated in-memory byte cost of a rendered image, so the cache's totalCostLimit is
+    /// actually enforced (setObject without a cost leaves the byte cap inert).
+    private static func imageCost(_ image: NSImage) -> Int {
+        let size = image.size
+        return max(1, Int(size.width) * Int(size.height) * 4)
+    }
     private var pendingMermaid: [(String, (NSImage?) -> Void)] = []
     private var pendingKatex: [(String, Bool, Bool, (NSImage?) -> Void)] = []
 
@@ -179,12 +188,13 @@ class WebRenderer: NSObject {
 
         self.activeMermaidCompletion = { [weak self] image in
             if let image = image {
-                self?.imageCache.setObject(image, forKey: item.key as NSString)
+                self?.imageCache.setObject(image, forKey: item.key as NSString, cost: Self.imageCost(image))
             }
             item.completion(image)
             self?.isMermaidRendering = false
             self?.processNextMermaidRender()
         }
+        startWatchdog(for: .mermaid)
 
         // L1: prefix with `void` so the statement result is `undefined`. renderMermaid is an async
         // JS function; without `void`, the call evaluates to a Promise that WKWebView cannot
@@ -197,6 +207,7 @@ class WebRenderer: NSObject {
             if error != nil {
                 // Genuine error: drop the active completion so a late mermaidResult cannot invoke it
                 // for the wrong item, then fail this item and advance the queue.
+                self?.cancelWatchdog(for: .mermaid)
                 self?.activeMermaidCompletion = nil
                 item.completion(nil)
                 self?.isMermaidRendering = false
@@ -206,6 +217,95 @@ class WebRenderer: NSObject {
     }
 
     private var activeMermaidCompletion: ((NSImage?) -> Void)?
+
+    // MARK: - Render watchdog
+
+    /// A render whose result never posts back (wedged content process, an img.onload that never
+    /// fires) previously left isMermaidRendering/isKatexRendering stuck true forever — every
+    /// subsequent render queued behind it and the session's diagrams/math were dead with no
+    /// error. The watchdog fails the active item after a generous timeout and advances the queue.
+    private static let renderWatchdogTimeout: TimeInterval = 15
+
+    private enum RenderPipeline { case mermaid, katex }
+
+    private var mermaidWatchdogTimer: Timer?
+    private var katexWatchdogTimer: Timer?
+
+    private func startWatchdog(for pipeline: RenderPipeline) {
+        let timer = Timer.scheduledTimer(withTimeInterval: Self.renderWatchdogTimeout, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                // Consuming the active completion fails the item, resets the isRendering flag,
+                // and advances the queue; a late result for the timed-out item is then ignored
+                // because the completion is already nil.
+                switch pipeline {
+                case .mermaid:
+                    if let cb = self.activeMermaidCompletion {
+                        self.activeMermaidCompletion = nil
+                        cb(nil)
+                    }
+                case .katex:
+                    if let cb = self.activeKatexCompletion {
+                        self.activeKatexCompletion = nil
+                        cb(nil)
+                    }
+                }
+            }
+        }
+        switch pipeline {
+        case .mermaid:
+            mermaidWatchdogTimer?.invalidate()
+            mermaidWatchdogTimer = timer
+        case .katex:
+            katexWatchdogTimer?.invalidate()
+            katexWatchdogTimer = timer
+        }
+    }
+
+    private func cancelWatchdog(for pipeline: RenderPipeline) {
+        switch pipeline {
+        case .mermaid:
+            mermaidWatchdogTimer?.invalidate()
+            mermaidWatchdogTimer = nil
+        case .katex:
+            katexWatchdogTimer?.invalidate()
+            katexWatchdogTimer = nil
+        }
+    }
+
+    /// The headless content process died (WebKit kills background/occluded processes under
+    /// memory pressure, and it can simply crash). Fail everything in flight VISIBLY and tear the
+    /// web view down — the next render request rebuilds it from scratch. Without this handler the
+    /// in-flight completion never ran and the pipeline hung for the rest of the session.
+    fileprivate func handleWebContentProcessTermination(_ webView: WKWebView) {
+        if webView === mermaidWebView {
+            cancelWatchdog(for: .mermaid)
+            mermaidReady = false
+            mermaidWebView = nil   // must be nil BEFORE draining so processNext drains, not evaluates
+            let pending = pendingMermaid
+            pendingMermaid = []
+            pending.forEach { $0.1(nil) }
+            if let cb = activeMermaidCompletion {
+                activeMermaidCompletion = nil
+                cb(nil)            // resets isMermaidRendering, advances (and drains) the queue
+            } else {
+                processNextMermaidRender()
+            }
+        } else if webView === katexWebView {
+            cancelWatchdog(for: .katex)
+            katexReady = false
+            katexWebView = nil
+            let pending = pendingKatex
+            pendingKatex = []
+            pending.forEach { $0.3(nil) }
+            if let cb = activeKatexCompletion {
+                activeKatexCompletion = nil
+                cb(nil)
+            } else {
+                processNextKatexRender()
+            }
+        }
+    }
 
     // MARK: - KaTeX
 
@@ -342,12 +442,13 @@ class WebRenderer: NSObject {
 
         self.activeKatexCompletion = { [weak self] image in
             if let image = image {
-                self?.imageCache.setObject(image, forKey: item.key as NSString)
+                self?.imageCache.setObject(image, forKey: item.key as NSString, cost: Self.imageCost(image))
             }
             item.completion(image)
             self?.isKatexRendering = false
             self?.processNextKatexRender()
         }
+        startWatchdog(for: .katex)
 
         // Pass the isDark flag through to JS so the rendered glyph color matches the user's
         // current appearance. Light text on dark themes (and vice versa) — the WebView is
@@ -355,6 +456,7 @@ class WebRenderer: NSObject {
         // surrounding NSTextView.
         webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(item.displayMode), \(item.isDark))") { [weak self] _, error in
             if error != nil {
+                self?.cancelWatchdog(for: .katex)
                 self?.activeKatexCompletion = nil
                 item.completion(nil)
                 self?.isKatexRendering = false
@@ -407,6 +509,7 @@ extension WebRenderer: WKScriptMessageHandler {
             }
 
         case "mermaidResult":
+            cancelWatchdog(for: .mermaid)
             if let image = imageFromBase64DataURL(bodyString) {
                 activeMermaidCompletion?(image)
             } else {
@@ -424,6 +527,7 @@ extension WebRenderer: WKScriptMessageHandler {
             }
 
         case "katexResult":
+            cancelWatchdog(for: .katex)
             _zmdNoop("[WebRenderer] katexResult received, body: \(bodyString.prefix(200))")
             if bodyString.hasPrefix("ERROR") {
                 _zmdNoop("[WebRenderer] katexResult ERROR")
@@ -470,6 +574,11 @@ extension WebRenderer: WKNavigationDelegate {
     }
     nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         _zmdNoop("[WebRenderer] WKNav didStartProvisional")
+    }
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Task { @MainActor in
+            self.handleWebContentProcessTermination(webView)
+        }
     }
 }
 

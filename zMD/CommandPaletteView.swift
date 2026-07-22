@@ -21,7 +21,10 @@ enum CommandCategory: String, CaseIterable {
 }
 
 struct CommandAction: Identifiable {
-    let id = UUID()
+    // Identity must be stable across registry rebuilds — `let id = UUID()` minted fresh ids on
+    // every build, so ForEach saw an all-new list per keystroke and re-diffed every row. Names
+    // are unique within the registry.
+    var id: String { name }
     let name: String
     let category: CommandCategory
     let shortcut: String?
@@ -196,12 +199,19 @@ struct CommandPaletteOverlay: View {
     @Binding var isPresented: Bool
     @State private var searchText = ""
     @State private var selectedIndex = 0
+    // Built once on appear, filtered once per query change. The old computed property rebuilt
+    // the whole registry (~35 allocations) and re-ran fuzzy matching + sorting on EVERY access,
+    // and body accessed it several times per render. Registry enablement stays live because
+    // isEnabled is a closure evaluated at render/execute time, not at build time.
+    @State private var allCommands: [CommandAction] = []
+    @State private var filteredCommands: [CommandAction] = []
 
-    private var filteredCommands: [CommandAction] {
-        let all = CommandRegistry.commands(documentManager: documentManager, folderManager: folderManager)
-        if searchText.isEmpty { return all }
-
-        return all.compactMap { cmd -> (CommandAction, Int)? in
+    private func refreshFilteredCommands() {
+        if searchText.isEmpty {
+            filteredCommands = allCommands
+            return
+        }
+        filteredCommands = allCommands.compactMap { cmd -> (CommandAction, Int)? in
             guard let result = fuzzyMatch(query: searchText, target: cmd.name) else { return nil }
             return (cmd, result.score)
         }
@@ -217,6 +227,8 @@ struct CommandPaletteOverlay: View {
                 .onTapGesture {
                     isPresented = false
                 }
+                .accessibilityLabel("Dismiss")
+                .accessibilityAddTraits(.isButton)
 
             // Palette
             VStack(spacing: 0) {
@@ -224,7 +236,7 @@ struct CommandPaletteOverlay: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 14))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
 
                     CommandPaletteTextField(
                         text: $searchText,
@@ -245,15 +257,19 @@ struct CommandPaletteOverlay: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(Array(filteredCommands.enumerated()), id: \.element.id) { index, command in
-                                CommandRow(
-                                    command: command,
-                                    isSelected: index == selectedIndex
-                                )
-                                .id(index)
-                                .onTapGesture {
+                                // Button, not onTapGesture — rows carry no button trait
+                                // otherwise, so VoiceOver couldn't activate them.
+                                Button {
                                     selectedIndex = index
                                     executeSelected()
+                                } label: {
+                                    CommandRow(
+                                        command: command,
+                                        isSelected: index == selectedIndex
+                                    )
                                 }
+                                .buttonStyle(PlainButtonStyle())
+                                .id(index)
                             }
                         }
                         .padding(.vertical, 4)
@@ -269,7 +285,7 @@ struct CommandPaletteOverlay: View {
                 if filteredCommands.isEmpty {
                     Text("No matching commands")
                         .font(.system(size: 12))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .padding(.vertical, 20)
                 }
             }
@@ -282,6 +298,11 @@ struct CommandPaletteOverlay: View {
         }
         .onChange(of: searchText) { _ in
             selectedIndex = 0
+            refreshFilteredCommands()
+        }
+        .onAppear {
+            allCommands = CommandRegistry.commands(documentManager: documentManager, folderManager: folderManager)
+            refreshFilteredCommands()
         }
     }
 
@@ -305,7 +326,7 @@ struct CommandRow: View {
             // Category badge
             Text(command.category.rawValue)
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(
@@ -316,13 +337,13 @@ struct CommandRow: View {
             // Icon
             Image(systemName: command.icon)
                 .font(.system(size: 12))
-                .foregroundColor(command.isEnabled() ? .primary : .secondary)
+                .foregroundStyle(command.isEnabled() ? .primary : .secondary)
                 .frame(width: 16)
 
             // Name
             Text(command.name)
                 .font(.system(size: 13))
-                .foregroundColor(command.isEnabled() ? .primary : .secondary)
+                .foregroundStyle(command.isEnabled() ? .primary : .secondary)
 
             Spacer()
 
@@ -330,7 +351,7 @@ struct CommandRow: View {
             if let shortcut = command.shortcut {
                 Text(shortcut)
                     .font(.system(size: 11, design: .rounded))
-                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    .foregroundStyle(Color(NSColor.tertiaryLabelColor))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(

@@ -124,6 +124,12 @@ struct SourceEditorView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
         context.coordinator.onScrollPercentChanged = onScrollPercentChanged
+        // Refresh the write-out closure every update pass. The coordinator outlives document
+        // switches (no .id(document.id) on this editor — that's what boundDocumentId exists for),
+        // but the closure captures a fixed document id from the render that created it. Keeping
+        // the makeCoordinator-era closure meant every edit after a tab switch was routed to
+        // updateContent(for: FIRST-document-id) — the write-out half of the cb7fb48 data-loss bug.
+        context.coordinator.onContentChange = onContentChange
 
         if context.coordinator.zoomLevel != zoomLevel {
             context.coordinator.zoomLevel = zoomLevel
@@ -185,7 +191,16 @@ struct SourceEditorView: NSViewRepresentable {
         } else if !textViewHasFocus && textView.string != content {
             let selectedRanges = textView.selectedRanges
             textView.string = content
-            textView.selectedRanges = selectedRanges
+            // Clamp restored ranges to the new length — an external reload that shortens the
+            // document while the caret sits near the old end would otherwise restore an
+            // out-of-bounds range (NSTextView raises NSRangeException for those).
+            let newLength = (textView.string as NSString).length
+            textView.selectedRanges = selectedRanges.map { value in
+                let r = value.rangeValue
+                let location = min(r.location, newLength)
+                let length = min(r.length, newLength - location)
+                return NSValue(range: NSRange(location: location, length: length))
+            }
             context.coordinator.invalidateCursorPositionCache()  // P3: programmatic replace, no textDidChange
             // Full-range for the same reason as the document-switch branch above: this is a
             // content resync (e.g. external file-change reload), not per-keystroke typing, and
@@ -236,7 +251,10 @@ struct SourceEditorView: NSViewRepresentable {
         var boundDocumentId: UUID?
         var zoomLevel: CGFloat = 1.0
         var onScrollPercentChanged: ((CGFloat) -> Void)?
-        let onContentChange: ((String) -> Void)?
+        // `var`, refreshed by every updateNSView pass — never keep the closure this coordinator
+        // was created with, because it captures the document id of whichever document the pane
+        // showed first (see the updateNSView comment; stale closure = cross-document data loss).
+        var onContentChange: ((String) -> Void)?
         private var highlightTimer: Timer?
         private var autocompleteTimer: Timer?
         private var scrollDebounceTimer: Timer?
@@ -592,7 +610,19 @@ struct SourceEditorView: NSViewRepresentable {
             storage.endEditing()
         }
 
+        // Ranges that currently carry a search-match .backgroundColor. Every repaint clears
+        // exactly these before painting the new set — without the bookkeeping, erasing the query
+        // (or a shrinking match list) left stale yellow/accent backgrounds behind until the next
+        // wholesale content replace. Same bug class as the preview-side stuck highlights fixed
+        // in v2.8.1, on the editor side.
+        private var paintedSearchRanges: [NSRange] = []
+
         private func paintSearchMatchBackgrounds(in storage: NSTextStorage) {
+            for r in paintedSearchRanges where NSMaxRange(r) <= storage.length {
+                storage.removeAttribute(.backgroundColor, range: r)
+            }
+            paintedSearchRanges.removeAll(keepingCapacity: true)
+
             if !searchText.isEmpty && !searchMatches.isEmpty {
                 let plainColor = NSColor.systemYellow.withAlphaComponent(0.4)
                 let activeColor = NSColor.controlAccentColor.withAlphaComponent(0.5)
@@ -603,6 +633,7 @@ struct SourceEditorView: NSViewRepresentable {
                           NSMaxRange(nsRange) <= storage.length else { continue }
                     let color = (i == currentMatchIndex) ? activeColor : plainColor
                     storage.addAttribute(.backgroundColor, value: color, range: nsRange)
+                    paintedSearchRanges.append(nsRange)
                 }
             }
         }

@@ -14,10 +14,10 @@ struct OutlineView: View {
             HStack {
                 Image(systemName: "list.bullet.indent")
                     .font(.system(size: 14))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                 Text("OUTLINE")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -31,7 +31,7 @@ struct OutlineView: View {
                     if headings.isEmpty {
                         Text("No headings")
                             .font(.system(size: 11))
-                            .foregroundColor(.secondary.opacity(0.7))
+                            .foregroundStyle(Color.secondary.opacity(0.7))
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
                     } else {
@@ -81,7 +81,7 @@ struct OutlineItemView: View {
             HStack(spacing: 6) {
                 Text(item.text)
                     .font(.system(size: fontSize))
-                    .foregroundColor(isActive ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
+                    .foregroundStyle(isActive ? Color.primary : (isHovered ? Color.primary.opacity(0.8) : Color.secondary))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

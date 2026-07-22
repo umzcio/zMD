@@ -85,7 +85,7 @@ private struct ToolbarButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.primary.opacity(0.75))
+                .foregroundStyle(Color.primary.opacity(0.75))
                 .frame(width: 28, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
@@ -94,6 +94,7 @@ private struct ToolbarButton: View {
         }
         .buttonStyle(.plain)
         .help(tooltip)
+        .accessibilityLabel(tooltip)
         .onHover { hovering in
             isHovered = hovering
         }

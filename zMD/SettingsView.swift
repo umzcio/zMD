@@ -70,15 +70,9 @@ struct GeneralSettingsTab: View {
     var body: some View {
         Form {
             Section("Editor") {
-                Toggle("Auto-save files", isOn: Binding(
-                    get: { documentManager.autoSaveEnabled },
-                    set: { documentManager.autoSaveEnabled = $0 }
-                ))
+                Toggle("Auto-save files", isOn: $documentManager.autoSaveEnabled)
 
-                Toggle("Scroll sync in split view", isOn: Binding(
-                    get: { documentManager.isScrollSyncEnabled },
-                    set: { documentManager.isScrollSyncEnabled = $0 }
-                ))
+                Toggle("Scroll sync in split view", isOn: $documentManager.isScrollSyncEnabled)
 
                 Toggle("Auto-close brackets & quotes", isOn: $settings.autoCloseBrackets)
 
@@ -96,10 +90,7 @@ struct GeneralSettingsTab: View {
             }
 
             Section("Default View") {
-                Picker("Mode", selection: Binding(
-                    get: { documentManager.viewMode },
-                    set: { documentManager.viewMode = $0 }
-                )) {
+                Picker("Mode", selection: $documentManager.viewMode) {
                     Text("Preview").tag(ViewMode.preview)
                     Text("Source").tag(ViewMode.source)
                     Text("Split").tag(ViewMode.split)
@@ -137,11 +128,11 @@ struct AppearanceSettingsTab: View {
 
                 HStack {
                     Text("Preview")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Spacer()
                     Text("The quick brown fox jumps over the lazy dog")
                         .font(settings.fontStyle.font(size: 13))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
@@ -155,6 +146,7 @@ struct AppearanceSettingsTab: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(settings.zoomLevel <= 0.5)
+                    .accessibilityLabel("Zoom Out")
 
                     Spacer()
 
@@ -171,6 +163,7 @@ struct AppearanceSettingsTab: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(settings.zoomLevel >= 2.0)
+                    .accessibilityLabel("Zoom In")
                 }
 
                 if settings.zoomLevel != 1.0 {
@@ -189,6 +182,10 @@ struct AppearanceSettingsTab: View {
 // MARK: - About
 
 struct AboutTab: View {
+    // Must observe UpdateManager — the button's disabled state below reads isChecking, and
+    // without observation the view never re-renders when the check starts/finishes.
+    @ObservedObject private var updateManager = UpdateManager.shared
+
     var body: some View {
         VStack(spacing: 16) {
             Spacer()
@@ -202,22 +199,22 @@ struct AboutTab: View {
 
             Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
                 .font(.system(size: 13))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
 
             Text("A lightweight markdown viewer for macOS")
                 .font(.system(size: 12))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
 
             Button("Check for Updates...") {
-                UpdateManager.shared.checkForUpdates()
+                updateManager.checkForUpdates()
             }
-            .disabled(UpdateManager.shared.isChecking)
+            .disabled(updateManager.isChecking)
 
             Spacer()
 
             Text("Made with care by UMZCIO")
                 .font(.system(size: 11))
-                .foregroundColor(.secondary.opacity(0.5))
+                .foregroundStyle(Color.secondary.opacity(0.5))
                 .padding(.bottom, 12)
         }
     }

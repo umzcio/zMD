@@ -12,10 +12,10 @@ struct FolderSidebarView: View {
             HStack {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 12))
-                    .foregroundColor(.accentColor)
+                    .foregroundStyle(Color.accentColor)
                 Text(folderManager.folderURL?.lastPathComponent ?? "Folder")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
                 Button(action: {
@@ -26,7 +26,7 @@ struct FolderSidebarView: View {
                 }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(closeButtonHovered ? .primary : .secondary)
+                        .foregroundStyle(closeButtonHovered ? .primary : .secondary)
                         .frame(width: 18, height: 18)
                         .background(
                             RoundedRectangle(cornerRadius: 3)
@@ -34,6 +34,7 @@ struct FolderSidebarView: View {
                         )
                 }
                 .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Close Folder")
                 .onHover { hovering in
                     withAnimation(Motion.fast) {
                         closeButtonHovered = hovering
@@ -104,7 +105,7 @@ struct FileTreeItemView: View {
                     if item.isDirectory {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(Color(nsColor: .secondaryLabelColor))
+                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                             .frame(width: 12)
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     } else {
@@ -114,12 +115,12 @@ struct FileTreeItemView: View {
 
                     Image(systemName: item.isDirectory ? (isExpanded ? "folder.fill" : "folder") : "doc.text")
                         .font(.system(size: 12))
-                        .foregroundColor(item.isDirectory ? .accentColor : .secondary)
+                        .foregroundStyle(item.isDirectory ? Color.accentColor : Color.secondary)
 
                     Text(item.name)
                         .font(.system(size: 12))
                         .lineLimit(1)
-                        .foregroundColor(isActive ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
+                        .foregroundStyle(isActive ? Color.primary : (isHovered ? Color.primary.opacity(0.8) : Color.secondary))
 
                     Spacer()
                 }

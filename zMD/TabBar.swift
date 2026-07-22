@@ -28,7 +28,7 @@ struct TabBar: View {
             }) {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(addButtonHovered ? .primary : .secondary)
+                    .foregroundStyle(addButtonHovered ? .primary : .secondary)
                     .frame(width: 28, height: 28)
                     .background(
                         Circle()
@@ -44,6 +44,7 @@ struct TabBar: View {
             }
             .padding(.horizontal, 4)
             .help("Open File")
+            .accessibilityLabel("Open File")
 
             // View mode picker
             Picker("", selection: $documentManager.viewMode) {
@@ -65,11 +66,12 @@ struct TabBar: View {
             }) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 14))
-                    .foregroundColor(showOutline ? .accentColor : .secondary)
+                    .foregroundStyle(showOutline ? Color.accentColor : Color.secondary)
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(PlainButtonStyle())
             .help("Toggle Outline")
+            .accessibilityLabel("Toggle Outline")
             .padding(.horizontal, 8)
         }
         .frame(height: 32)
@@ -105,7 +107,7 @@ struct TabItem: View {
             Text(document.name)
                 .font(.system(size: 12))
                 .lineLimit(1)
-                .foregroundColor(isSelected ? .primary : (isHovered ? .primary.opacity(0.8) : .secondary))
+                .foregroundStyle(isSelected ? Color.primary : (isHovered ? Color.primary.opacity(0.8) : Color.secondary))
 
             Button(action: {
                 NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
@@ -115,11 +117,12 @@ struct TabItem: View {
             }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(PlainButtonStyle())
             .frame(width: 14, height: 14)
             .opacity(isHovered || isSelected ? 1.0 : 0.0)
+            .accessibilityLabel("Close \(document.name)")
         }
         .animation(Motion.fast, value: document.isDirty)
         .padding(.horizontal, 12)
@@ -142,6 +145,10 @@ struct TabItem: View {
         .onTapGesture {
             documentManager.selectedDocumentId = document.id
         }
+        // The row can't be a Button (it hosts a nested close Button plus onDrag/onDrop), so at
+        // minimum expose the tap as a button to VoiceOver.
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(document.isDirty ? "\(document.name), edited" : document.name)
         .onDrag {
             documentManager.draggingDocumentId = document.id
             return NSItemProvider(object: document.id.uuidString as NSString)

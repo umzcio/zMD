@@ -14,6 +14,11 @@ class MinimapView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// Last content version the SwiftUI wrapper invalidated for — the wrapper's dedupe key so
+    /// unrelated parent re-renders (caret moves, scroll-sync publishes) don't schedule bitmap
+    /// regeneration. See MinimapViewRepresentable.updateNSView.
+    var lastInvalidatedContentVersion: Int = -1
+
     override var intrinsicContentSize: NSSize {
         NSSize(width: minimapWidth, height: NSView.noIntrinsicMetric)
     }
@@ -215,12 +220,22 @@ struct MinimapViewRepresentable: NSViewRepresentable {
         let minimap = MinimapView(frame: .zero)
         minimap.linkedTextView = textView
         minimap.linkedScrollView = scrollView
+        minimap.lastInvalidatedContentVersion = contentVersion
+        minimap.invalidateContent()
         return minimap
     }
 
     func updateNSView(_ nsView: MinimapView, context: Context) {
+        // Regenerate the bitmap only when the content (or the linked views) actually changed.
+        // Unconditional invalidation meant every parent re-render — each caret move, every
+        // scroll-sync publish — scheduled a full O(document) image regeneration; the debounce
+        // limited the frequency but the work recurred continuously during plain cursor movement.
+        let viewsChanged = nsView.linkedTextView !== textView || nsView.linkedScrollView !== scrollView
         nsView.linkedTextView = textView
         nsView.linkedScrollView = scrollView
-        nsView.invalidateContent()
+        if viewsChanged || nsView.lastInvalidatedContentVersion != contentVersion {
+            nsView.lastInvalidatedContentVersion = contentVersion
+            nsView.invalidateContent()
+        }
     }
 }

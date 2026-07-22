@@ -292,7 +292,12 @@ class DocumentManager: ObservableObject {
         let (fileContent, encoding) = decodeFileData(data)
 
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
-            fileWatchers[document.id]?.ignoreNextChange = true
+            // Deliberately NOT arming fileWatchers[...]?.ignoreNextChange here: reload only READS
+            // the file, so there is no self-write echo to suppress. Arming the flag left it set
+            // until the next genuine external edit, which FileWatcher then consumed silently
+            // (reconciling lastModificationDate in the process) — so the pending-external-change
+            // guard passed and auto-save overwrote the external edit. The watcher's own
+            // modification-date check already ignores any spurious event from a read.
             // C8: mutate in place. Rebuilding via MarkdownDocument(id:url:content:) dropped every
             // other field (bookmarkData, directoryBookmarkData, isUntitled) — the same field-loss
             // bug already fixed for rename/move. directoryBookmarkData is what MarkdownTextView uses
@@ -633,11 +638,9 @@ class DocumentManager: ObservableObject {
             let savePanel = NSSavePanel()
             savePanel.nameFieldStringValue = document.url.lastPathComponent
             savePanel.directoryURL = document.url.deletingLastPathComponent()
-            // Capture content snapshot for the closure — we re-resolve the document index by id
-            // at completion time because the user can close other tabs while the panel is up,
-            // shifting `index`. Previously the captured `index` could point to the wrong row
-            // (or be out of bounds → crash).
-            let contentSnapshot = document.content
+            // We re-resolve the document index by id at completion time because the user can
+            // close other tabs while the panel is up, shifting `index`. Previously the captured
+            // `index` could point to the wrong row (or be out of bounds → crash).
             savePanel.begin { [weak self] response in
                 guard let self = self else { return }
                 guard response == .OK, let newURL = savePanel.url else {
@@ -650,7 +653,11 @@ class DocumentManager: ObservableObject {
                     return
                 }
                 do {
-                    try contentSnapshot.write(to: newURL, atomically: true, encoding: saveEncoding)
+                    // Write the LIVE content at completion time, not a snapshot captured before
+                    // the panel opened — edits typed while the panel was up were previously never
+                    // written, yet isDirty was cleared, so quitting right after silently lost
+                    // them. (The untitled-save path already did this correctly.)
+                    try self.openDocuments[idx].content.write(to: newURL, atomically: true, encoding: saveEncoding)
                     self.openDocuments[idx].isDirty = false
                     self.openDocuments[idx].url = newURL
                     self.openDocuments[idx].bookmarkData = try? newURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
@@ -1261,7 +1268,9 @@ extension DocumentManager {
             if !isCaseSensitive { options.insert(.caseInsensitive) }
             if let regex = try? NSRegularExpression(pattern: searchText, options: options) {
                 let nsContent = content as NSString
-                count = min(regex.numberOfMatches(in: content, options: [], range: NSRange(location: 0, length: nsContent.length)), Self.maxSearchMatches)
+                // stringByReplacingMatches replaces ALL matches, so report the true count —
+                // the old min(..., maxSearchMatches) under-reported in the toast.
+                count = regex.numberOfMatches(in: content, options: [], range: NSRange(location: 0, length: nsContent.length))
                 content = regex.stringByReplacingMatches(
                     in: content,
                     options: [],
@@ -1273,12 +1282,28 @@ extension DocumentManager {
                 return
             }
         } else {
-            // Replace in reverse order to maintain valid ranges
-            let matches = Self.plainMatches(pattern: searchText, content: content, caseSensitive: isCaseSensitive)
-            count = matches.count
-            for match in matches.reversed() {
-                guard let range = Range(match.range, in: content) else { continue }
-                content.replaceSubrange(range, with: replaceText)
+            // Uncapped scan: plainMatches caps at maxSearchMatches (a display protection), which
+            // silently left occurrences beyond the cap unreplaced while the toast claimed
+            // completion. Collect every range in one forward pass over the ORIGINAL content,
+            // then replace in reverse order to maintain valid ranges (a replace-then-rescan loop
+            // would never terminate when replaceText contains searchText, e.g. "a" → "aa").
+            var searchOptions: NSString.CompareOptions = []
+            if !isCaseSensitive { searchOptions.insert(.caseInsensitive) }
+            let nsContent = content as NSString
+            var ranges: [NSRange] = []
+            var searchRange = NSRange(location: 0, length: nsContent.length)
+            while searchRange.location < nsContent.length {
+                let range = nsContent.range(of: searchText, options: searchOptions, range: searchRange)
+                guard range.location != NSNotFound else { break }
+                ranges.append(range)
+                let advance = max(1, range.length)
+                searchRange.location = range.location + advance
+                searchRange.length = max(0, nsContent.length - searchRange.location)
+            }
+            count = ranges.count
+            for range in ranges.reversed() {
+                guard let swiftRange = Range(range, in: content) else { continue }
+                content.replaceSubrange(swiftRange, with: replaceText)
             }
         }
 

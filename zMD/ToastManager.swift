@@ -79,11 +79,11 @@ struct ToastView: View {
         HStack(spacing: 8) {
             Image(systemName: toast.style.icon)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundColor(toast.style.color)
+                .foregroundStyle(toast.style.color)
 
             Text(toast.message)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.primary)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 14)

@@ -25,7 +25,10 @@ struct QuickOpenView: NSViewRepresentable {
     func updateNSView(_ nsView: QuickOpenNSView, context: Context) {
         nsView.documentManager = documentManager
         nsView.folderManager = folderManager
-        nsView.reloadData()
+        // Don't reset the user's arrow-key selection: updateNSView fires for ANY @Published
+        // change on the managers while the palette is open (file-watcher reload, folder tree
+        // refresh), not just ones that affect this list.
+        nsView.reloadData(resetSelection: false)
     }
 }
 
@@ -78,7 +81,7 @@ class QuickOpenNSView: NSView {
         let searchContainer = NSView()
         searchContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        let searchIcon = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)!)
+        let searchIcon = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search") ?? NSImage())
         searchIcon.translatesAutoresizingMaskIntoConstraints = false
         searchIcon.contentTintColor = .secondaryLabelColor
         searchContainer.addSubview(searchIcon)
@@ -193,11 +196,15 @@ class QuickOpenNSView: NSView {
         ])
     }
 
-    func reloadData() {
+    func reloadData(resetSelection: Bool = true) {
+        let previousRow = tableView.selectedRow
         updateFilteredResults()
         tableView.reloadData()
         if !filteredItems.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            let row = resetSelection || previousRow < 0
+                ? 0
+                : min(previousRow, filteredItems.count - 1)
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
 
@@ -474,7 +481,7 @@ extension QuickOpenNSView: NSTableViewDelegate, NSTableViewDataSource {
             if let icon = item.icon {
                 iconView = NSImageView(image: icon)
             } else {
-                iconView = NSImageView(image: NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!)
+                iconView = NSImageView(image: NSImage(systemSymbolName: "doc.text", accessibilityDescription: "Document") ?? NSImage())
             }
             iconView.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(iconView)
@@ -527,6 +534,8 @@ struct QuickOpenOverlay: View {
                     .onTapGesture {
                         isPresented = false
                     }
+                    .accessibilityLabel("Dismiss")
+                    .accessibilityAddTraits(.isButton)
 
                 VStack {
                     QuickOpenView(isPresented: $isPresented, selectedHeadingId: $selectedHeadingId)
@@ -534,7 +543,7 @@ struct QuickOpenOverlay: View {
                         .environmentObject(folderManager)
                         .frame(width: 500, height: 350)
                         .background(Color(NSColor.windowBackgroundColor))
-                        .cornerRadius(12)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                         .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
                     Spacer()
                 }

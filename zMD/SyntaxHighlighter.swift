@@ -220,18 +220,24 @@ class SyntaxHighlighter {
         // Numbers
         highlightPattern(#"\b\d+\.?\d*\b"#, in: result, color: numberColor)
 
-        // Keywords (case-insensitive for SQL)
-        let text = result.string as NSString
-        for keyword in sqlKeywords {
-            let pattern = "\\b\(keyword)\\b"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: text.length))
-                for match in matches {
-                    result.addAttribute(.foregroundColor, value: keywordColor, range: match.range)
-                }
+        // Keywords (case-insensitive for SQL). One cached alternation regex — the old
+        // per-keyword loop bypassed regexCache and compiled ~60 fresh NSRegularExpressions on
+        // EVERY call, and the preview highlights code blocks per line, so a 100-line SQL block
+        // compiled ~6000 regexes per rebuild.
+        if let regex = Self.sqlKeywordRegex {
+            let text = result.string as NSString
+            let matches = regex.matches(in: result.string, range: NSRange(location: 0, length: text.length))
+            for match in matches {
+                result.addAttribute(.foregroundColor, value: keywordColor, range: match.range)
             }
         }
     }
+
+    /// Compiled once: `\b(SELECT|FROM|...)\b`, case-insensitive. Built from `sqlKeywords`.
+    private static let sqlKeywordRegex: NSRegularExpression? = {
+        let alternation = SyntaxHighlighter.shared.sqlKeywords.joined(separator: "|")
+        return try? NSRegularExpression(pattern: "\\b(?:\(alternation))\\b", options: .caseInsensitive)
+    }()
 
     private func highlightJSON(_ result: NSMutableAttributedString) {
         // Keys (strings before colons)

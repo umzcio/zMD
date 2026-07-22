@@ -411,7 +411,7 @@ struct WelcomeView: View {
             // Subtitle
             Text("Markdown Editor & Viewer")
                 .font(.system(size: 15))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .opacity(showSubtitle ? 1 : 0)
                 .offset(y: showSubtitle ? 0 : 8)
 
@@ -432,7 +432,7 @@ struct WelcomeView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.accentColor.opacity(0.6), lineWidth: 1.5)
                     )
-                    .foregroundColor(.accentColor)
+                    .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(PressableButtonStyle())
 
@@ -451,7 +451,7 @@ struct WelcomeView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(buttonHovered ? Color.accentColor : Color.accentColor.opacity(0.85))
                     )
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
                     .scaleEffect(buttonHovered ? 1.03 : 1.0)
                 }
                 .buttonStyle(PressableButtonStyle())
@@ -469,10 +469,10 @@ struct WelcomeView: View {
             HStack(spacing: 4) {
                 Text("or press")
                     .font(.system(size: 12))
-                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    .foregroundStyle(Color(NSColor.tertiaryLabelColor))
                 Text("⌘O")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
@@ -493,7 +493,7 @@ struct WelcomeView: View {
                     HStack {
                         Text("RECENT FILES")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                            .foregroundStyle(Color(NSColor.tertiaryLabelColor))
 
                         Spacer()
 
@@ -503,7 +503,7 @@ struct WelcomeView: View {
                             }
                         }
                         .font(.system(size: 10))
-                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                        .foregroundStyle(Color(NSColor.tertiaryLabelColor))
                         .buttonStyle(.plain)
                         .onHover { hovering in
                             if hovering {
@@ -523,16 +523,16 @@ struct WelcomeView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "doc.text")
                                     .font(.system(size: 12))
-                                    .foregroundColor(.accentColor)
+                                    .foregroundStyle(Color.accentColor)
                                     .frame(width: 16)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(url.lastPathComponent)
                                         .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(.primary)
+                                        .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text(url.deletingLastPathComponent().path)
                                         .font(.system(size: 10))
-                                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                                        .foregroundStyle(Color(NSColor.tertiaryLabelColor))
                                         .lineLimit(1)
                                 }
                                 Spacer()
@@ -620,11 +620,11 @@ struct EmptyDocumentView: View {
         VStack {
             Image(systemName: "doc.questionmark")
                 .font(.system(size: 48))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
 
             Text("No document selected")
                 .font(.system(size: 16))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.textBackgroundColor))
@@ -691,7 +691,7 @@ extension ContentView {
         HStack {
             Image(systemName: "doc.text")
                 .font(.system(size: 11))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             Text(name)
                 .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
@@ -707,9 +707,10 @@ extension ContentView {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Close Split Pane")
             }
         }
         .padding(.horizontal, 12)

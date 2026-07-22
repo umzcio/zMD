@@ -285,15 +285,15 @@ class MarkdownParser {
                     listItems = []
                 }
             }
-            // Image
-            else if let imageMatch = trimmedLine.range(of: #"^!\[([^\]]*)\]\(([^\)]+)\)$"#, options: .regularExpression) {
-                let matchedString = String(trimmedLine[imageMatch])
-                if let altRange = matchedString.range(of: #"\[([^\]]*)\]"#, options: .regularExpression),
-                   let pathRange = matchedString.range(of: #"\(([^\)]+)\)"#, options: .regularExpression) {
-                    let alt = String(matchedString[altRange]).dropFirst().dropLast()
-                    let path = String(matchedString[pathRange]).dropFirst().dropLast()
-                    elements.append(.image(alt: String(alt), path: String(path)))
-                }
+            // Image — read alt/path from the anchored pattern's own capture groups. Re-searching
+            // the matched string for `\(...\)` grabbed the FIRST parenthesized run, so an alt
+            // containing parens (`![chart (2024)](img.png)`) yielded path "2024" — broken image
+            // in preview and every export.
+            else if let imageRegex = Self.imageLineRegex,
+                    let m = imageRegex.firstMatch(in: trimmedLine, range: NSRange(trimmedLine.startIndex..., in: trimmedLine)),
+                    let altRange = Range(m.range(at: 1), in: trimmedLine),
+                    let pathRange = Range(m.range(at: 2), in: trimmedLine) {
+                elements.append(.image(alt: String(trimmedLine[altRange]), path: String(trimmedLine[pathRange])))
             }
             // HTML block — close as soon as tags balance, including mid-line self-closing single-liners.
             // Previously the balance check only ran on blank lines, so a balanced one-line tag like
@@ -405,9 +405,15 @@ class MarkdownParser {
         return Self.htmlBlockTags.contains(tagName)
     }
 
+    /// Compiled once — this runs per appended line while accumulating an HTML block (the parse
+    /// hot path); recompiling it per call was measurable on long unbalanced blocks.
+    private static let htmlTagRegex = try? NSRegularExpression(pattern: #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#)
+
+    /// Anchored image-line pattern; group 1 = alt text, group 2 = path.
+    static let imageLineRegex = try? NSRegularExpression(pattern: #"^!\[([^\]]*)\]\(([^\)]+)\)$"#)
+
     func isHTMLBalanced(_ html: String) -> Bool {
-        let pattern = #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
+        guard let regex = Self.htmlTagRegex else { return true }
         let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
         var depth = 0
         let selfClosing: Set<String> = ["br", "hr", "img", "input", "meta", "link", "col"]

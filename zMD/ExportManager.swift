@@ -248,8 +248,10 @@ class ExportManager {
         let mutable = NSMutableString(string: html)
         for m in matches where m.numberOfRanges == 4 {
             let src = ns.substring(with: m.range(at: 2))
-            // Skip absolute URLs (http(s)://, data:, file://, etc.) and rooted paths.
-            if src.contains("://") || src.hasPrefix("/") { continue }
+            // Skip absolute URLs (http(s)://, file://, etc.), data: URIs, and rooted paths.
+            // data: has no "://", so the previous test treated base64 images as relative paths
+            // and prepended the document directory — silently dropping them from PDF/RTF.
+            if src.contains("://") || src.hasPrefix("/") || src.lowercased().hasPrefix("data:") { continue }
             let decoded = src.removingPercentEncoding ?? src
             let abs = baseDir.appendingPathComponent(decoded).absoluteString
             let prefix = ns.substring(with: m.range(at: 1))
@@ -531,6 +533,12 @@ class ExportManager {
     private var numberedListStarts: [Int] = [] // start number per numbered list (index 0 = first ordered list)
 
     private func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil, baseURL: URL? = nil) throws {
+        // The per-export accumulators above live on the shared singleton and are safe ONLY
+        // because every caller funnels through the serial docxExportQueue. A second entry point
+        // that skips the queue would interleave relationship IDs across documents (the rId
+        // corruption class this code already had to fix once) — assert the invariant instead of
+        // trusting convention.
+        dispatchPrecondition(condition: .onQueue(docxExportQueue))
         // Reset hyperlink and image tracking for new document
         hyperlinkRelationships = []
         imageRelationships = []

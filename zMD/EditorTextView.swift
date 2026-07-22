@@ -217,9 +217,15 @@ class EditorTextView: NSTextView {
             return
         }
 
-        // If we have multi-cursors, handle simultaneous typing
+        // If we have multi-cursors, handle simultaneous typing.
+        // Only printable input may be inserted directly: Backspace ("\u{7F}"), Return ("\r"),
+        // Tab, and arrows all arrive here as control characters, and inserting them raw wrote
+        // invisible DEL/CR bytes into the file while making the deleteBackward multi-cursor
+        // override unreachable from the keyboard. Control keys must fall through to
+        // super.keyDown → interpretKeyEvents → the responder overrides.
         if !multiCursorController.additionalCursors.isEmpty {
-            if let chars = event.characters, !chars.isEmpty, flags.isSubset(of: [.shift]) {
+            if let chars = event.characters, !chars.isEmpty, flags.isSubset(of: [.shift]),
+               chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && $0 != "\u{7F}" }) {
                 insertTextAtAllCursors(chars)
                 return
             }
@@ -563,8 +569,10 @@ class EditorTextView: NSTextView {
             let replacement = "[\(selected)](url)"
             if shouldChangeText(in: range, replacementString: replacement) {
                 replaceCharacters(in: range, with: replacement)
-                // Select "url" for easy replacement
-                let urlStart = range.location + selected.count + 3
+                // Select "url" for easy replacement. range.length is the selection's UTF-16
+                // length — selected.count (Character count) diverges on emoji/non-BMP text and
+                // selected the wrong range.
+                let urlStart = range.location + range.length + 3
                 didChangeText()
                 setSelectedRange(NSRange(location: urlStart, length: 3))
             }
@@ -588,7 +596,8 @@ class EditorTextView: NSTextView {
             let replacement = "![\(selected)](image-url)"
             if shouldChangeText(in: range, replacementString: replacement) {
                 replaceCharacters(in: range, with: replacement)
-                let urlStart = range.location + selected.count + 4
+                // UTF-16 length, not Character count — see handleInsertLink.
+                let urlStart = range.location + range.length + 4
                 didChangeText()
                 setSelectedRange(NSRange(location: urlStart, length: 9))
             }

@@ -174,7 +174,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 }
             } else {
                 context.coordinator.matchRanges = []
-                context.coordinator.onMatchCountChanged?(0)
+                context.coordinator.reportMatchCount(0)
             }
         }
 
@@ -432,10 +432,19 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // MARK: - Search Methods
 
+        /// Deliver the match count on the next runloop turn. All callers run inside
+        /// updateNSView — i.e. during the SwiftUI update pass — and the callback writes a
+        /// @Published property on DocumentManager; publishing synchronously from within a view
+        /// update is undefined behavior (dropped updates, runtime warning).
+        func reportMatchCount(_ count: Int) {
+            let cb = onMatchCountChanged
+            DispatchQueue.main.async { cb?(count) }
+        }
+
         func findMatchRanges(for searchText: String, isRegex: Bool, isCaseSensitive: Bool, in textView: NSTextView) {
             matchRanges = []
             guard let storage = textView.textStorage, !searchText.isEmpty else {
-                onMatchCountChanged?(0)
+                reportMatchCount(0)
                 return
             }
 
@@ -445,7 +454,7 @@ struct MarkdownTextView: NSViewRepresentable {
                 var options: NSRegularExpression.Options = []
                 if !isCaseSensitive { options.insert(.caseInsensitive) }
                 guard let regex = try? NSRegularExpression(pattern: searchText, options: options) else {
-                    onMatchCountChanged?(0)
+                    reportMatchCount(0)
                     return
                 }
                 let results = regex.matches(in: storage.string, range: NSRange(location: 0, length: string.length))
@@ -467,8 +476,8 @@ struct MarkdownTextView: NSViewRepresentable {
                 }
             }
 
-            // Report match count back
-            onMatchCountChanged?(matchRanges.count)
+            // Report match count back (deferred — see reportMatchCount)
+            reportMatchCount(matchRanges.count)
         }
 
         func scrollToMatch(at index: Int, in textView: NSTextView) {
@@ -638,6 +647,7 @@ struct MarkdownTextView: NSViewRepresentable {
             scrollDebounceTimer?.invalidate()
             syncDebounceTimer?.invalidate()
             diagramCoalesceTimer?.invalidate()
+            rebuildDebounceTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }
@@ -1188,9 +1198,16 @@ struct MarkdownTextView: NSViewRepresentable {
             // document this image load belongs to — a different pane's coordinator ignores it
             // (Plan 003).
             let docId = documentId
-            DispatchQueue.global(qos: .userInitiated).async {
-                let image = NSImage(contentsOf: url)
-                DispatchQueue.main.async {
+            // URLSession instead of the old synchronous NSImage(contentsOf:) on a global queue —
+            // that path had no timeout, so a hung server pinned a dispatch thread indefinitely.
+            Task {
+                let image: NSImage?
+                if let (data, _) = try? await URLSession.shared.data(from: url) {
+                    image = NSImage(data: data)
+                } else {
+                    image = nil
+                }
+                await MainActor.run {
                     Coordinator.remoteImageInFlight.remove(cacheKey)
                     guard let image = image else {
                         Coordinator.remoteImageFailures.insert(cacheKey)

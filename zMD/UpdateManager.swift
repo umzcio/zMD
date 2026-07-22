@@ -266,13 +266,24 @@ class UpdateManager: ObservableObject {
         }
 
         let destURL = URL(fileURLWithPath: "/Applications/zMD.app")
+        // Stage the copy beside the destination first, then swap. Deleting the installed app
+        // BEFORE copying meant a failed copy (disk full, I/O error on the mounted DMG) left the
+        // user with no app on disk at all — the error dialog was cold comfort after the bundle
+        // was already gone.
+        let stagingURL = URL(fileURLWithPath: "/Applications/.zMD.app.update")
 
         do {
+            if fileManager.fileExists(atPath: stagingURL.path) {
+                try? fileManager.removeItem(at: stagingURL)
+            }
+            try fileManager.copyItem(at: appURL, to: stagingURL)
+            // Copy succeeded — only now is it safe to displace the installed bundle.
             if fileManager.fileExists(atPath: destURL.path) {
                 try fileManager.removeItem(at: destURL)
             }
-            try fileManager.copyItem(at: appURL, to: destURL)
+            try fileManager.moveItem(at: stagingURL, to: destURL)
         } catch {
+            try? fileManager.removeItem(at: stagingURL)
             reportError("Could not install app: \(error.localizedDescription)", detachVolume: volumePath)
             return
         }

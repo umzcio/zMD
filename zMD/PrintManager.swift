@@ -15,14 +15,14 @@ class PrintManager {
         textView.textContainerInset = NSSize(width: 0, height: 0)
 
         // Size to fit content
-        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
         if let layoutManager = textView.layoutManager, let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
             textView.frame = NSRect(x: 0, y: 0, width: 468, height: max(648, usedRect.height + 40))
         }
 
         // Configure print info
-        let printInfo = NSPrintInfo.shared.copy() as! NSPrintInfo
+        guard let printInfo = NSPrintInfo.shared.copy() as? NSPrintInfo else { return }
         printInfo.topMargin = 72
         printInfo.bottomMargin = 72
         printInfo.leftMargin = 72

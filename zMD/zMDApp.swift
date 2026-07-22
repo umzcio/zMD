@@ -492,7 +492,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let documentManager = DocumentManager.shared
 
         for url in urls {
-            if url.pathExtension == "md" || url.pathExtension == "markdown" {
+            // Case-insensitive: Finder happily hands us README.MD; the case-sensitive compare
+            // silently ignored it (DropHandler already lowercases — keep the paths consistent).
+            let ext = url.pathExtension.lowercased()
+            if ext == "md" || ext == "markdown" {
                 documentManager.loadDocument(from: url)
             }
         }
@@ -505,7 +508,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             for i in 1...urlList.numberOfItems {
                 if let urlString = urlList.atIndex(i)?.stringValue,
                    let url = URL(string: urlString) {
-                    if url.pathExtension == "md" || url.pathExtension == "markdown" {
+                    let ext = url.pathExtension.lowercased()
+                    if ext == "md" || ext == "markdown" {
                         documentManager.loadDocument(from: url)
                     }
                 }
@@ -561,7 +565,7 @@ struct UpdateAvailableSheet: View {
                     .font(.system(size: 16, weight: .semibold))
                 Text(headerSubtitle)
                     .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
@@ -576,7 +580,7 @@ struct UpdateAvailableSheet: View {
                     ScrollView {
                         Text(updateManager.releaseNotes)
                             .font(.system(size: 12))
-                            .foregroundColor(.primary)
+                            .foregroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                             .padding(.horizontal, 20)
@@ -593,8 +597,8 @@ struct UpdateAvailableSheet: View {
                 stageContent(label: "Update installed. Relaunch zMD to start using \(updateManager.latestVersion).", spinner: false)
             case .failed(let message):
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Update failed").font(.system(size: 13, weight: .semibold)).foregroundColor(.red)
-                    Text(message).font(.system(size: 12)).foregroundColor(.primary)
+                    Text("Update failed").font(.system(size: 13, weight: .semibold)).foregroundStyle(.red)
+                    Text(message).font(.system(size: 12)).foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(20)
@@ -663,7 +667,7 @@ struct UpdateAvailableSheet: View {
             }
             Text(label)
                 .font(.system(size: 13))
-                .foregroundColor(.primary)
+                .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)

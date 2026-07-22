@@ -77,7 +77,7 @@ struct SearchBar: View {
             HStack(spacing: 8) {
                 // Search icon
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
 
                 // Search text field
                 TextField("Find", text: $searchText)
@@ -92,7 +92,7 @@ struct SearchBar: View {
                 if !searchText.isEmpty {
                     Text(totalMatches > 0 ? "\(currentMatch)/\(totalMatches)" : "0/0")
                         .font(.system(size: 12))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .frame(minWidth: 40, alignment: .trailing)
                 }
 
@@ -101,7 +101,7 @@ struct SearchBar: View {
                     Button(action: { onToggleCaseSensitive?() }) {
                         Text("Aa")
                             .font(.system(size: 11, weight: isCaseSensitive ? .bold : .regular))
-                            .foregroundColor(isCaseSensitive ? .accentColor : .secondary)
+                            .foregroundStyle(isCaseSensitive ? Color.accentColor : Color.secondary)
                             .frame(width: 24, height: 20)
                             .background(
                                 RoundedRectangle(cornerRadius: 3)
@@ -114,7 +114,7 @@ struct SearchBar: View {
                     Button(action: { onToggleRegex?() }) {
                         Text(".*")
                             .font(.system(size: 11, weight: isRegex ? .bold : .regular, design: .monospaced))
-                            .foregroundColor(isRegex ? .accentColor : .secondary)
+                            .foregroundStyle(isRegex ? Color.accentColor : Color.secondary)
                             .frame(width: 24, height: 20)
                             .background(
                                 RoundedRectangle(cornerRadius: 3)
@@ -136,6 +136,7 @@ struct SearchBar: View {
                 .buttonStyle(.plain)
                 .disabled(totalMatches == 0)
                 .help("Previous match (\u{21E7}\u{2318}G)")
+                .accessibilityLabel("Previous Match")
 
                 // Next match button
                 Button(action: onNext) {
@@ -145,6 +146,7 @@ struct SearchBar: View {
                 .buttonStyle(.plain)
                 .disabled(totalMatches == 0)
                 .help("Next match (\u{2318}G)")
+                .accessibilityLabel("Next Match")
 
                 Divider()
                     .frame(height: 16)
@@ -152,18 +154,19 @@ struct SearchBar: View {
                 // Close button
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
                 .help("Close (Esc)")
+                .accessibilityLabel("Close Search")
             }
 
             // Replace row (only in source/split mode)
             if showReplace {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.swap")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
 
                     TextField("Replace", text: $replaceText)
                         .textFieldStyle(.plain)
@@ -192,7 +195,7 @@ struct SearchBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(6)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
