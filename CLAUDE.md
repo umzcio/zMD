@@ -63,16 +63,20 @@ zMDApp (App entry point)
     │   └── TabItem[] (Individual tabs with context menus)
     └── HStack
         ├── OutlineView (Sidebar - conditional)
-        └── MarkdownTextView (Rendered content via NSTextView)
+        └── HSplitView (view mode: preview / source / split)
+            ├── SourceEditorView (Editable NSTextView — source/split modes)
+            └── MarkdownTextView (Rendered content via NSTextView — preview/split modes)
 ```
 
 ### Markdown Rendering Architecture
 
-**Two-layer rendering:**
-- `MarkdownTextView.swift` (NSViewRepresentable): Line-by-line parser builds NSAttributedString for NSTextView rendering. Handles headings, paragraphs, lists, code blocks (with syntax highlighting via SyntaxHighlighter), tables, blockquotes, images, frontmatter.
-- `MarkdownParser.swift`: Shared parser used by ExportManager for HTML/PDF/RTF/DOCX exports. Single source of truth for export parsing.
+**Two-layer rendering, one shared inline tokenizer:**
+- `MarkdownParser.swift`: Single source of truth for *block*-level parsing (headings, paragraphs, lists, code blocks, tables, blockquotes, images, frontmatter).
+- `InlineMarkdown.swift`: Shared *inline* tokenizer (bold/italic/code/strikethrough/links/images/math) consumed by all four rendering backends — `MarkdownParser` (HTML/PDF/RTF export), `MarkdownTextView` (preview), `ExportManager` (DOCX export), and `PrintManager` (print). This replaced four independently drifting inline-formatting implementations with a single one.
+- `MarkdownTextView.swift` (NSViewRepresentable): Consumes `MarkdownParser`'s block-level `[Element]`s (and `InlineMarkdown` for inline formatting) to build NSAttributedString for NSTextView rendering. Handles headings, paragraphs, lists, code blocks (with syntax highlighting via SyntaxHighlighter), tables, blockquotes, images, frontmatter.
+- `SourceEditorView.swift` (NSViewRepresentable): Editable NSTextView counterpart shown in Source and Split view modes, with its own markdown syntax highlighting for the raw source — separate from the preview/export pipeline above.
 
-**Note:** `MarkdownView.swift` was removed as dead code. The active renderer is `MarkdownTextView.swift`.
+**Note:** `MarkdownView.swift` was removed as dead code. The active preview renderer is `MarkdownTextView.swift`; the active editor is `SourceEditorView.swift`.
 
 ### Export System
 
@@ -111,7 +115,7 @@ zMD/
 ├── FileWatcher.swift        # File change monitoring
 ├── QuickOpenView.swift      # Quick open dialog
 ├── Assets.xcassets/         # App icon and resources
-└── zMD.entitlements         # Sandbox permissions (currently empty)
+└── zMD.entitlements         # Sandbox disabled; see Sandboxing Considerations below
 ```
 
 ## Development Notes
