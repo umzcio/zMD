@@ -185,6 +185,14 @@ struct SourceEditorView: NSViewRepresentable {
         // Search highlight diff — repaint only when something actually changed. Without this guard,
         // every unrelated state update (zoom, scroll-percent push, etc.) repaints the whole storage,
         // which is both wasteful and can fight with active typing.
+        //
+        // A new query, an updated match list, or Next/Previous navigation never changes the
+        // document's markdown syntax, so none of these should trigger applyHighlighting's 11 full
+        // markdown regex passes — only the match backgrounds need to move. Previously this called
+        // applyHighlighting (markdown regex + search paint combined), so pressing Next during
+        // find-in-document re-tokenized the whole file's markdown syntax on every step even though
+        // nothing was edited. applySearchHighlighting repaints just the match backgrounds, leaving
+        // whatever markdown-syntax coloring is already in the storage untouched.
         let coord = context.coordinator
         let matchIDs = searchMatches.map(\.id)
         if coord.searchText != searchText
@@ -194,7 +202,7 @@ struct SourceEditorView: NSViewRepresentable {
             coord.searchMatches = searchMatches
             coord.currentMatchIndex = currentMatchIndex
             coord.lastMatchIDs = matchIDs
-            coord.applyHighlighting(to: textView)
+            coord.applySearchHighlighting(to: textView)
         }
 
         if let percent = scrollToPercent, !context.coordinator.isUserScrolling {
@@ -475,6 +483,27 @@ struct SourceEditorView: NSViewRepresentable {
 
             // Paint search match backgrounds last so they layer on top of token coloring.
             // Active match gets the system control-accent color for visibility against any token.
+            paintSearchMatchBackgrounds(in: storage)
+
+            storage.endEditing()
+        }
+
+        /// Repaint ONLY the search-match background highlighting — no markdown-syntax regex passes.
+        /// Search-state changes (new query, updated match list, Next/Previous navigation) never
+        /// change the document's markdown syntax, so they call this instead of `applyHighlighting`
+        /// to avoid re-tokenizing the whole document just to move which range shows the "current
+        /// match" color.
+        ///
+        /// Whatever markdown-syntax font/color attributes are already in the storage are left
+        /// exactly as they are; only `.backgroundColor` is touched.
+        func applySearchHighlighting(to textView: NSTextView) {
+            guard let storage = textView.textStorage else { return }
+            storage.beginEditing()
+            paintSearchMatchBackgrounds(in: storage)
+            storage.endEditing()
+        }
+
+        private func paintSearchMatchBackgrounds(in storage: NSTextStorage) {
             if !searchText.isEmpty && !searchMatches.isEmpty {
                 let plainColor = NSColor.systemYellow.withAlphaComponent(0.4)
                 let activeColor = NSColor.controlAccentColor.withAlphaComponent(0.5)
@@ -487,8 +516,6 @@ struct SourceEditorView: NSViewRepresentable {
                     storage.addAttribute(.backgroundColor, value: color, range: nsRange)
                 }
             }
-
-            storage.endEditing()
         }
 
         private static var regexCache: [String: NSRegularExpression] = [:]
