@@ -15,7 +15,7 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Folder-scan symlink cycle crash | P1 | S | — | TODO |
-| 002 | Rotate notary credentials + script hygiene | P1 | S | — | TODO |
+| 002 | Rotate notary credentials + script hygiene | P1 | S | — | DONE |
 | 003 | Scope diagram-render cache invalidation | P1 | S | — | TODO |
 | 004 | Fix updater stuck stage + downgrade guard | P1 | S | — | TODO |
 | 005 | Parser characterization tests + escape-delimiter fix | P1 | M | — | TODO |

@@ -19,6 +19,9 @@ WIN_H=540
 WIN_X=200
 WIN_Y=200
 
+NOTARY_LOG="$(mktemp -t zmd-notary)"
+trap 'rm -f "$NOTARY_LOG"' EXIT
+
 echo "==> Building Release..."
 cd "$PROJECT_DIR"
 # Notarization-required signing flags:
@@ -260,13 +263,13 @@ if [ "${NOTARIZE:-1}" != "0" ]; then
         echo "==> Submitting DMG to Apple notary service (this can take a few minutes)..."
         xcrun notarytool submit "$DMG_PATH" \
             --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
-            --wait 2>&1 | tee /tmp/zmd-notary.log
-        STATUS=$(grep -E "^\s*status:" /tmp/zmd-notary.log | tail -1 | awk '{print $2}')
+            --wait 2>&1 | tee "$NOTARY_LOG"
+        STATUS=$(grep -E "^\s*status:" "$NOTARY_LOG" | tail -1 | awk '{print $2}')
         if [ "$STATUS" != "Accepted" ]; then
             echo "==> ERROR: notarization status was '$STATUS', expected 'Accepted'."
-            echo "    Fetch full log:"
-            SUBMIT_ID=$(grep -E "^\s*id:" /tmp/zmd-notary.log | head -1 | awk '{print $2}')
-            echo "    xcrun notarytool log $SUBMIT_ID --key $NOTARY_KEY --key-id $NOTARY_KEY_ID --issuer $NOTARY_ISSUER"
+            echo "    Fetch full log with the credentials in your notary config:"
+            SUBMIT_ID=$(grep -E "^\s*id:" "$NOTARY_LOG" | head -1 | awk '{print $2}')
+            echo "    xcrun notarytool log $SUBMIT_ID --key \"\$NOTARY_KEY\" --key-id \"\$NOTARY_KEY_ID\" --issuer \"\$NOTARY_ISSUER\""
             exit 1
         fi
 
@@ -311,8 +314,8 @@ APPLESCRIPT
         echo "==> Re-submitting repackaged DMG (hash changed) and stapling..."
         xcrun notarytool submit "$DMG_PATH" \
             --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
-            --wait 2>&1 | tee /tmp/zmd-notary.log
-        STATUS=$(grep -E "^\s*status:" /tmp/zmd-notary.log | tail -1 | awk '{print $2}')
+            --wait 2>&1 | tee "$NOTARY_LOG"
+        STATUS=$(grep -E "^\s*status:" "$NOTARY_LOG" | tail -1 | awk '{print $2}')
         if [ "$STATUS" != "Accepted" ]; then
             echo "==> ERROR: re-notarization status was '$STATUS', expected 'Accepted'."
             exit 1
