@@ -28,6 +28,18 @@ class FolderManager: ObservableObject {
     private var lastSelfWriteAt: Date = .distantPast
     private static let selfWriteSuppressionWindow: TimeInterval = 0.8
 
+    // Coalesces a single deferred rescan for suppressed events (see refreshFileTreeAsync) so
+    // rapid-fire suppressed events don't stack up multiple pending rescans.
+    private var deferredRescanTimer: Timer?
+
+    // Monotonic generation token: each performTreeScan(for:) call captures the current value
+    // before dispatching, and the background scan's result is only published if that captured
+    // generation still matches the latest one issued. Both setFolder and refreshFileTreeAsync
+    // dispatch onto the *concurrent* global queue with no other ordering guarantee, so without
+    // this guard a slower, older scan finishing after a newer one would win the race and leave
+    // the sidebar showing stale contents.
+    private var scanGeneration = 0
+
     func noteSelfWrite(at url: URL) {
         guard let folder = folderURL else { return }
         let folderPath = folder.resolvingSymlinksInPath().standardizedFileURL.path
@@ -71,12 +83,7 @@ class FolderManager: ObservableObject {
         // Initial tree scan happens off-main so opening a folder with thousands of files doesn't
         // freeze the UI. We keep `refreshFileTree` callable synchronously for the
         // DirectoryWatcher change callback, which we also dispatch off-main below.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, url] in
-            let tree = self?.buildTree(at: url, relativeTo: url) ?? []
-            DispatchQueue.main.async {
-                self?.fileTree = tree
-            }
-        }
+        performTreeScan(for: url)
 
         // Start watching — rebuild off-main on each event too.
         directoryWatcher = DirectoryWatcher(path: url.path) { [weak self] in
@@ -91,15 +98,38 @@ class FolderManager: ObservableObject {
     /// stays responsive.
     private func refreshFileTreeAsync() {
         guard let folderURL = folderURL else { return }
-        // Suppress the rebuild if it was almost certainly caused by our own save. Without this,
-        // every save in folder mode triggers a full O(N) tree scan (M8).
-        if Date().timeIntervalSince(lastSelfWriteAt) < Self.selfWriteSuppressionWindow {
+        let elapsed = Date().timeIntervalSince(lastSelfWriteAt)
+        if elapsed < Self.selfWriteSuppressionWindow {
+            // Suppressed because this is almost certainly an echo of our own save. But if this
+            // FS event turns out to be the ONLY one in the suppression window (a genuine external
+            // edit landing in the same ~800ms as our save), dropping it silently leaves the
+            // sidebar stale with no future event to correct it. Schedule one rescan just past the
+            // window to catch that case, coalescing if we're already scheduled.
+            deferredRescanTimer?.invalidate()
+            let remaining = Self.selfWriteSuppressionWindow - elapsed
+            deferredRescanTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                self?.performTreeScan(for: folderURL)
+            }
             return
         }
+        performTreeScan(for: folderURL)
+    }
+
+    /// Single shared entry point for issuing a background tree scan. Both the initial scan in
+    /// `setFolder` and the watcher-triggered rescan in `refreshFileTreeAsync` (including its
+    /// deferred-rescan path) route through here so the generation-token guard below is
+    /// meaningful for every scan in flight, not just some of them.
+    private func performTreeScan(for folderURL: URL) {
+        scanGeneration += 1
+        let generation = scanGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self, folderURL] in
             let tree = self?.buildTree(at: folderURL, relativeTo: folderURL) ?? []
             DispatchQueue.main.async {
-                self?.fileTree = tree
+                // Both setFolder and refreshFileTreeAsync dispatch onto the concurrent global
+                // queue, so an older scan can finish after a newer one. Only publish if no
+                // newer scan has been issued since this one started.
+                guard let self = self, generation == self.scanGeneration else { return }
+                self.fileTree = tree
             }
         }
     }
@@ -107,6 +137,11 @@ class FolderManager: ObservableObject {
     func closeFolder() {
         directoryWatcher?.stopWatching()
         directoryWatcher = nil
+
+        // Cancel any pending deferred rescan (Step 1 fix) so a scan of the just-closed folder
+        // can't fire after the fact and repopulate fileTree once the folder is no longer open.
+        deferredRescanTimer?.invalidate()
+        deferredRescanTimer = nil
 
         if securityScopedAccess, let url = folderURL {
             url.stopAccessingSecurityScopedResource()
