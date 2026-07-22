@@ -205,6 +205,39 @@ test suite passes, binary launches cleanly.
   session kept `plans/README.md`'s cross-link to it but did not force-track
   the file itself, consistent with that policy. It remains on disk locally.
 
+## Animation plans (improve-animations audit, 2026-07-22, commit `6b2ae29`)
+
+Second audit pass, motion-only, per the `improve-animations` skill. Full
+vetting was done directly (small motion surface: ~40 call sites, 8 files, no
+subagents needed). Confirmed-correct and deliberately NOT findings: command
+palette's instant appearance, focus mode's 300ms ease-in-out morph, toast
+in/out asymmetry, find-bar slide, scroll-to-heading easing.
+
+| Plan | Title | Severity | Depends on | Status |
+|------|-------|----------|------------|--------|
+| 019 | Quick Open instant presentation (match ⌘K) | HIGH | — | TODO |
+| 020 | Motion tokens + system Reduce Motion support | MEDIUM | — | TODO |
+| 021 | Dirty-dot pulse easing + fade-out on save | MEDIUM | 020 (soft) | TODO |
+| 022 | Entrance scale normalization (tabs, toasts) | LOW | 020 (soft) | TODO |
+| 023 | Welcome stagger + spring tightening | LOW | 020 (soft) | TODO |
+| 024 | Press feedback on welcome primary buttons | LOW (additive) | 020 (soft) | TODO |
+
+Execution order: 019 first (standalone deletion), then 020 (establishes the
+`Motion` tokens the rest reference), then 021–024 in any order. The soft
+dependencies mean 021–024 each carry an "if 020 landed, use `Motion.*`;
+else literal values" branch — they work standalone but read cleaner after
+020.
+
+Coverage notes:
+- Audit findings #2 (no reduced-motion) and #3 (no tokens) merged into plan
+  020 — same refactor.
+- The "dirty-dot fade-out on save" missed opportunity merged into plan 021 —
+  same component and file as the pulse-easing finding.
+- The "sidebar chevron rotation" missed opportunity was **retired during
+  vetting**: `FolderSidebarView` already rotates the chevron 90° inside the
+  expand action's `withAnimation` (verified at the `rotationEffect` call in
+  `FileTreeItemView`). Already correct; no plan needed.
+
 ## Dependency notes
 
 - **007 depends on 001 (soft)**: both touch `zMD/FolderManager.swift` in
