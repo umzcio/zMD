@@ -31,7 +31,7 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | 015 | Implement `==highlight==` token (direction) | P3 | S–M | — | TODO |
 | 016 | Document underscore-emphasis limitation (direction) | P3 | S | — | TODO |
 | 017 | Consolidate help surface — remove orphaned .help bundle (direction) | P3 | S | — | TODO |
-| 018 | Import/plugin seam spike (direction, investigation-only) | P3 | M | — | TODO |
+| 018 | Import/plugin seam spike (direction, investigation-only) | P3 | M | — | DONE — see [spike doc](../docs/superpowers/specs/2026-07-21-import-plugin-seam-spike.md) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
