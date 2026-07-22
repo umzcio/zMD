@@ -27,7 +27,7 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | 011 | Normalize CR/line-separator in math token bridge | P2 | S | — | DONE |
 | 012 | CDN dependency update (mermaid/katex) + cadence | P2 | S–M | — | DONE (see note) |
 | 013 | DocumentManager testability seam, Phase 1 | P3 | L | 005 (soft) | DONE |
-| 014 | Consolidate confirmation alerts into AlertManager | P3 | S | 013 (soft) | IN PROGRESS |
+| 014 | Consolidate confirmation alerts into AlertManager | P3 | S | 013 (soft) | DONE |
 | 015 | Implement `==highlight==` token (direction) | P3 | S–M | — | DONE (see note) |
 | 016 | Document underscore-emphasis limitation (direction) | P3 | S | — | DONE |
 | 017 | Consolidate help surface — remove orphaned .help bundle (direction) | P3 | S | — | DONE |
@@ -167,6 +167,22 @@ test suite passes, binary launches cleanly.
   characterization tests pass identically before and after the extraction.
   Merge required resolving one textual conflict in `InlineMarkdownTests.swift`
   (shared file, same pattern as 007) — resolved by hand, verified clean.
+- **014**: 013 had already landed, so this plan's target was
+  `NSAlertDirtyCloseConfirmer.confirmDirtyClose` (not `resolveDirtyClose`
+  directly, per the plan's own contingency). Added
+  `AlertManager.showDirtyCloseConfirmation(documentName:)` — a pure
+  copy-paste of the inline `NSAlert` (identical messageText/informativeText,
+  Save/Don't Save/Cancel button order, `hasDestructiveAction` on "Don't
+  Save") — and had `confirmDirtyClose` call it and translate the response.
+  `WindowCloseDelegate` in `zMDApp.swift` was confirmed to already delegate
+  to `DocumentManager.closeDocument` (which itself routes through
+  `resolveDirtyClose`) rather than building a second inline alert, so Step 3
+  was a no-op. Plan 013's characterization/seam-driven tests
+  (`DocumentManagerTerminationTests`, `RuntimeSmokeTests`) all pass unchanged
+  after the extraction, confirming zero behavior change. One unrelated
+  `NSAlert()` remains in `DocumentManager.swift` (`closeOtherDocuments`'s
+  "Close N tabs with unsaved changes?" dialog) — out of scope for this plan,
+  left untouched.
 - **015**: `==highlight==` implemented as a real `InlineMarkdown.Token` case,
   mirroring `.strikethrough`'s pattern in all four backends (`<mark>` for
   HTML, `.backgroundColor` for preview/print, `<w:highlight w:val="yellow"/>`

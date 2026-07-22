@@ -91,6 +91,30 @@ class AlertManager {
         case ignoreAll
     }
 
+    /// Show the "Save changes before closing?" dialog for a dirty document.
+    func showDirtyCloseConfirmation(documentName: String) -> DirtyCloseResponse {
+        let alert = NSAlert()
+        alert.messageText = "Save changes to \(documentName)?"
+        alert.informativeText = "If you don't save, your changes will be lost."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[1].hasDestructiveAction = true
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .dontSave
+        default: return .cancel
+        }
+    }
+
+    enum DirtyCloseResponse {
+        case save
+        case dontSave
+        case cancel
+    }
+
     // MARK: - Native Alert
 
     private func showNSAlert(title: String, message: String, style: NSAlert.Style) {

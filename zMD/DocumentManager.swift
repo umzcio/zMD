@@ -25,19 +25,10 @@ protocol DirtyCloseConfirming {
 /// button order are unchanged from the pre-extraction inline implementation.
 final class NSAlertDirtyCloseConfirmer: DirtyCloseConfirming {
     func confirmDirtyClose(for document: MarkdownDocument) -> DirtyCloseChoice {
-        let alert = NSAlert()
-        alert.messageText = "Save changes to \(document.name)?"
-        alert.informativeText = "If you don't save, your changes will be lost."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Don't Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons[1].hasDestructiveAction = true
-
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: return .save
-        case .alertSecondButtonReturn: return .discard
-        default: return .cancel
+        switch AlertManager.shared.showDirtyCloseConfirmation(documentName: document.name) {
+        case .save: return .save
+        case .dontSave: return .discard
+        case .cancel: return .cancel
         }
     }
 }
