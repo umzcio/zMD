@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C007183B47884CF6A423E3DE /* HelpView.swift */; };
-		FBBB2A5A91A84CA490270FE9 /* zMD.help in Resources */ = {isa = PBXBuildFile; fileRef = B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */; };
 		2208643A1E114A2C9A4C7331 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = 74BFD9DFBCBC4E8593B2C133 /* Resources */; };
 		8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3F07EF007F429AB9E72113 /* SettingsManager.swift */; };
 		9F0CF7C93C0F452694B0B0CC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98515A5CFBA7411D8B33B552 /* SettingsView.swift */; };
@@ -61,7 +60,6 @@
 
 /* Begin PBXFileReference section */
 		C007183B47884CF6A423E3DE /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
-		B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = zMD.help; sourceTree = "<group>"; };
 		7B3F07EF007F429AB9E72113 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		98515A5CFBA7411D8B33B552 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		F1A2B3C4D5E6F7080 /* AlertManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertManager.swift; sourceTree = "<group>"; };
@@ -162,7 +160,6 @@
 				A1B2C3D4E5F6078901234567 /* StatusBarView.swift */,
 				98515A5CFBA7411D8B33B552 /* SettingsView.swift */,
 				74BFD9DFBCBC4E8593B2C133 /* Resources */,
-				B9DFC95EEDDA4B4EA44E6FA0 /* zMD.help */,
 				B1C2D3E4F5A6B70801020305 /* DirectoryWatcher.swift */,
 				B1C2D3E4F5A6B70801020306 /* FolderManager.swift */,
 				B1C2D3E4F5A6B70801020307 /* FolderSidebarView.swift */,
@@ -278,7 +275,7 @@ A1111111 /* zMD.app */,
 				A1000000B /* Assets.xcassets in Resources */,
 			
 				2208643A1E114A2C9A4C7331 /* Resources in Resources */,
-				FBBB2A5A91A84CA490270FE9 /* zMD.help in Resources */,);
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
