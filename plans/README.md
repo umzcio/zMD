@@ -26,11 +26,11 @@ findings on top of that already-hardened baseline, plus 4 direction spikes.
 | 010 | Bound syntax highlighting to viewport | P2 | M | — | DONE (see note) |
 | 011 | Normalize CR/line-separator in math token bridge | P2 | S | — | DONE |
 | 012 | CDN dependency update (mermaid/katex) + cadence | P2 | S–M | — | DONE (see note) |
-| 013 | DocumentManager testability seam, Phase 1 | P3 | L | 005 (soft) | TODO |
-| 014 | Consolidate confirmation alerts into AlertManager | P3 | S | 013 (soft) | TODO |
-| 015 | Implement `==highlight==` token (direction) | P3 | S–M | — | TODO |
-| 016 | Document underscore-emphasis limitation (direction) | P3 | S | — | TODO |
-| 017 | Consolidate help surface — remove orphaned .help bundle (direction) | P3 | S | — | TODO |
+| 013 | DocumentManager testability seam, Phase 1 | P3 | L | 005 (soft) | DONE |
+| 014 | Consolidate confirmation alerts into AlertManager | P3 | S | 013 (soft) | IN PROGRESS |
+| 015 | Implement `==highlight==` token (direction) | P3 | S–M | — | DONE (see note) |
+| 016 | Document underscore-emphasis limitation (direction) | P3 | S | — | DONE |
+| 017 | Consolidate help surface — remove orphaned .help bundle (direction) | P3 | S | — | DONE |
 | 018 | Import/plugin seam spike (direction, investigation-only) | P3 | M | — | DONE — see [spike doc](../docs/superpowers/specs/2026-07-21-import-plugin-seam-spike.md) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
@@ -153,6 +153,41 @@ test suite passes, binary launches cleanly.
   not something this version bump introduced. Recommend a human do one
   live Mermaid smoke-test in a normal (non-sandboxed) session before this
   ships in a release, given the major-version risk.
+- **013**: extracted `DirtyCloseConfirming` protocol + `NSAlertDirtyCloseConfirmer`
+  from `resolveDirtyClose`'s inline `NSAlert` — coordinating session read the
+  full diff personally (highest-risk plan in the set, touches the app's
+  data-loss-prevention logic) and confirmed the three-way switch maps 1:1
+  onto the original alert's Save/Don't-Save/Cancel branches with identical
+  wording and button order; `DirtyCloseAction`, `closeDocument`, and
+  `prepareForTermination`'s signatures are untouched. Added 5 characterization
+  tests (dirty-flag/autosave/clean-close-fast-path) plus 3 seam-driven tests
+  covering `prepareForTermination`'s recursive multi-document quit logic
+  (discard-all, cancel-stops-the-chain, save-then-continue) — all real file
+  I/O, no mocking of the save path. Zero-behavior-change verified: the
+  characterization tests pass identically before and after the extraction.
+  Merge required resolving one textual conflict in `InlineMarkdownTests.swift`
+  (shared file, same pattern as 007) — resolved by hand, verified clean.
+- **015**: `==highlight==` implemented as a real `InlineMarkdown.Token` case,
+  mirroring `.strikethrough`'s pattern in all four backends (`<mark>` for
+  HTML, `.backgroundColor` for preview/print, `<w:highlight w:val="yellow"/>`
+  for DOCX). Confirmed **live in the running app** by the coordinating
+  session (screenshot) — `==highlighted text==` renders with a yellow
+  background correctly, alongside working bold/italic/strikethrough.
+- **016/017**: docs-only (016) and bundle-removal (017) changes, both clean.
+  017 confirmed no content from the deleted native `.help` bundle was worth
+  merging into `HelpView.swift` (strict subset). Merging 015+016 required
+  resolving a conflict in `HelpView.swift`'s "Supported Markdown" list (both
+  touched the same line) — combined into one line covering both the
+  underscore-emphasis caveat and the new strikethrough/highlight mentions.
+- **018**: spike document delivered at
+  `docs/superpowers/specs/2026-07-21-import-plugin-seam-spike.md`. Recommends
+  Obsidian `[[wikilinks]]` (render-time resolution against the open folder)
+  as the one concrete first slice, explicitly against building the other
+  four former-roadmap candidates (Logseq, Notion, Zotero, Lua/JS plugins)
+  soon. Note: the doc lives under `docs/`, which this repo intentionally
+  keeps gitignored (see the 2026-07-21 docs-reorg commit) — the coordinating
+  session kept `plans/README.md`'s cross-link to it but did not force-track
+  the file itself, consistent with that policy. It remains on disk locally.
 
 ## Dependency notes
 
