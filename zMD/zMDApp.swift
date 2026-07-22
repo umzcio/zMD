@@ -66,10 +66,12 @@ struct zMDApp: App {
                         },
                         onLater: {
                             updateManager.showingUpdateAlert = false
-                            // Reset to idle so reopening the sheet starts at release notes.
-                            if case .failed = updateManager.stage {
-                                updateManager.stage = .idle
-                            }
+                            // Reset to idle unconditionally so reopening the sheet starts at
+                            // release notes. Previously this only reset on `.failed`, so
+                            // clicking "Later" from `.ready` left `stage` stuck there forever —
+                            // downloadAndInstall()'s re-entrancy guard (`stage == .idle`) then
+                            // permanently no-oped "Update Now" for the rest of the app session.
+                            updateManager.stage = .idle
                         }
                     )
                 }
