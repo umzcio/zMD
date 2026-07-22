@@ -555,20 +555,32 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.textBackgroundColor))
         .onAppear {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
+            // Under Reduce Motion, skip the stagger: one gentle grouped fade.
+            if Motion.reduceMotion {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    showIcon = true
+                    iconBounce = true
+                    showSubtitle = true
+                    showButton = true
+                    showHint = true
+                    showRecents = true
+                }
+                return
+            }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
                 showIcon = true
                 iconBounce = true
             }
-            withAnimation(.easeOut(duration: 0.4).delay(0.15)) {
+            withAnimation(.easeOut(duration: 0.35).delay(0.10)) {
                 showSubtitle = true
             }
-            withAnimation(.easeOut(duration: 0.4).delay(0.25)) {
+            withAnimation(.easeOut(duration: 0.35).delay(0.16)) {
                 showButton = true
             }
-            withAnimation(.easeOut(duration: 0.4).delay(0.35)) {
+            withAnimation(.easeOut(duration: 0.35).delay(0.22)) {
                 showHint = true
             }
-            withAnimation(.easeOut(duration: 0.4).delay(0.45)) {
+            withAnimation(.easeOut(duration: 0.35).delay(0.28)) {
                 showRecents = true
             }
         }
