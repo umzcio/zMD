@@ -1,6 +1,47 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The user's raw choice when asked whether to save a dirty document before it closes.
+/// Deliberately simpler than `DocumentManager.DirtyCloseAction` — that caller-facing enum also
+/// encodes "what the caller should do next" (e.g. `.deferToSave` for the async-save-in-progress
+/// case); this one only encodes what the user picked. `resolveDirtyClose` translates between them.
+enum DirtyCloseChoice {
+    case save
+    case discard
+    case cancel
+}
+
+/// Seam for "ask the user what to do about a dirty document" (Plan 013 Phase 1). Lets tests
+/// substitute a fake so DocumentManager's dirty-close/quit-safety logic — the highest-risk code
+/// in the app — can be exercised without a real, test-process-blocking NSAlert.
+protocol DirtyCloseConfirming {
+    /// Returns the user's choice for a single dirty document, synchronously. Matches
+    /// resolveDirtyClose's prior direct NSAlert.runModal() contract — this seam does not change
+    /// sync/async behavior, only who decides the answer.
+    func confirmDirtyClose(for document: MarkdownDocument) -> DirtyCloseChoice
+}
+
+/// Production implementation — presents the real save/don't-save/cancel NSAlert. Wording and
+/// button order are unchanged from the pre-extraction inline implementation.
+final class NSAlertDirtyCloseConfirmer: DirtyCloseConfirming {
+    func confirmDirtyClose(for document: MarkdownDocument) -> DirtyCloseChoice {
+        let alert = NSAlert()
+        alert.messageText = "Save changes to \(document.name)?"
+        alert.informativeText = "If you don't save, your changes will be lost."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[1].hasDestructiveAction = true
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
+    }
+}
+
 class DocumentManager: ObservableObject {
     static let shared = DocumentManager()
 
@@ -653,29 +694,27 @@ class DocumentManager: ObservableObject {
     /// Save is always treated as deferred because it may need an asynchronous NSSavePanel.
     private enum DirtyCloseAction { case proceed, discard, cancel, deferToSave }
 
+    // Testable seam (Plan 013 Phase 1): swappable so tests can drive resolveDirtyClose's
+    // multi-document recursive logic (closeDocument/prepareForTermination) without a real
+    // NSAlert.runModal() blocking the test process. `internal` (not `private`) so a
+    // `@testable import zMD` test target can substitute a fake — same access-control pattern as
+    // ExportManager.safeDOCXHyperlinkURL's testable exposure.
+    var dirtyCloseConfirmer: DirtyCloseConfirming = NSAlertDirtyCloseConfirmer()
+
     private func resolveDirtyClose(_ document: MarkdownDocument, onSaveFinished: ((Bool) -> Void)? = nil) -> DirtyCloseAction {
         guard document.isDirty else { return .proceed }
 
-        let alert = NSAlert()
-        alert.messageText = "Save changes to \(document.name)?"
-        alert.informativeText = "If you don't save, your changes will be lost."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Don't Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons[1].hasDestructiveAction = true
-
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: // Save
+        switch dirtyCloseConfirmer.confirmDirtyClose(for: document) {
+        case .save:
             saveDocument(id: document.id) { success in
                 DispatchQueue.main.async {
                     onSaveFinished?(success)
                 }
             }
             return .deferToSave
-        case .alertSecondButtonReturn: // Don't Save
+        case .discard:
             return .discard
-        default: // Cancel
+        case .cancel:
             return .cancel
         }
     }
