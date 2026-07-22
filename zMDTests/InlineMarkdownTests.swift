@@ -587,3 +587,129 @@ final class FolderManagerLifecycleTests: XCTestCase {
         wait(for: [eventuallyReflected], timeout: 12.0)
     }
 }
+
+// MARK: - Plan 013 Step 3: seam-driven tests for prepareForTermination's multi-document logic.
+
+/// Consumes `responses` in call order — one response per dirty document `resolveDirtyClose` asks
+/// about. Answering past the end of `responses` returns `.cancel` (a safe default that would stop
+/// any further recursion rather than silently discarding data the test didn't intend).
+private final class FakeDirtyCloseConfirmer: DirtyCloseConfirming {
+    private(set) var callIndex = 0
+    private let responses: [DirtyCloseChoice]
+
+    init(responses: [DirtyCloseChoice]) {
+        self.responses = responses
+    }
+
+    func confirmDirtyClose(for document: MarkdownDocument) -> DirtyCloseChoice {
+        defer { callIndex += 1 }
+        return callIndex < responses.count ? responses[callIndex] : .cancel
+    }
+}
+
+final class DocumentManagerTerminationTests: XCTestCase {
+    func testDiscardingAllDirtyDocumentsTerminatesNowWithoutCallingCompletion() {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        let tmp = FileManager.default.temporaryDirectory
+        let docA = MarkdownDocument(url: tmp.appendingPathComponent("a-\(UUID().uuidString).md"), content: "a", isDirty: true)
+        let docB = MarkdownDocument(url: tmp.appendingPathComponent("b-\(UUID().uuidString).md"), content: "b", isDirty: true)
+        manager.openDocuments = [docA, docB]
+
+        let fake = FakeDirtyCloseConfirmer(responses: [.discard, .discard])
+        manager.dirtyCloseConfirmer = fake
+
+        var completionCalled = false
+        let result = manager.prepareForTermination { _ in completionCalled = true }
+
+        // Both discards resolve synchronously (no NSSavePanel involved), so the whole recursive
+        // chain — ask about docA, discard, recurse; ask about docB, discard, recurse; no more
+        // dirty docs left — completes within this single call.
+        if case .terminateNow = result {} else { XCTFail("expected .terminateNow, got \(result)") }
+        XCTAssertEqual(fake.callIndex, 2, "both dirty documents should have been asked about")
+        // completion is AppKit's async-reply channel for the .terminateLater case only; a
+        // synchronous .terminateNow result must not also invoke it (the caller reads the return
+        // value directly — see AppDelegate.applicationShouldTerminate in zMDApp.swift).
+        XCTAssertFalse(completionCalled)
+    }
+
+    func testCancelOnFirstDirtyDocumentStopsTheChainBeforeAskingAboutTheSecond() {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        let tmp = FileManager.default.temporaryDirectory
+        let docA = MarkdownDocument(url: tmp.appendingPathComponent("a-\(UUID().uuidString).md"), content: "a", isDirty: true)
+        let docB = MarkdownDocument(url: tmp.appendingPathComponent("b-\(UUID().uuidString).md"), content: "b", isDirty: true)
+        manager.openDocuments = [docA, docB]
+
+        // Cancel on the very first document; a .discard queued second would only be consumed if
+        // the (buggy) chain kept going instead of stopping.
+        let fake = FakeDirtyCloseConfirmer(responses: [.cancel, .discard])
+        manager.dirtyCloseConfirmer = fake
+
+        var completionCalled = false
+        let result = manager.prepareForTermination { _ in completionCalled = true }
+
+        if case .cancel = result {} else { XCTFail("expected .cancel, got \(result)") }
+        XCTAssertEqual(fake.callIndex, 1, "the second document must never be asked once the first cancels")
+        XCTAssertFalse(completionCalled)
+    }
+
+    func testSavingTheOnlyDirtyDocumentDefersAndEventuallyCompletesTermination() throws {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        // A real, non-untitled, writable URL so saveDocument takes its direct-write branch
+        // instead of popping an NSSavePanel (which would hang the test).
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-terminate-save-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("doc.md")
+        try "initial".write(to: url, atomically: true, encoding: .utf8)
+
+        let documentId = UUID()
+        let document = MarkdownDocument(id: documentId, url: url, content: "unsaved edits", isDirty: true)
+        manager.openDocuments = [document]
+
+        let fake = FakeDirtyCloseConfirmer(responses: [.save])
+        manager.dirtyCloseConfirmer = fake
+
+        let completed = expectation(description: "termination completes after the deferred save finishes")
+        var completionResult: Bool?
+        let result = manager.prepareForTermination { success in
+            completionResult = success
+            completed.fulfill()
+        }
+
+        // Save is asynchronous (NSSavePanel-shaped API even on the direct-write branch, which
+        // still round-trips through a completion closure), so the outer call returns
+        // .terminateLater immediately; completion fires later once the save — and the recursive
+        // re-check that finds nothing left dirty — finishes.
+        if case .terminateLater = result {} else { XCTFail("expected .terminateLater, got \(result)") }
+
+        wait(for: [completed], timeout: 4.0)
+
+        XCTAssertEqual(completionResult, true)
+        XCTAssertEqual(fake.callIndex, 1)
+        XCTAssertFalse(manager.openDocuments.first?.isDirty ?? true)
+        let onDisk = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(onDisk, "unsaved edits")
+    }
+}
