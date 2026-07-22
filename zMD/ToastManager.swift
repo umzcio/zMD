@@ -96,7 +96,7 @@ struct ToastView: View {
             // keep the arrival feedback, drop the movement.
             insertion: Motion.reduceMotion
                 ? .opacity
-                : .move(edge: .trailing).combined(with: .scale(scale: 0.8)).combined(with: .opacity),
+                : .move(edge: .trailing).combined(with: .scale(scale: 0.95)).combined(with: .opacity),
             removal: .opacity
         ))
     }
