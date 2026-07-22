@@ -346,3 +346,61 @@ final class FolderManagerTests: XCTestCase {
         XCTAssertFalse(manager.fileTree.contains { $0.name == "loop" })
     }
 }
+
+final class FolderManagerLifecycleTests: XCTestCase {
+    // Regression pin for the suppression-window drop bug (Plan 007): a genuine external edit
+    // landing inside the 800ms self-write suppression window used to be dropped silently with
+    // nothing scheduled to catch it. This drives the real FolderManager.shared singleton (its
+    // initializer is private) through setFolder/noteSelfWrite/closeFolder with real file I/O,
+    // matching the RuntimeSmokeTests pattern above for DocumentManager.shared.
+    func testExternalEditWithinSuppressionWindowIsEventuallyReflected() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-folder-suppress-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fileA = root.appendingPathComponent("a.md")
+        try "initial".write(to: fileA, atomically: true, encoding: .utf8)
+
+        let manager = FolderManager.shared
+        let previousFolderURL = manager.folderURL
+        let previousFileTree = manager.fileTree
+        let previousShowingSidebar = manager.isShowingFolderSidebar
+
+        defer {
+            manager.closeFolder()
+            manager.folderURL = previousFolderURL
+            manager.fileTree = previousFileTree
+            manager.isShowingFolderSidebar = previousShowingSidebar
+        }
+
+        manager.setFolder(root)
+
+        // Give the initial scan time to complete and publish.
+        let initialScan = expectation(description: "initial scan completes")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { initialScan.fulfill() }
+        wait(for: [initialScan], timeout: 4.0)
+        XCTAssertTrue(manager.fileTree.contains { $0.name == "a.md" })
+
+        // Simulate zMD's own save (marks the suppression window), then immediately write a
+        // SECOND file externally within that window — this is the exact scenario the bug drops.
+        manager.noteSelfWrite(at: fileA)
+        let fileB = root.appendingPathComponent("b.md")
+        try "external".write(to: fileB, atomically: false, encoding: .utf8)
+
+        // Wait comfortably past FSEvents latency (1.0s) + DirectoryWatcher's debounce (0.3s) +
+        // the 800ms self-write suppression window + the deferred-rescan timer, with margin.
+        let eventuallyReflected = expectation(description: "b.md eventually appears in sidebar")
+        var attempts = 0
+        func poll() {
+            attempts += 1
+            if manager.fileTree.contains(where: { $0.name == "b.md" }) {
+                eventuallyReflected.fulfill()
+            } else if attempts < 40 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { poll() }
+            }
+        }
+        poll()
+        wait(for: [eventuallyReflected], timeout: 12.0)
+    }
+}
