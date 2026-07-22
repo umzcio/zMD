@@ -16,6 +16,23 @@ final class InlineMarkdownTests: XCTestCase {
         )
     }
 
+    func testMathTokenRejectsCarriageReturnAndLineSeparators() {
+        // A \r, U+2028, or U+2029 inside a $...$ span must not be accepted into a
+        // .math token — those characters break the single-quoted JS string literal
+        // that WebRenderer splices math content into. The tokenizer already rejects
+        // literal \n the same way; confirm \r and the Unicode line separators are
+        // rejected too. With no other token type able to claim a lone "$", a rejected
+        // span falls all the way through to plain buffered text (mirroring how "\n"
+        // already behaves today).
+        XCTAssertEqual(InlineMarkdown.tokenize("$a\rb$"), [.text("$a\rb$")])
+        XCTAssertEqual(InlineMarkdown.tokenize("$a\u{2028}b$"), [.text("$a\u{2028}b$")])
+        XCTAssertEqual(InlineMarkdown.tokenize("$a\u{2029}b$"), [.text("$a\u{2029}b$")])
+
+        XCTAssertNil(InlineMarkdown.tokenize("$a\rb$").first { if case .math = $0 { return true } else { return false } })
+        XCTAssertNil(InlineMarkdown.tokenize("$a\u{2028}b$").first { if case .math = $0 { return true } else { return false } })
+        XCTAssertNil(InlineMarkdown.tokenize("$a\u{2029}b$").first { if case .math = $0 { return true } else { return false } })
+    }
+
     func testMixedInlineImagePreservesSurroundingTextInHTML() {
         let html = MarkdownParser.shared.toHTML("See ![diagram](diagram.png) for the flow.", includeStyles: false)
 

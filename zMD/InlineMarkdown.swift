@@ -131,7 +131,7 @@ enum InlineMarkdown {
         var scanned = 0
         while cursor < text.endIndex && scanned < 200 {
             let character = text[cursor]
-            if character == "\n" { return nil }
+            if character == "\n" || character == "\r" || character == "\u{2028}" || character == "\u{2029}" { return nil }
             if character == "$" {
                 guard cursor > contentStart,
                       text[text.index(before: cursor)] != " " else {
