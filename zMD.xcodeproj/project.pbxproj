@@ -46,6 +46,7 @@
 		FAD1ED55FFD8ACC66802BC3E /* MinimapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DE9957878B9A42255F3208D /* MinimapView.swift */; };
 		8B2C3D4E5F6A71B2C3D4E5F6 /* AutocompleteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1B2C3D4E5F60A1B2C3D4E5 /* AutocompleteView.swift */; };
 		E77A00000000000000000202 /* InlineMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A00000000000000000201 /* InlineMarkdownTests.swift */; };
+		84B9A8D6DB385775F9778A9E /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -99,6 +100,7 @@
 		3DE9957878B9A42255F3208D /* MinimapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimapView.swift; sourceTree = "<group>"; };
 		7A1B2C3D4E5F60A1B2C3D4E5 /* AutocompleteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutocompleteView.swift; sourceTree = "<group>"; };
 		E77A00000000000000000201 /* InlineMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMarkdownTests.swift; sourceTree = "<group>"; };
+		6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
 		E77A00000000000000000203 /* zMDTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = zMDTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -188,6 +190,7 @@ A1111111 /* zMD.app */,
 			isa = PBXGroup;
 			children = (
 				E77A00000000000000000201 /* InlineMarkdownTests.swift */,
+				6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */,
 			);
 			path = zMDTests;
 			sourceTree = "<group>";
@@ -328,6 +331,7 @@ A1111111 /* zMD.app */,
 			buildActionMask = 2147483647;
 			files = (
 				E77A00000000000000000202 /* InlineMarkdownTests.swift in Sources */,
+				84B9A8D6DB385775F9778A9E /* MarkdownParserTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
