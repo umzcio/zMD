@@ -151,12 +151,15 @@ struct MarkdownTextView: NSViewRepresentable {
         else if searchChanged {
             context.coordinator.lastSearchText = searchText
 
-            // Clear only the ranges we previously painted (H3) — see updateMatchHighlighting
-            // for the rationale. The blanket clear here used to wipe inline-code/table/code-block
-            // backgrounds whenever search ran or cleared.
-            if let storage = textView.textStorage {
+            // Clear only the ranges we previously painted — as TEMPORARY attributes, matching
+            // how updateMatchHighlighting paints them. (A storage-level removeAttribute here
+            // would clear nothing — the highlights aren't in the storage — while still wiping
+            // the tracking list, orphaning the painted ranges forever. That was exactly the
+            // stuck-highlight-after-clearing-the-query bug.)
+            if let layoutManager = textView.layoutManager, let storage = textView.textStorage {
                 for r in context.coordinator.searchHighlightRanges where r.location + r.length <= storage.length {
-                    storage.removeAttribute(.backgroundColor, range: r)
+                    layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r)
+                    layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: r)
                 }
                 context.coordinator.searchHighlightRanges.removeAll(keepingCapacity: true)
             }
