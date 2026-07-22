@@ -231,3 +231,51 @@ private final class FileWatcherProbe: FileWatcherDelegate {
 
     func fileWatcher(_ watcher: FileWatcher, fileWasDeleted url: URL) {}
 }
+
+final class FolderManagerTests: XCTestCase {
+    func testFolderScanDoesNotRecurseIntoSymlinkCycle() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-symlink-cycle-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // A real markdown file so the folder isn't filtered out as empty.
+        try "hello".write(to: root.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
+
+        // A directory symlink pointing back at `root` itself — the simplest cycle.
+        let cycleLink = root.appendingPathComponent("loop")
+        try FileManager.default.createSymbolicLink(at: cycleLink, withDestinationURL: root)
+
+        // FolderManager's initializer is private (singleton), so drive this through
+        // .shared and restore its state afterward, matching the RuntimeSmokeTests pattern
+        // above for DocumentManager.shared.
+        let manager = FolderManager.shared
+        let previousFolderURL = manager.folderURL
+        let previousFileTree = manager.fileTree
+        let previousShowingSidebar = manager.isShowingFolderSidebar
+
+        defer {
+            manager.closeFolder()
+            manager.folderURL = previousFolderURL
+            manager.fileTree = previousFileTree
+            manager.isShowingFolderSidebar = previousShowingSidebar
+        }
+
+        let done = expectation(description: "tree scan completes without crashing")
+
+        // setFolder dispatches the scan async and publishes fileTree on main;
+        // poll briefly rather than relying on a Combine subscription to keep this
+        // test dependency-free.
+        manager.setFolder(root)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 3.0)
+
+        // Reaching here without a crash/timeout is the primary assertion. Also
+        // confirm the real file surfaced and the cyclic symlink did not appear
+        // as a nested directory entry.
+        XCTAssertTrue(manager.fileTree.contains { $0.name == "note.md" })
+        XCTAssertFalse(manager.fileTree.contains { $0.name == "loop" })
+    }
+}
