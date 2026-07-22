@@ -232,24 +232,12 @@ class WebRenderer: NSObject {
     private var katexWatchdogTimer: Timer?
 
     private func startWatchdog(for pipeline: RenderPipeline) {
+        // `self?.method()` rather than `guard let self` inside the Task — the guard-let form is
+        // rejected as "reference to captured var 'self'" by the older Swift toolchain CI builds
+        // with.
         let timer = Timer.scheduledTimer(withTimeInterval: Self.renderWatchdogTimeout, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                // Consuming the active completion fails the item, resets the isRendering flag,
-                // and advances the queue; a late result for the timed-out item is then ignored
-                // because the completion is already nil.
-                switch pipeline {
-                case .mermaid:
-                    if let cb = self.activeMermaidCompletion {
-                        self.activeMermaidCompletion = nil
-                        cb(nil)
-                    }
-                case .katex:
-                    if let cb = self.activeKatexCompletion {
-                        self.activeKatexCompletion = nil
-                        cb(nil)
-                    }
-                }
+            Task { @MainActor [weak self] in
+                self?.watchdogFired(for: pipeline)
             }
         }
         switch pipeline {
@@ -259,6 +247,24 @@ class WebRenderer: NSObject {
         case .katex:
             katexWatchdogTimer?.invalidate()
             katexWatchdogTimer = timer
+        }
+    }
+
+    /// Consuming the active completion fails the item, resets the isRendering flag, and
+    /// advances the queue; a late result for the timed-out item is then ignored because the
+    /// completion is already nil.
+    private func watchdogFired(for pipeline: RenderPipeline) {
+        switch pipeline {
+        case .mermaid:
+            if let cb = activeMermaidCompletion {
+                activeMermaidCompletion = nil
+                cb(nil)
+            }
+        case .katex:
+            if let cb = activeKatexCompletion {
+                activeKatexCompletion = nil
+                cb(nil)
+            }
         }
     }
 
