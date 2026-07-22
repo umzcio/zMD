@@ -292,6 +292,176 @@ final class RuntimeSmokeTests: XCTestCase {
 
         wait(for: [changed], timeout: 4.0)
     }
+
+    // MARK: - Plan 013 Step 1: characterization tests for already-in-memory-testable behavior.
+    // These lock in current updateContent/hasUnsavedChanges/closeDocument-fast-path behavior
+    // BEFORE any DirtyCloseConfirming extraction, so Step 2's extraction can be verified against
+    // them for zero behavior change.
+
+    func testUpdateContentMarksDocumentDirtyImmediately() {
+        let manager = DocumentManager.shared
+        let previousAutoSave = manager.autoSaveEnabled
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+
+        defer {
+            manager.autoSaveEnabled = previousAutoSave
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+        }
+
+        manager.autoSaveEnabled = false
+        let documentId = UUID()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-update-content-\(UUID().uuidString).md")
+        manager.openDocuments = [
+            MarkdownDocument(id: documentId, url: url, content: "initial", isDirty: false)
+        ]
+        manager.selectedDocumentId = documentId
+
+        manager.updateContent(for: documentId, newContent: "changed")
+
+        XCTAssertTrue(manager.openDocuments.first?.isDirty ?? false)
+        XCTAssertEqual(manager.openDocuments.first?.content, "changed")
+    }
+
+    func testUpdateContentSchedulesAutoSaveWhenEnabled() throws {
+        let manager = DocumentManager.shared
+        let previousAutoSave = manager.autoSaveEnabled
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+
+        defer {
+            manager.autoSaveEnabled = previousAutoSave
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+        }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-autosave-on-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("doc.md")
+        try "initial".write(to: url, atomically: true, encoding: .utf8)
+
+        manager.autoSaveEnabled = true
+        let documentId = UUID()
+        manager.openDocuments = [
+            MarkdownDocument(id: documentId, url: url, content: "initial", isDirty: false)
+        ]
+        manager.selectedDocumentId = documentId
+
+        manager.updateContent(for: documentId, newContent: "autosaved content")
+        XCTAssertTrue(manager.openDocuments.first?.isDirty ?? false, "should be dirty immediately after the edit")
+
+        // Timing.autoSaveDebounce is 2.0s — wait comfortably past it for the timer to fire and
+        // saveDocument to complete its (synchronous, non-untitled, non-sandboxed) disk write.
+        let saved = expectation(description: "auto-save fires and clears dirty flag")
+        var attempts = 0
+        func poll() {
+            attempts += 1
+            if manager.openDocuments.first?.isDirty == false {
+                saved.fulfill()
+            } else if attempts < 40 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() }
+            }
+        }
+        poll()
+        wait(for: [saved], timeout: 4.0)
+
+        let onDisk = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(onDisk, "autosaved content")
+    }
+
+    func testUpdateContentDoesNotAutoSaveWhenDisabled() throws {
+        let manager = DocumentManager.shared
+        let previousAutoSave = manager.autoSaveEnabled
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+
+        defer {
+            manager.autoSaveEnabled = previousAutoSave
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+        }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-autosave-off-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("doc.md")
+        try "initial".write(to: url, atomically: true, encoding: .utf8)
+
+        manager.autoSaveEnabled = false
+        let documentId = UUID()
+        manager.openDocuments = [
+            MarkdownDocument(id: documentId, url: url, content: "initial", isDirty: false)
+        ]
+        manager.selectedDocumentId = documentId
+
+        manager.updateContent(for: documentId, newContent: "not autosaved")
+
+        // Wait past the 2.0s auto-save debounce interval to prove no timer fires when disabled.
+        let waited = expectation(description: "wait past the auto-save debounce window")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { waited.fulfill() }
+        wait(for: [waited], timeout: 4.0)
+
+        XCTAssertTrue(manager.openDocuments.first?.isDirty ?? false, "should remain dirty — auto-save is disabled")
+        let onDisk = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(onDisk, "initial", "disk content must be untouched when auto-save is disabled")
+    }
+
+    func testHasUnsavedChangesReflectsMixedDirtyStateAcrossDocuments() {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        defer { manager.openDocuments = previousDocuments }
+
+        let cleanId = UUID()
+        let dirtyId = UUID()
+        let tmp = FileManager.default.temporaryDirectory
+
+        // All clean -> false.
+        manager.openDocuments = [
+            MarkdownDocument(id: cleanId, url: tmp.appendingPathComponent("a.md"), content: "a", isDirty: false)
+        ]
+        XCTAssertFalse(manager.hasUnsavedChanges())
+
+        // One dirty among several clean -> true.
+        manager.openDocuments = [
+            MarkdownDocument(id: cleanId, url: tmp.appendingPathComponent("a.md"), content: "a", isDirty: false),
+            MarkdownDocument(id: dirtyId, url: tmp.appendingPathComponent("b.md"), content: "b", isDirty: true)
+        ]
+        XCTAssertTrue(manager.hasUnsavedChanges())
+
+        // No open documents -> false.
+        manager.openDocuments = []
+        XCTAssertFalse(manager.hasUnsavedChanges())
+    }
+
+    func testCloseDocumentOnCleanDocumentClosesImmediatelyWithNoAlert() {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+        }
+
+        let documentId = UUID()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-close-clean-\(UUID().uuidString).md")
+        let document = MarkdownDocument(id: documentId, url: url, content: "clean", isDirty: false)
+        manager.openDocuments = [document]
+        manager.selectedDocumentId = documentId
+
+        // If resolveDirtyClose's `guard document.isDirty else { return .proceed }` fast path were
+        // broken, this would hang the test process on a real NSAlert.runModal() instead of
+        // returning promptly — the test completing at all is the load-bearing assertion.
+        manager.closeDocument(document)
+
+        XCTAssertTrue(manager.openDocuments.isEmpty)
+        XCTAssertNil(manager.selectedDocumentId)
+    }
 }
 
 private final class FileWatcherProbe: FileWatcherDelegate {
