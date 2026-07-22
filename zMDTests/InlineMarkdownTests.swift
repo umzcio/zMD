@@ -33,6 +33,13 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertNil(InlineMarkdown.tokenize("$a\u{2029}b$").first { if case .math = $0 { return true } else { return false } })
     }
 
+    func testHighlightTokenizesAsDistinctFromEquals() {
+        XCTAssertEqual(
+            InlineMarkdown.tokenize("==important== and =not= this"),
+            [.highlight("important"), .text(" and =not= this")]
+        )
+    }
+
     func testMixedInlineImagePreservesSurroundingTextInHTML() {
         let html = MarkdownParser.shared.toHTML("See ![diagram](diagram.png) for the flow.", includeStyles: false)
 
@@ -85,6 +92,12 @@ final class InlineMarkdownTests: XCTestCase {
         let html = MarkdownParser.shared.formatInlineHTML("**[label](https://example.com)**")
 
         XCTAssertEqual(html, "<strong><a href=\"https://example.com\">label</a></strong>")
+    }
+
+    func testHighlightRendersAsMarkTagInHTML() {
+        let html = MarkdownParser.shared.formatInlineHTML("==important==")
+
+        XCTAssertEqual(html, "<mark>important</mark>")
     }
 
     func testDOCXHyperlinkURLsUseSameSchemeHardening() {

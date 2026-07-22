@@ -142,7 +142,7 @@ struct HelpWebView: NSViewRepresentable {
             <h2>Supported Markdown</h2>
             <ul>
                 <li>Headings (H1-H4)</li>
-                <li>Bold, italic, inline code</li>
+                <li>Bold, italic, strikethrough, highlight, inline code</li>
                 <li>Bullet and numbered lists</li>
                 <li>Task lists with checkboxes</li>
                 <li>Code blocks</li>

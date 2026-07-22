@@ -1418,6 +1418,9 @@ struct MarkdownTextView: NSViewRepresentable {
             case .strikethrough(let text):
                 tokenAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                 result.append(formatInlineMarkdown(text, attributes: tokenAttributes, stripCodeSpanSentinel: false))
+            case .highlight(let text):
+                tokenAttributes[.backgroundColor] = NSColor.systemYellow.withAlphaComponent(0.35)
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes, stripCodeSpanSentinel: false))
             case .image(let alt, let source):
                 if let image = loadImage(path: source) {
                     let attachment = NSTextAttachment()

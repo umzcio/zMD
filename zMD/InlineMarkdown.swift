@@ -9,6 +9,7 @@ enum InlineMarkdown {
         case strong(String)
         case emphasis(String)
         case strikethrough(String)
+        case highlight(String)
         case image(alt: String, source: String)
         case link(label: String, destination: String)
     }
@@ -86,6 +87,13 @@ enum InlineMarkdown {
             if let token = delimitedToken(in: text, at: index, delimiter: "*") {
                 flushText()
                 tokens.append(.emphasis(token.content))
+                index = token.end
+                continue
+            }
+
+            if let token = delimitedToken(in: text, at: index, delimiter: "==") {
+                flushText()
+                tokens.append(.highlight(token.content))
                 index = token.end
                 continue
             }

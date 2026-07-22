@@ -779,6 +779,8 @@ class MarkdownParser {
                 return "<em>\(formatInlineHTML(value))</em>"
             case .strikethrough(let value):
                 return "<del>\(formatInlineHTML(value))</del>"
+            case .highlight(let value):
+                return "<mark>\(formatInlineHTML(value))</mark>"
             case .image(let alt, let source):
                 let safeSource = Self.sanitizeURLScheme(source)
                 return "<img src=\"\(Self.escapeHTMLAttribute(safeSource))\" alt=\"\(Self.escapeHTMLAttribute(alt))\">"

@@ -1241,6 +1241,8 @@ class ExportManager {
                 result += createRunsForFormattedText(text, extraRunProperties: extraRunProperties + "<w:i/>", allowLinks: allowLinks)
             case .strikethrough(let text):
                 result += createRunsForFormattedText(text, extraRunProperties: extraRunProperties + "<w:strike/>", allowLinks: allowLinks)
+            case .highlight(let text):
+                result += createRunsForFormattedText(text, extraRunProperties: extraRunProperties + "<w:highlight w:val=\"yellow\"/>", allowLinks: allowLinks)
             case .image(let alt, let source):
                 result += createSimpleRun(text: "[Image: \(alt.isEmpty ? source : alt)]", extraRunProperties: extraRunProperties)
             case .link(let label, let destination):

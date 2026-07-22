@@ -307,6 +307,10 @@ class PrintManager {
                 tokenAttributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
                 result.append(formatInlineMarkdown(text, attributes: tokenAttributes))
                 continue
+            case .highlight(let text):
+                tokenAttributes[.backgroundColor] = NSColor.systemYellow.withAlphaComponent(0.35)
+                result.append(formatInlineMarkdown(text, attributes: tokenAttributes))
+                continue
             case .image(let alt, let source):
                 value = "[Image: \(alt.isEmpty ? source : alt)]"
             case .link(let label, _):
