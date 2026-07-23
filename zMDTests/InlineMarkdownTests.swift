@@ -165,6 +165,23 @@ final class InlineMarkdownTests: XCTestCase {
             XCTFail("expected .failed from the downgrade guard, got \(manager.stage)")
         }
     }
+
+    func testAccessibilityToggleCopyReportsState() {
+        XCTAssertEqual(AccessibilityCopy.matchCase, "Match Case")
+        XCTAssertEqual(AccessibilityCopy.regularExpression, "Use Regular Expression")
+        XCTAssertEqual(AccessibilityCopy.toggleValue(true), "On")
+        XCTAssertEqual(AccessibilityCopy.toggleValue(false), "Off")
+    }
+
+    func testReduceMotionDisablesLayoutAnimation() {
+        XCTAssertNil(Motion.layoutAnimation(reduceMotion: true))
+        XCTAssertNotNil(Motion.layoutAnimation(reduceMotion: false))
+    }
+
+    func testHelpHTMLSupportsDarkAppearance() {
+        XCTAssertTrue(HelpHTML.content.contains("color-scheme: light dark"))
+        XCTAssertTrue(HelpHTML.content.contains("prefers-color-scheme: dark"))
+    }
 }
 
 final class RuntimeSmokeTests: XCTestCase {

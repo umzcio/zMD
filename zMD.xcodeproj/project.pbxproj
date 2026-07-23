@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F60000000000000000000001 /* AccessibilityCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000000 /* AccessibilityCopy.swift */; };
+		F60000000000000000000003 /* HelpHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000002 /* HelpHTML.swift */; };
 		BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C007183B47884CF6A423E3DE /* HelpView.swift */; };
 		2208643A1E114A2C9A4C7331 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = 74BFD9DFBCBC4E8593B2C133 /* Resources */; };
 		8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3F07EF007F429AB9E72113 /* SettingsManager.swift */; };
@@ -59,6 +61,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F60000000000000000000000 /* AccessibilityCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityCopy.swift; sourceTree = "<group>"; };
+		F60000000000000000000002 /* HelpHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpHTML.swift; sourceTree = "<group>"; };
 		C007183B47884CF6A423E3DE /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
 		7B3F07EF007F429AB9E72113 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		98515A5CFBA7411D8B33B552 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -132,6 +136,8 @@
 		A4444444 /* zMD */ = {
 			isa = PBXGroup;
 			children = (
+				F60000000000000000000000 /* AccessibilityCopy.swift */,
+				F60000000000000000000002 /* HelpHTML.swift */,
 				A10000000 /* zMDApp.swift */,
 				A10000002 /* ContentView.swift */,
 				C007183B47884CF6A423E3DE /* HelpView.swift */,
@@ -285,6 +291,8 @@ A1111111 /* zMD.app */,
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F60000000000000000000001 /* AccessibilityCopy.swift in Sources */,
+				F60000000000000000000003 /* HelpHTML.swift in Sources */,
 				BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */,
 				A10000001 /* zMDApp.swift in Sources */,
 				A10000003 /* ContentView.swift in Sources */,

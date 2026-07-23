@@ -44,9 +44,17 @@ enum Motion {
     /// settled end).
     static var entrance: Animation { .easeOut(duration: 0.2) }
     /// On-screen movement/morphs (sidebars toggling, view-mode switches).
-    static var standard: Animation { .easeInOut(duration: 0.2) }
+    static func layoutAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.2)
+    }
+
+    static var standard: Animation? {
+        layoutAnimation(reduceMotion: reduceMotion)
+    }
     /// Large layout morphs (focus mode). Upper bound of the UI budget.
-    static var morph: Animation { .easeInOut(duration: 0.3) }
+    static var morph: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.3)
+    }
 
     /// A movement transition that degrades to a plain fade under Reduce
     /// Motion — keeps the state-change feedback, drops the position change.
