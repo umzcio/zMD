@@ -1,14 +1,32 @@
 import Foundation
 import UniformTypeIdentifiers
 
+/// NSItemProvider may invoke load callbacks concurrently. This collector is Sendable because its
+/// only mutable state is protected by `lock` and snapshots never expose the backing array.
+private final class DroppedURLCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var urls: [URL] = []
+
+    nonisolated func append(_ url: URL) {
+        lock.lock()
+        urls.append(url)
+        lock.unlock()
+    }
+
+    nonisolated func snapshot() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return urls
+    }
+}
+
 /// Handles file URLs dropped onto the main window.
 enum DropHandler {
     static let maxOpenOnDrop = 20
 
     static func handle(providers: [NSItemProvider], documentManager: DocumentManager) {
         let group = DispatchGroup()
-        var collectedURLs: [URL] = []
-        let lock = NSLock()
+        let collector = DroppedURLCollector()
 
         for provider in providers {
             group.enter()
@@ -16,16 +34,14 @@ enum DropHandler {
                 defer { group.leave() }
                 guard let data = data as? Data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                lock.lock()
-                collectedURLs.append(url)
-                lock.unlock()
+                collector.append(url)
             }
         }
 
         group.notify(queue: .main) {
             var expanded: [URL] = []
             var nonMarkdownSkipped = 0
-            for url in collectedURLs {
+            for url in collector.snapshot() {
                 var isDirectory: ObjCBool = false
                 guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
                 if isDirectory.boolValue {

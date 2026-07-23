@@ -6,9 +6,10 @@ import XCTest
 /// design — see CLAUDE.md's "Known Limitations") rather than assert conformance to any spec.
 /// Deliberate behavior changes should update these tests, not treat a failure as automatically
 /// wrong.
-final class MarkdownParserTests: XCTestCase {
+nonisolated final class MarkdownParserTests: XCTestCase {
     // MARK: - 1. Headings
 
+    @MainActor
     func testHeadingLevelsProduceMatchingElementsAndTags() {
         let markdown = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -32,6 +33,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 2. Nested lists
 
+    @MainActor
     func testNestedUnorderedListPreservesLevels() {
         let markdown = "- Level0\n  - Level1\n    - Level2\n- Level0b"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -48,6 +50,7 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertTrue(items.allSatisfy { !$0.isOrdered })
     }
 
+    @MainActor
     func testNestedOrderedListPreservesLevelsAndStartNumbers() {
         let markdown = "1. First\n   1. Nested\n2. Second"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -65,6 +68,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 3. Tables
 
+    @MainActor
     func testTableSeparatesHeaderFromBodyRows() {
         let markdown = "| Header1 | Header2 |\n| --- | --- |\n| a | b |\n| c | d |"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -86,6 +90,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 4. Fenced code blocks
 
+    @MainActor
     func testFencedCodeBlockKeepsHashLineLiteral() {
         let markdown = "```swift\n# not a heading\nlet x = 1\n```"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -104,6 +109,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 5. Blockquotes with inline formatting
 
+    @MainActor
     func testBlockquoteAppliesInlineFormatting() {
         let markdown = "> **bold** text"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -120,6 +126,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 6. YAML frontmatter
 
+    @MainActor
     func testLeadingFrontmatterIsCapturedSeparatelyFromContent() {
         let markdown = "---\ntitle: Test\nauthor: Me\n---\n# Heading"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -143,6 +150,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 7. Horizontal rules (mid-document, distinct from frontmatter)
 
+    @MainActor
     func testMidDocumentHorizontalRuleIsNotTreatedAsFrontmatter() {
         let markdown = "Text\n\n***\n\nMore text"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -159,6 +167,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 8. Standalone image line vs. text+image line
 
+    @MainActor
     func testStandaloneImageLineProducesImageElement() {
         let markdown = "![alt](img.png)"
         let elements = MarkdownParser.shared.parse(markdown)
@@ -176,6 +185,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 9. Empty document
 
+    @MainActor
     func testEmptyDocumentProducesNoElementsAndDoesNotCrash() {
         XCTAssertTrue(MarkdownParser.shared.parse("").isEmpty)
         XCTAssertEqual(MarkdownParser.shared.toHTMLBody(""), "")
@@ -188,6 +198,7 @@ final class MarkdownParserTests: XCTestCase {
 
     // MARK: - 10. CRLF line endings
 
+    @MainActor
     func testCRLFLineEndingsParseIdenticallyToLF() {
         let lf = "# Heading\n\nSome text\n\n- item1\n- item2"
         let crlf = "# Heading\r\n\r\nSome text\r\n\r\n- item1\r\n- item2"

@@ -91,7 +91,7 @@ enum Cache {
 /// CDN resource URLs for preview/export scripts. Both preview (WebRenderer) and exported HTML
 /// (MarkdownParser.toHTML) reference the same strings — defining them once eliminates version
 /// drift between the two consumers.
-enum CDN {
+nonisolated enum CDN {
     // S2: pin Mermaid to an exact version (was the floating `mermaid@10`, which auto-adopted any
     // new 10.x without review) and carry a Subresource Integrity hash for every resource. The
     // `integrity` attribute makes the browser / WKWebView refuse a tampered script instead of
