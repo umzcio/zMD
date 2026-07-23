@@ -18,9 +18,11 @@ class FileWatcher {
     }
 
     deinit {
-        MainActor.assumeIsolated {
-            stopWatching()
-        }
+        // No assumeIsolated (traps if the last release happens off-main). Inline the
+        // thread-safe half of stopWatching(): DispatchSource.cancel() is safe from any
+        // thread and the cancel handler closes the fd; the property nil-outs in
+        // stopWatching() are pointless during deinit.
+        dispatchSource?.cancel()
     }
 
     // MARK: - Public Methods

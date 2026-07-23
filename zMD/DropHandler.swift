@@ -20,7 +20,10 @@ private final class DroppedURLCollector: @unchecked Sendable {
     }
 }
 
-/// Handles file URLs dropped onto the main window.
+/// Drop handler for `.fileURL` providers dropped onto the main window.
+/// Recurses one level into dropped folders, caps the open-count to avoid the previous
+/// 5,000-tabs-at-once footgun, and toasts the skipped-count so the user gets feedback when
+/// non-markdown drops or over-cap drops are silently dropped.
 enum DropHandler {
     static let maxOpenOnDrop = 20
 

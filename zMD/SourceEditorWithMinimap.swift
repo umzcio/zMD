@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// Composes the source editor with its optional minimap.
+/// Composes SourceEditorView + an optional MinimapView side panel.
+/// The minimap is gated on SettingsManager.shared.showMinimap. MinimapView needs live
+/// NSTextView/NSScrollView references to draw the viewport indicator, so we capture them
+/// via SourceEditorView's onViewsReady callback and pass them through once available.
 struct SourceEditorWithMinimap: View {
     @Binding var content: String
     let onContentChange: ((String) -> Void)?
@@ -38,6 +41,8 @@ struct SourceEditorWithMinimap: View {
                 MinimapViewRepresentable(
                     textView: capturedTextView,
                     scrollView: capturedScrollView,
+                    // Uses content.count as a cheap monotonic proxy — MinimapView debounces
+                    // its re-render internally, so false positives from count-collisions are benign.
                     contentVersion: content.count
                 )
                 .frame(width: 80)

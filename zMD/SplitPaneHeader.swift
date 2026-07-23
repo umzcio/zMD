@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Header for one side of a two-document split.
+/// Header bar for a two-file split pane: file name, a Rendered|Edit toggle bound to that
+/// pane's mode, and an optional close button (used only on the secondary pane).
 struct SplitPaneHeader: View {
     let name: String
     @Binding var mode: SplitPaneMode

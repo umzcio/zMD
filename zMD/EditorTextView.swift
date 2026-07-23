@@ -72,9 +72,9 @@ class EditorTextView: NSTextView {
     }
 
     deinit {
-        MainActor.assumeIsolated {
-            NotificationCenter.default.removeObserver(self)
-        }
+        // No assumeIsolated (traps if the last release happens off-main);
+        // NotificationCenter.removeObserver is thread-safe and nonisolated.
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - First Responder

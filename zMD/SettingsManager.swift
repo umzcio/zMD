@@ -268,8 +268,8 @@ class SettingsManager: ObservableObject {
     }
 
     deinit {
-        MainActor.assumeIsolated {
-            appearanceObserver?.invalidate()
-        }
+        // No assumeIsolated (traps if the last release happens off-main); KVO
+        // invalidate() is thread-safe and deinit has exclusive property access.
+        appearanceObserver?.invalidate()
     }
 }

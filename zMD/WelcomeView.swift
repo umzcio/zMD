@@ -163,6 +163,7 @@ struct WelcomeView: View {
     }
 
     private func animateEntrance() {
+        // Under Reduce Motion, skip the stagger: one gentle grouped fade.
         if Motion.reduceMotion {
             withAnimation(.easeOut(duration: 0.2)) {
                 showIcon = true

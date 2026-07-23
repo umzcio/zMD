@@ -233,14 +233,17 @@ struct MarkdownTextView: NSViewRepresentable {
         var onScrollPercentChanged: ((CGFloat) -> Void)?
         var isProgrammaticScroll = false
         var isUserScrolling = false
-        private var scrollDebounceTimer: Timer?
-        private var syncDebounceTimer: Timer?
+        // nonisolated(unsafe) on the timers: all live access is on the main actor; the
+        // annotation exists solely so nonisolated deinit can invalidate them (deinit has
+        // exclusive access).
+        nonisolated(unsafe) private var scrollDebounceTimer: Timer?
+        nonisolated(unsafe) private var syncDebounceTimer: Timer?
         // Coalesces the preview rebuild (full re-parse + NSAttributedString build) while the
         // user is actively typing in split/source mode, so each keystroke doesn't force a
         // synchronous main-thread re-parse of the whole document (Plan 009). Only gates *this
         // pane's reaction* to a content change — DocumentManager.updateContent stays fully
         // synchronous, so save/source-editor content is never delayed or dropped.
-        private var rebuildDebounceTimer: Timer?
+        nonisolated(unsafe) private var rebuildDebounceTimer: Timer?
         // Image cache shared across renders
         static var imageCache: NSCache<NSString, NSImage> = {
             let cache = NSCache<NSString, NSImage>()
@@ -568,7 +571,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // Debounce diagram-render notifications so a doc with N Mermaid/KaTeX blocks doesn't
         // force N full rebuilds during initial open (M2). 100ms is below the perceptible-flicker
         // threshold and comfortably groups the burst from a normal multi-diagram doc.
-        private var diagramCoalesceTimer: Timer?
+        nonisolated(unsafe) private var diagramCoalesceTimer: Timer?
 
         // Plan 003: every open pane's coordinator registers for this notification (object: nil
         // — see registration comment in makeNSView), so without filtering, a diagram/math
@@ -585,11 +588,21 @@ struct MarkdownTextView: NSViewRepresentable {
                     guard let self else { return }
                     // Re-check identity at fire time, not just at notification-arrival time.
                     guard self.documentId == myDocumentId else { return }
+                    // Snapshot scroll Y so the post-rebuild restore pins to the user's current
+                    // scroll position (not initialScrollPosition, and not an anchor-char position
+                    // that visibly shifts when math attachments arrive above the viewport).
                     if let scrollView = self.scrollView {
                         self.pendingDiagramScrollY = scrollView.contentView.bounds.origin.y
                     }
                     self.lastContent = nil
                     self.elementCache.removeAll()
+                    // Force SwiftUI to re-evaluate the view body so updateNSView fires and
+                    // rebuilds with the now-cached image. Without this, the math/Mermaid
+                    // placeholder text stays on screen until the user scrolls/types/resizes
+                    // (regression introduced when adding the 100ms coalesce in Phase 5).
+                    // Keyed per-document (Plan 003) so this bump only invalidates this document's
+                    // own tick, not a shared counter every open pane's ObservableObject subscriber
+                    // would otherwise treat as "something changed, re-render everything".
                     DocumentManager.shared.diagramRenderTicks[myDocumentId, default: 0] &+= 1
                 }
             }
@@ -649,13 +662,14 @@ struct MarkdownTextView: NSViewRepresentable {
         }
 
         deinit {
-            MainActor.assumeIsolated {
-                scrollDebounceTimer?.invalidate()
-                syncDebounceTimer?.invalidate()
-                diagramCoalesceTimer?.invalidate()
-                rebuildDebounceTimer?.invalidate()
-                NotificationCenter.default.removeObserver(self)
-            }
+            // No assumeIsolated (traps if the last release happens off-main); deinit has
+            // exclusive property access, and Timer.invalidate / removeObserver are
+            // nonisolated APIs.
+            scrollDebounceTimer?.invalidate()
+            syncDebounceTimer?.invalidate()
+            diagramCoalesceTimer?.invalidate()
+            rebuildDebounceTimer?.invalidate()
+            NotificationCenter.default.removeObserver(self)
         }
     }
 

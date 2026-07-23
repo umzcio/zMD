@@ -33,9 +33,9 @@ class LineNumberGutter: NSRulerView {
     }
 
     deinit {
-        MainActor.assumeIsolated {
-            NotificationCenter.default.removeObserver(self)
-        }
+        // No assumeIsolated (traps if the last release happens off-main);
+        // NotificationCenter.removeObserver is thread-safe and nonisolated.
+        NotificationCenter.default.removeObserver(self)
     }
 
     /// Track character edits on the client text view's storage. didProcessEditing fires for
