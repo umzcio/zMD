@@ -110,6 +110,8 @@ struct SearchBar: View {
                     }
                     .buttonStyle(.plain)
                     .help("Match Case")
+                    .accessibilityLabel(AccessibilityCopy.matchCase)
+                    .accessibilityValue(AccessibilityCopy.toggleValue(isCaseSensitive))
 
                     Button(action: { onToggleRegex?() }) {
                         Text(".*")
@@ -123,6 +125,8 @@ struct SearchBar: View {
                     }
                     .buttonStyle(.plain)
                     .help("Use Regular Expression")
+                    .accessibilityLabel(AccessibilityCopy.regularExpression)
+                    .accessibilityValue(AccessibilityCopy.toggleValue(isRegex))
                 }
 
                 Divider()

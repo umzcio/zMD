@@ -1,7 +1,8 @@
 import XCTest
 @testable import zMD
 
-final class InlineMarkdownTests: XCTestCase {
+nonisolated final class InlineMarkdownTests: XCTestCase {
+    @MainActor
     func testCodeSpansAreAtomicBeforeEmphasis() {
         XCTAssertEqual(
             InlineMarkdown.tokenize("`*literal*` **strong**"),
@@ -9,6 +10,7 @@ final class InlineMarkdownTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testInlineMathIsAtomicBeforeEmphasis() {
         XCTAssertEqual(
             InlineMarkdown.tokenize("value $a * b$ end"),
@@ -16,6 +18,7 @@ final class InlineMarkdownTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testMathTokenRejectsCarriageReturnAndLineSeparators() {
         // A \r, U+2028, or U+2029 inside a $...$ span must not be accepted into a
         // .math token — those characters break the single-quoted JS string literal
@@ -33,6 +36,7 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertNil(InlineMarkdown.tokenize("$a\u{2029}b$").first { if case .math = $0 { return true } else { return false } })
     }
 
+    @MainActor
     func testHighlightTokenizesAsDistinctFromEquals() {
         XCTAssertEqual(
             InlineMarkdown.tokenize("==important== and =not= this"),
@@ -40,6 +44,7 @@ final class InlineMarkdownTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testMixedInlineImagePreservesSurroundingTextInHTML() {
         let html = MarkdownParser.shared.toHTML("See ![diagram](diagram.png) for the flow.", includeStyles: false)
 
@@ -48,6 +53,7 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertTrue(html.contains(" for the flow."))
     }
 
+    @MainActor
     func testInlineImageURLIsEscapedOnce() {
         let html = MarkdownParser.shared.formatInlineHTML("![remote](https://host/img.png?a=1&b=2)")
 
@@ -55,6 +61,7 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertFalse(html.contains("&amp;amp;"))
     }
 
+    @MainActor
     func testRawHTMLBlockIsEscapedInExportHTML() {
         let html = MarkdownParser.shared.toHTML("<div/onclick=alert(1)>raw</div>", includeStyles: false)
 
@@ -62,12 +69,14 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertFalse(html.contains("<div/onclick"))
     }
 
+    @MainActor
     func testMarkdownGeneratedLinkStillEmitsHTML() {
         let html = MarkdownParser.shared.toHTML("[site](https://example.com?a=1&b=2)", includeStyles: false)
 
         XCTAssertTrue(html.contains("<a href=\"https://example.com?a=1&amp;b=2\">site</a>"))
     }
 
+    @MainActor
     func testObfuscatedJavaScriptLinkIsNeutralized() {
         let html = MarkdownParser.shared.toHTML("[bad](java&#9;script:alert(1))", includeStyles: false)
 
@@ -75,6 +84,7 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertFalse(html.contains("java&#9;script"))
     }
 
+    @MainActor
     func testSVGDataImageSourceIsNeutralized() {
         let html = MarkdownParser.shared.toHTML("![bad](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)", includeStyles: false)
 
@@ -82,24 +92,28 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertFalse(html.contains("data:image/svg+xml"))
     }
 
+    @MainActor
     func testNestedInlineFormattingInsideLinkLabelRendersInHTML() {
         let html = MarkdownParser.shared.formatInlineHTML("[**bold**](https://example.com)")
 
         XCTAssertEqual(html, "<a href=\"https://example.com\"><strong>bold</strong></a>")
     }
 
+    @MainActor
     func testLinkInsideStrongFormattingRendersInHTML() {
         let html = MarkdownParser.shared.formatInlineHTML("**[label](https://example.com)**")
 
         XCTAssertEqual(html, "<strong><a href=\"https://example.com\">label</a></strong>")
     }
 
+    @MainActor
     func testHighlightRendersAsMarkTagInHTML() {
         let html = MarkdownParser.shared.formatInlineHTML("==important==")
 
         XCTAssertEqual(html, "<mark>important</mark>")
     }
 
+    @MainActor
     func testDOCXHyperlinkURLsUseSameSchemeHardening() {
         XCTAssertEqual(ExportManager.safeDOCXHyperlinkURL("https://example.com?a=1&b=2"), "https://example.com?a=1&b=2")
         XCTAssertNil(ExportManager.safeDOCXHyperlinkURL("javascript:alert(1)"))
@@ -107,6 +121,7 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertNil(ExportManager.safeDOCXHyperlinkURL("#fragment"))
     }
 
+    @MainActor
     func testEmphasisSkipsEscapedDelimiter() {
         XCTAssertEqual(
             InlineMarkdown.tokenize("*a\\*b*"),
@@ -114,6 +129,7 @@ final class InlineMarkdownTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testMathExtractionDoesNotReuseUserAuthoredPlaceholderText() {
         let extraction = ExportManager.shared.extractMathFromMarkdown("literal ZMDMATHPH0ZMDEND and $x + y$")
 
@@ -123,6 +139,7 @@ final class InlineMarkdownTests: XCTestCase {
         XCTAssertTrue(extraction.modified.contains(extraction.placeholder(at: 0)))
     }
 
+    @MainActor
     func testIsNewerVersionRejectsEqualAndOlderVersions() {
         let manager = UpdateManager.shared
         XCTAssertFalse(manager.isNewerVersion(remote: "2.7.1", current: "2.7.1"))
@@ -137,6 +154,7 @@ final class InlineMarkdownTests: XCTestCase {
     // reopens the sheet -> user clicks "Update Now" again. Before the fix, onLater only reset
     // `stage` on `.failed`, so `.ready` stuck around forever and downloadAndInstall()'s
     // re-entrancy guard (`stage == .idle`) permanently no-oped "Update Now".
+    @MainActor
     func testLaterFromReadyUnsticksDownloadAndInstall() {
         let manager = UpdateManager.shared
         let previousStage = manager.stage
@@ -165,9 +183,30 @@ final class InlineMarkdownTests: XCTestCase {
             XCTFail("expected .failed from the downgrade guard, got \(manager.stage)")
         }
     }
+
+    @MainActor
+    func testAccessibilityToggleCopyReportsState() {
+        XCTAssertEqual(AccessibilityCopy.matchCase, "Match Case")
+        XCTAssertEqual(AccessibilityCopy.regularExpression, "Use Regular Expression")
+        XCTAssertEqual(AccessibilityCopy.toggleValue(true), "On")
+        XCTAssertEqual(AccessibilityCopy.toggleValue(false), "Off")
+    }
+
+    @MainActor
+    func testReduceMotionDisablesLayoutAnimation() {
+        XCTAssertNil(Motion.layoutAnimation(reduceMotion: true))
+        XCTAssertNotNil(Motion.layoutAnimation(reduceMotion: false))
+    }
+
+    @MainActor
+    func testHelpHTMLSupportsDarkAppearance() {
+        XCTAssertTrue(HelpHTML.content.contains("color-scheme: light dark"))
+        XCTAssertTrue(HelpHTML.content.contains("prefers-color-scheme: dark"))
+    }
 }
 
-final class RuntimeSmokeTests: XCTestCase {
+nonisolated final class RuntimeSmokeTests: XCTestCase {
+    @MainActor
     func testSourceReplaceUsesFreshSourceRangesAfterEdit() throws {
         let manager = DocumentManager.shared
         let previousAutoSave = manager.autoSaveEnabled
@@ -231,6 +270,7 @@ final class RuntimeSmokeTests: XCTestCase {
         XCTAssertEqual(manager.openDocuments.first?.content, "prefix alpha REPLACED beta target")
     }
 
+    @MainActor
     func testEnteringPreviewClearsReplaceStateAndUsesRenderedCount() {
         let manager = DocumentManager.shared
         let previousViewMode = manager.viewMode
@@ -267,6 +307,7 @@ final class RuntimeSmokeTests: XCTestCase {
         XCTAssertEqual(manager.currentMatchIndex, 0)
     }
 
+    @MainActor
     func testFileWatcherSurvivesIgnoredAtomicRenameAndReportsLaterEdit() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("zmd-filewatcher-\(UUID().uuidString)", isDirectory: true)
@@ -298,6 +339,7 @@ final class RuntimeSmokeTests: XCTestCase {
     // BEFORE any DirtyCloseConfirming extraction, so Step 2's extraction can be verified against
     // them for zero behavior change.
 
+    @MainActor
     func testUpdateContentMarksDocumentDirtyImmediately() {
         let manager = DocumentManager.shared
         let previousAutoSave = manager.autoSaveEnabled
@@ -325,6 +367,7 @@ final class RuntimeSmokeTests: XCTestCase {
         XCTAssertEqual(manager.openDocuments.first?.content, "changed")
     }
 
+    @MainActor
     func testUpdateContentSchedulesAutoSaveWhenEnabled() throws {
         let manager = DocumentManager.shared
         let previousAutoSave = manager.autoSaveEnabled
@@ -373,6 +416,7 @@ final class RuntimeSmokeTests: XCTestCase {
         XCTAssertEqual(onDisk, "autosaved content")
     }
 
+    @MainActor
     func testUpdateContentDoesNotAutoSaveWhenDisabled() throws {
         let manager = DocumentManager.shared
         let previousAutoSave = manager.autoSaveEnabled
@@ -411,6 +455,7 @@ final class RuntimeSmokeTests: XCTestCase {
         XCTAssertEqual(onDisk, "initial", "disk content must be untouched when auto-save is disabled")
     }
 
+    @MainActor
     func testHasUnsavedChangesReflectsMixedDirtyStateAcrossDocuments() {
         let manager = DocumentManager.shared
         let previousDocuments = manager.openDocuments
@@ -438,6 +483,7 @@ final class RuntimeSmokeTests: XCTestCase {
         XCTAssertFalse(manager.hasUnsavedChanges())
     }
 
+    @MainActor
     func testCloseDocumentOnCleanDocumentClosesImmediatelyWithNoAlert() {
         let manager = DocumentManager.shared
         let previousDocuments = manager.openDocuments
@@ -482,7 +528,8 @@ private final class FileWatcherProbe: FileWatcherDelegate {
     func fileWatcher(_ watcher: FileWatcher, fileWasDeleted url: URL) {}
 }
 
-final class FolderManagerTests: XCTestCase {
+nonisolated final class FolderManagerTests: XCTestCase {
+    @MainActor
     func testFolderScanDoesNotRecurseIntoSymlinkCycle() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("zmd-symlink-cycle-\(UUID().uuidString)", isDirectory: true)
@@ -530,12 +577,13 @@ final class FolderManagerTests: XCTestCase {
     }
 }
 
-final class FolderManagerLifecycleTests: XCTestCase {
+nonisolated final class FolderManagerLifecycleTests: XCTestCase {
     // Regression pin for the suppression-window drop bug (Plan 007): a genuine external edit
     // landing inside the 800ms self-write suppression window used to be dropped silently with
     // nothing scheduled to catch it. This drives the real FolderManager.shared singleton (its
     // initializer is private) through setFolder/noteSelfWrite/closeFolder with real file I/O,
     // matching the RuntimeSmokeTests pattern above for DocumentManager.shared.
+    @MainActor
     func testExternalEditWithinSuppressionWindowIsEventuallyReflected() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("zmd-folder-suppress-\(UUID().uuidString)", isDirectory: true)
@@ -607,7 +655,8 @@ private final class FakeDirtyCloseConfirmer: DirtyCloseConfirming {
     }
 }
 
-final class DocumentManagerTerminationTests: XCTestCase {
+nonisolated final class DocumentManagerTerminationTests: XCTestCase {
+    @MainActor
     func testDiscardingAllDirtyDocumentsTerminatesNowWithoutCallingCompletion() {
         let manager = DocumentManager.shared
         let previousDocuments = manager.openDocuments
@@ -639,6 +688,7 @@ final class DocumentManagerTerminationTests: XCTestCase {
         XCTAssertFalse(completionCalled)
     }
 
+    @MainActor
     func testCancelOnFirstDirtyDocumentStopsTheChainBeforeAskingAboutTheSecond() {
         let manager = DocumentManager.shared
         let previousDocuments = manager.openDocuments
@@ -666,6 +716,7 @@ final class DocumentManagerTerminationTests: XCTestCase {
         XCTAssertFalse(completionCalled)
     }
 
+    @MainActor
     func testSavingTheOnlyDirtyDocumentDefersAndEventuallyCompletesTermination() throws {
         let manager = DocumentManager.shared
         let previousDocuments = manager.openDocuments

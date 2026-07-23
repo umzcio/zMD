@@ -4,7 +4,9 @@ class DirectoryWatcher {
     private var stream: FSEventStreamRef?
     private let path: String
     private let onChange: () -> Void
-    private var debounceTimer: Timer?
+    // nonisolated(unsafe): all live access is on the main actor; the annotation exists
+    // solely so nonisolated deinit can invalidate it (deinit has exclusive access).
+    nonisolated(unsafe) private var debounceTimer: Timer?
 
     /// Explicit retained self reference given to the FSEvents stream.
     /// The stream's `info` pointer is a raw opaque pointer — without this, the Unmanaged
@@ -23,6 +25,9 @@ class DirectoryWatcher {
         // If stopWatching was never called the retainedInfo never released and deinit
         // would never fire. Reaching deinit implies stopWatching already ran, so this is
         // just defensive cleanup for timers.
+        // No assumeIsolated: deinit can run on whatever thread drops the last reference,
+        // and assumeIsolated traps off-main. deinit has exclusive access to stored
+        // properties, and Timer.invalidate is a nonisolated API.
         debounceTimer?.invalidate()
     }
 
@@ -85,7 +90,9 @@ class DirectoryWatcher {
     private func handleChange() {
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.directoryWatcherDebounce, repeats: false) { [weak self] _ in
-            self?.onChange()
+            Task { @MainActor [weak self] in
+                self?.onChange()
+            }
         }
     }
 }
