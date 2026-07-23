@@ -87,6 +87,24 @@ struct TabItem: View {
     @State private var isHovered = false
     @State private var dirtyPulse = false
 
+    // Extracted from body: the inline ternaries pushed the older CI toolchain's type-checker
+    // over its time budget ("unable to type-check this expression in reasonable time").
+    private var titleColor: Color {
+        if isSelected { return .primary }
+        return isHovered ? Color.primary.opacity(0.8) : Color.secondary
+    }
+
+    private var tabFill: Color {
+        if isDragTarget { return Color.accentColor.opacity(0.25) }
+        if isSelected { return Color.accentColor.opacity(0.15) }
+        return isHovered ? Color.accentColor.opacity(0.08) : Color.clear
+    }
+
+    private var tabStroke: Color {
+        if isDragTarget { return Color.accentColor.opacity(0.6) }
+        return isSelected ? Color.accentColor.opacity(0.3) : Color.clear
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             if document.isDirty {
@@ -107,7 +125,7 @@ struct TabItem: View {
             Text(document.name)
                 .font(.system(size: 12))
                 .lineLimit(1)
-                .foregroundStyle(isSelected ? Color.primary : (isHovered ? Color.primary.opacity(0.8) : Color.secondary))
+                .foregroundStyle(titleColor)
 
             Button(action: {
                 NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
@@ -129,11 +147,11 @@ struct TabItem: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isDragTarget ? Color.accentColor.opacity(0.25) : (isSelected ? Color.accentColor.opacity(0.15) : (isHovered ? Color.accentColor.opacity(0.08) : Color.clear)))
+                .fill(tabFill)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(isDragTarget ? Color.accentColor.opacity(0.6) : (isSelected ? Color.accentColor.opacity(0.3) : Color.clear), lineWidth: 1)
+                .stroke(tabStroke, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .help(document.url.path)
