@@ -268,6 +268,8 @@ class SettingsManager: ObservableObject {
     }
 
     deinit {
-        appearanceObserver?.invalidate()
+        MainActor.assumeIsolated {
+            appearanceObserver?.invalidate()
+        }
     }
 }

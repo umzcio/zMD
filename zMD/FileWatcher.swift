@@ -18,7 +18,9 @@ class FileWatcher {
     }
 
     deinit {
-        stopWatching()
+        MainActor.assumeIsolated {
+            stopWatching()
+        }
     }
 
     // MARK: - Public Methods

@@ -33,7 +33,9 @@ class LineNumberGutter: NSRulerView {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        MainActor.assumeIsolated {
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 
     /// Track character edits on the client text view's storage. didProcessEditing fires for

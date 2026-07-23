@@ -23,7 +23,9 @@ class DirectoryWatcher {
         // If stopWatching was never called the retainedInfo never released and deinit
         // would never fire. Reaching deinit implies stopWatching already ran, so this is
         // just defensive cleanup for timers.
-        debounceTimer?.invalidate()
+        MainActor.assumeIsolated {
+            debounceTimer?.invalidate()
+        }
     }
 
     func startWatching() {
@@ -85,7 +87,9 @@ class DirectoryWatcher {
     private func handleChange() {
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.directoryWatcherDebounce, repeats: false) { [weak self] _ in
-            self?.onChange()
+            Task { @MainActor [weak self] in
+                self?.onChange()
+            }
         }
     }
 }

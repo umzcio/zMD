@@ -55,8 +55,10 @@ private final class EscapeKeyHandlingView: NSView {
     }
 
     deinit {
-        if let escapeMonitor {
-            NSEvent.removeMonitor(escapeMonitor)
+        MainActor.assumeIsolated {
+            if let escapeMonitor {
+                NSEvent.removeMonitor(escapeMonitor)
+            }
         }
     }
 }

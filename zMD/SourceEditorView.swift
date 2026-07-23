@@ -312,7 +312,9 @@ struct SourceEditorView: NSViewRepresentable {
         }
 
         deinit {
-            teardown()
+            MainActor.assumeIsolated {
+                teardown()
+            }
         }
 
         /// Tear down observers, timers, and delegate references. Invoked from both `deinit` and
@@ -343,8 +345,10 @@ struct SourceEditorView: NSViewRepresentable {
             // panes) so a synced scroll still gets its newly-visible text colored.
             scrollHighlightTimer?.invalidate()
             scrollHighlightTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
-                guard let self = self, let textView = self.textView else { return }
-                self.applyHighlighting(to: textView)
+                Task { @MainActor [weak self] in
+                    guard let self, let textView = self.textView else { return }
+                    self.applyHighlighting(to: textView)
+                }
             }
 
             guard !isProgrammaticScroll else { return }
@@ -362,7 +366,9 @@ struct SourceEditorView: NSViewRepresentable {
             isUserScrolling = true
             scrollDebounceTimer?.invalidate()
             scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.scrollSyncDebounce, repeats: false) { [weak self] _ in
-                self?.isUserScrolling = false
+                Task { @MainActor [weak self] in
+                    self?.isUserScrolling = false
+                }
             }
 
             onScrollPercentChanged?(percent)
@@ -382,7 +388,9 @@ struct SourceEditorView: NSViewRepresentable {
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
             }) { [weak self] in
-                self?.isProgrammaticScroll = false
+                Task { @MainActor [weak self] in
+                    self?.isProgrammaticScroll = false
+                }
             }
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
@@ -402,15 +410,20 @@ struct SourceEditorView: NSViewRepresentable {
             // Debounced syntax highlighting
             highlightTimer?.invalidate()
             highlightTimer = Timer.scheduledTimer(withTimeInterval: Timing.highlightDebounce, repeats: false) { [weak self] _ in
-                self?.applyHighlighting(to: textView)
+                Task { @MainActor [weak self, weak textView] in
+                    guard let textView else { return }
+                    self?.applyHighlighting(to: textView)
+                }
             }
 
             // Debounced autocomplete trigger (EditorTextView only).
             autocompleteTimer?.invalidate()
             autocompleteTimer = Timer.scheduledTimer(withTimeInterval: Timing.autocompleteDebounce, repeats: false) { [weak self, weak textView] _ in
-                guard let self = self,
-                      let editor = textView as? EditorTextView else { return }
-                self.triggerAutocomplete(in: editor)
+                Task { @MainActor [weak self, weak textView] in
+                    guard let self,
+                          let editor = textView as? EditorTextView else { return }
+                    self.triggerAutocomplete(in: editor)
+                }
             }
 
             // Update gutter

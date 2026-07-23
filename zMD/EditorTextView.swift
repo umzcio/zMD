@@ -72,7 +72,9 @@ class EditorTextView: NSTextView {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        MainActor.assumeIsolated {
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 
     // MARK: - First Responder

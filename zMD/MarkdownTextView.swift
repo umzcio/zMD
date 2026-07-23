@@ -289,8 +289,15 @@ struct MarkdownTextView: NSViewRepresentable {
             }
             rebuildDebounceTimer?.invalidate()
             rebuildDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
-                self?.rebuildDebounceTimer = nil
-                self?.performRebuild(for: parent, textView: textView, scrollView: scrollView, contentChanged: contentChanged)
+                Task { @MainActor [weak self] in
+                    self?.rebuildDebounceTimer = nil
+                    self?.performRebuild(
+                        for: parent,
+                        textView: textView,
+                        scrollView: scrollView,
+                        contentChanged: contentChanged
+                    )
+                }
             }
         }
 
@@ -364,7 +371,9 @@ struct MarkdownTextView: NSViewRepresentable {
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: clampedY))
             }, completionHandler: { [weak self] in
-                self?.isProgrammaticScroll = false
+                Task { @MainActor [weak self] in
+                    self?.isProgrammaticScroll = false
+                }
             })
             scrollView.reflectScrolledClipView(scrollView.contentView)
 
@@ -572,27 +581,17 @@ struct MarkdownTextView: NSViewRepresentable {
                   renderedDocumentId == myDocumentId else { return }
             diagramCoalesceTimer?.invalidate()
             diagramCoalesceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                // Re-check identity at fire time, not just at notification-arrival time: the
-                // user can switch this pane to a different document within the 100ms coalesce
-                // window, and this timer must not then clear the now-displayed document's cache.
-                guard self.documentId == myDocumentId else { return }
-                // Snapshot scroll Y so the post-rebuild restore pins to the user's current
-                // scroll position (not initialScrollPosition, and not an anchor-char position
-                // that visibly shifts when math attachments arrive above the viewport).
-                if let sv = self.scrollView {
-                    self.pendingDiagramScrollY = sv.contentView.bounds.origin.y
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    // Re-check identity at fire time, not just at notification-arrival time.
+                    guard self.documentId == myDocumentId else { return }
+                    if let scrollView = self.scrollView {
+                        self.pendingDiagramScrollY = scrollView.contentView.bounds.origin.y
+                    }
+                    self.lastContent = nil
+                    self.elementCache.removeAll()
+                    DocumentManager.shared.diagramRenderTicks[myDocumentId, default: 0] &+= 1
                 }
-                self.lastContent = nil
-                self.elementCache.removeAll()
-                // Force SwiftUI to re-evaluate the view body so updateNSView fires and
-                // rebuilds with the now-cached image. Without this, the math/Mermaid
-                // placeholder text stays on screen until the user scrolls/types/resizes
-                // (regression I introduced when adding the 100ms coalesce in Phase 5).
-                // Keyed per-document (Plan 003) so this bump only invalidates this document's
-                // own tick, not a shared counter every open pane's ObservableObject subscriber
-                // would otherwise treat as "something changed, re-render everything".
-                DocumentManager.shared.diagramRenderTicks[myDocumentId, default: 0] &+= 1
             }
         }
 
@@ -602,8 +601,10 @@ struct MarkdownTextView: NSViewRepresentable {
             // Debounce scroll position saving
             scrollDebounceTimer?.invalidate()
             scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: Timing.scrollPositionPersistDebounce, repeats: false) { [weak self] _ in
-                let position = clipView.bounds.origin.y
-                self?.onScrollPositionChanged?(position)
+                Task { @MainActor [weak self, weak clipView] in
+                    guard let clipView else { return }
+                    self?.onScrollPositionChanged?(clipView.bounds.origin.y)
+                }
             }
 
             // Scroll sync percent reporting
@@ -616,7 +617,9 @@ struct MarkdownTextView: NSViewRepresentable {
                     isUserScrolling = true
                     syncDebounceTimer?.invalidate()
                     syncDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
-                        self?.isUserScrolling = false
+                        Task { @MainActor [weak self] in
+                            self?.isUserScrolling = false
+                        }
                     }
                     onScrollPercentChanged?(percent)
                 }
@@ -638,17 +641,21 @@ struct MarkdownTextView: NSViewRepresentable {
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
             }) { [weak self] in
-                self?.isProgrammaticScroll = false
+                Task { @MainActor [weak self] in
+                    self?.isProgrammaticScroll = false
+                }
             }
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         deinit {
-            scrollDebounceTimer?.invalidate()
-            syncDebounceTimer?.invalidate()
-            diagramCoalesceTimer?.invalidate()
-            rebuildDebounceTimer?.invalidate()
-            NotificationCenter.default.removeObserver(self)
+            MainActor.assumeIsolated {
+                scrollDebounceTimer?.invalidate()
+                syncDebounceTimer?.invalidate()
+                diagramCoalesceTimer?.invalidate()
+                rebuildDebounceTimer?.invalidate()
+                NotificationCenter.default.removeObserver(self)
+            }
         }
     }
 

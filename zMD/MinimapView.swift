@@ -33,14 +33,18 @@ class MinimapView: NSView {
     }
 
     deinit {
-        debounceTimer?.invalidate()
+        MainActor.assumeIsolated {
+            debounceTimer?.invalidate()
+        }
     }
 
     func invalidateContent() {
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
-            self?.regenerateImage()
-            self?.needsDisplay = true
+            Task { @MainActor [weak self] in
+                self?.regenerateImage()
+                self?.needsDisplay = true
+            }
         }
     }
 
