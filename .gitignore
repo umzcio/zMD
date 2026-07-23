@@ -90,3 +90,8 @@ tmp/
 
 # local docs — not published
 docs/*
+
+# Agent tooling (local skill installs — see npx skills)
+.agents/
+.claude/
+skills-lock.json
