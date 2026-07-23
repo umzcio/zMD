@@ -9,6 +9,16 @@
 /* Begin PBXBuildFile section */
 		F60000000000000000000001 /* AccessibilityCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000000 /* AccessibilityCopy.swift */; };
 		F60000000000000000000003 /* HelpHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000002 /* HelpHTML.swift */; };
+		F60000000000000000000011 /* DropHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000010 /* DropHandler.swift */; };
+		F60000000000000000000013 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000012 /* WelcomeView.swift */; };
+		F60000000000000000000015 /* PressableButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000014 /* PressableButtonStyle.swift */; };
+		F60000000000000000000017 /* RecentFileButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000016 /* RecentFileButtonStyle.swift */; };
+		F60000000000000000000019 /* EmptyDocumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000018 /* EmptyDocumentView.swift */; };
+		F6000000000000000000001B /* NormalContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000001A /* NormalContentView.swift */; };
+		F6000000000000000000001D /* FocusModeContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000001C /* FocusModeContentView.swift */; };
+		F6000000000000000000001F /* SplitPaneHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000001E /* SplitPaneHeader.swift */; };
+		F60000000000000000000021 /* DocumentViewModeContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000020 /* DocumentViewModeContent.swift */; };
+		F60000000000000000000023 /* SourceEditorWithMinimap.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000022 /* SourceEditorWithMinimap.swift */; };
 		BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C007183B47884CF6A423E3DE /* HelpView.swift */; };
 		2208643A1E114A2C9A4C7331 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = 74BFD9DFBCBC4E8593B2C133 /* Resources */; };
 		8DDB05797102492EAB731C41 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3F07EF007F429AB9E72113 /* SettingsManager.swift */; };
@@ -63,6 +73,16 @@
 /* Begin PBXFileReference section */
 		F60000000000000000000000 /* AccessibilityCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityCopy.swift; sourceTree = "<group>"; };
 		F60000000000000000000002 /* HelpHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpHTML.swift; sourceTree = "<group>"; };
+		F60000000000000000000010 /* DropHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropHandler.swift; sourceTree = "<group>"; };
+		F60000000000000000000012 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
+		F60000000000000000000014 /* PressableButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressableButtonStyle.swift; sourceTree = "<group>"; };
+		F60000000000000000000016 /* RecentFileButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentFileButtonStyle.swift; sourceTree = "<group>"; };
+		F60000000000000000000018 /* EmptyDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyDocumentView.swift; sourceTree = "<group>"; };
+		F6000000000000000000001A /* NormalContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalContentView.swift; sourceTree = "<group>"; };
+		F6000000000000000000001C /* FocusModeContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusModeContentView.swift; sourceTree = "<group>"; };
+		F6000000000000000000001E /* SplitPaneHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitPaneHeader.swift; sourceTree = "<group>"; };
+		F60000000000000000000020 /* DocumentViewModeContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentViewModeContent.swift; sourceTree = "<group>"; };
+		F60000000000000000000022 /* SourceEditorWithMinimap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorWithMinimap.swift; sourceTree = "<group>"; };
 		C007183B47884CF6A423E3DE /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
 		7B3F07EF007F429AB9E72113 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		98515A5CFBA7411D8B33B552 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -138,6 +158,16 @@
 			children = (
 				F60000000000000000000000 /* AccessibilityCopy.swift */,
 				F60000000000000000000002 /* HelpHTML.swift */,
+				F60000000000000000000010 /* DropHandler.swift */,
+				F60000000000000000000012 /* WelcomeView.swift */,
+				F60000000000000000000014 /* PressableButtonStyle.swift */,
+				F60000000000000000000016 /* RecentFileButtonStyle.swift */,
+				F60000000000000000000018 /* EmptyDocumentView.swift */,
+				F6000000000000000000001A /* NormalContentView.swift */,
+				F6000000000000000000001C /* FocusModeContentView.swift */,
+				F6000000000000000000001E /* SplitPaneHeader.swift */,
+				F60000000000000000000020 /* DocumentViewModeContent.swift */,
+				F60000000000000000000022 /* SourceEditorWithMinimap.swift */,
 				A10000000 /* zMDApp.swift */,
 				A10000002 /* ContentView.swift */,
 				C007183B47884CF6A423E3DE /* HelpView.swift */,
@@ -293,6 +323,16 @@ A1111111 /* zMD.app */,
 			files = (
 				F60000000000000000000001 /* AccessibilityCopy.swift in Sources */,
 				F60000000000000000000003 /* HelpHTML.swift in Sources */,
+				F60000000000000000000011 /* DropHandler.swift in Sources */,
+				F60000000000000000000013 /* WelcomeView.swift in Sources */,
+				F60000000000000000000015 /* PressableButtonStyle.swift in Sources */,
+				F60000000000000000000017 /* RecentFileButtonStyle.swift in Sources */,
+				F60000000000000000000019 /* EmptyDocumentView.swift in Sources */,
+				F6000000000000000000001B /* NormalContentView.swift in Sources */,
+				F6000000000000000000001D /* FocusModeContentView.swift in Sources */,
+				F6000000000000000000001F /* SplitPaneHeader.swift in Sources */,
+				F60000000000000000000021 /* DocumentViewModeContent.swift in Sources */,
+				F60000000000000000000023 /* SourceEditorWithMinimap.swift in Sources */,
 				BD22D32F63AA4915B6E3390D /* HelpView.swift in Sources */,
 				A10000001 /* zMDApp.swift in Sources */,
 				A10000003 /* ContentView.swift in Sources */,
