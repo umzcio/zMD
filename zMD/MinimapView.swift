@@ -7,7 +7,9 @@ class MinimapView: NSView {
     weak var linkedScrollView: NSScrollView?
 
     private var cachedImage: CGImage?
-    private var debounceTimer: Timer?
+    // nonisolated(unsafe): all live access is on the main actor; the annotation exists
+    // solely so nonisolated deinit can invalidate it (deinit has exclusive access).
+    nonisolated(unsafe) private var debounceTimer: Timer?
     private var isDragging = false
 
     private let minimapWidth: CGFloat = 80
@@ -33,14 +35,18 @@ class MinimapView: NSView {
     }
 
     deinit {
+        // No assumeIsolated (traps if the last release happens off-main); deinit has
+        // exclusive property access and Timer.invalidate is nonisolated.
         debounceTimer?.invalidate()
     }
 
     func invalidateContent() {
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
-            self?.regenerateImage()
-            self?.needsDisplay = true
+            Task { @MainActor [weak self] in
+                self?.regenerateImage()
+                self?.needsDisplay = true
+            }
         }
     }
 

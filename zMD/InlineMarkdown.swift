@@ -1,7 +1,7 @@
 import Foundation
 
-enum InlineMarkdown {
-    enum Token: Equatable {
+nonisolated enum InlineMarkdown {
+    enum Token: Equatable, Sendable {
         case text(String)
         case lineBreak
         case code(String)

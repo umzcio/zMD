@@ -120,7 +120,7 @@ class DocumentManager: ObservableObject {
     // monotonic token so a stale background result can't overwrite a newer one.
     private var searchDebounceTimer: Timer?
     private var searchToken: UInt64 = 0
-    private static let maxSearchMatches = 10_000
+    private nonisolated static let maxSearchMatches = 10_000
 
     /// Map a human-readable encoding name (stored on MarkdownDocument.detectedEncoding) back to a String.Encoding.
     /// Callers writing a file must use this so round-tripping preserves the source encoding.
@@ -507,17 +507,17 @@ class DocumentManager: ObservableObject {
         if autoSaveEnabled && !(openDocuments[index].isUntitled) {
             autoSaveTimers[documentId]?.invalidate()
             autoSaveTimers[documentId] = Timer.scheduledTimer(withTimeInterval: Timing.autoSaveDebounce, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                self.autoSaveTimers[documentId] = nil
-                // Never auto-save while a file-change dialog is outstanding for this doc,
-                // or while the doc no longer exists in the open set.
-                guard !self.pendingExternalChange.contains(documentId) else { return }
-                guard self.openDocuments.contains(where: { $0.id == documentId }) else { return }
-                // L4: an external write may have landed during the 2s debounce with its watcher
-                // change-event still queued behind this timer. Skip the auto-save so we don't
-                // clobber it; the pending watcher event will surface the external-change dialog.
-                if self.fileWatchers[documentId]?.hasPendingExternalChange() == true { return }
-                self.saveDocument(id: documentId)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.autoSaveTimers[documentId] = nil
+                    // Never auto-save while a file-change dialog is outstanding for this doc,
+                    // or while the doc no longer exists in the open set.
+                    guard !self.pendingExternalChange.contains(documentId) else { return }
+                    guard self.openDocuments.contains(where: { $0.id == documentId }) else { return }
+                    // Skip auto-save if an external write arrived during the debounce.
+                    if self.fileWatchers[documentId]?.hasPendingExternalChange() == true { return }
+                    self.saveDocument(id: documentId)
+                }
             }
         }
     }
@@ -1036,7 +1036,7 @@ enum ViewMode: String, CaseIterable {
     }
 }
 
-struct SearchMatch: Identifiable {
+nonisolated struct SearchMatch: Identifiable, Sendable {
     let id = UUID()
     let range: NSRange
     let lineNumber: Int
@@ -1109,7 +1109,9 @@ extension DocumentManager {
         }
         // 200ms debounce: enough to coalesce a typing burst, short enough to feel live.
         searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
-            self?.executeSearch()
+            Task { @MainActor [weak self] in
+                self?.executeSearch()
+            }
         }
     }
 
@@ -1132,10 +1134,10 @@ extension DocumentManager {
 
         if useRegex {
             // Background: regex evaluation can be O(catastrophic) on adversarial patterns.
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            DispatchQueue.global(qos: .userInitiated).async {
                 let matches = Self.regexMatches(pattern: pattern, content: content, caseSensitive: caseSensitive)
-                DispatchQueue.main.async {
-                    guard let self = self, self.searchToken == token else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.searchToken == token else { return }
                     self.searchMatches = matches
                     if self.currentMatchIndex >= matches.count {
                         self.currentMatchIndex = 0
@@ -1155,7 +1157,7 @@ extension DocumentManager {
     /// matches without rescanning the whole prefix from startIndex for every match. Because match
     /// positions are monotonic, the scanned regions are disjoint and cover the content at most once,
     /// so total work is O(n) instead of O(n × matches).
-    private static func newlineCount(in content: String, from: String.Index, to: String.Index) -> Int {
+    private nonisolated static func newlineCount(in content: String, from: String.Index, to: String.Index) -> Int {
         var count = 0
         var i = from
         while i < to {
@@ -1165,7 +1167,7 @@ extension DocumentManager {
         return count
     }
 
-    private static func regexMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
+    private nonisolated static func regexMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
         var options: NSRegularExpression.Options = []
         if !caseSensitive { options.insert(.caseInsensitive) }
         guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return [] }
@@ -1185,7 +1187,7 @@ extension DocumentManager {
         return matches
     }
 
-    private static func plainMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
+    private nonisolated static func plainMatches(pattern: String, content: String, caseSensitive: Bool) -> [SearchMatch] {
         var searchOptions: NSString.CompareOptions = []
         if !caseSensitive { searchOptions.insert(.caseInsensitive) }
         let nsContent = content as NSString

@@ -55,7 +55,9 @@ class ToastManager: ObservableObject {
 
             // Auto-dismiss after 3 seconds
             self.dismissTimers[toast.id] = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-                self?.dismiss(toast.id)
+                Task { @MainActor [weak self] in
+                    self?.dismiss(toast.id)
+                }
             }
         }
     }

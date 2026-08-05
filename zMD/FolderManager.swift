@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct FileTreeItem: Identifiable {
+nonisolated struct FileTreeItem: Identifiable, Sendable {
     let id: String
     let url: URL
     let name: String
@@ -108,7 +108,9 @@ class FolderManager: ObservableObject {
             deferredRescanTimer?.invalidate()
             let remaining = Self.selfWriteSuppressionWindow - elapsed
             deferredRescanTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
-                self?.performTreeScan(for: folderURL)
+                Task { @MainActor [weak self] in
+                    self?.performTreeScan(for: folderURL)
+                }
             }
             return
         }
@@ -123,7 +125,7 @@ class FolderManager: ObservableObject {
         scanGeneration += 1
         let generation = scanGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self, folderURL] in
-            let tree = self?.buildTree(at: folderURL, relativeTo: folderURL) ?? []
+            let tree = Self.buildTree(at: folderURL, relativeTo: folderURL)
             DispatchQueue.main.async {
                 // Both setFolder and refreshFileTreeAsync dispatch onto the concurrent global
                 // queue, so an older scan can finish after a newer one. Only publish if no
@@ -176,7 +178,7 @@ class FolderManager: ObservableObject {
 
     // MARK: - File Tree
 
-    private func buildTree(at url: URL, relativeTo root: URL) -> [FileTreeItem] {
+    private nonisolated static func buildTree(at url: URL, relativeTo root: URL) -> [FileTreeItem] {
         let fileManager = FileManager.default
         guard let contents = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
             return []
@@ -230,7 +232,7 @@ class FolderManager: ObservableObject {
         return directories + files
     }
 
-    private func containsMarkdownFiles(_ items: [FileTreeItem]) -> Bool {
+    private nonisolated static func containsMarkdownFiles(_ items: [FileTreeItem]) -> Bool {
         for item in items {
             if !item.isDirectory { return true }
             if let children = item.children, containsMarkdownFiles(children) { return true }

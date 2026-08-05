@@ -33,6 +33,8 @@ class LineNumberGutter: NSRulerView {
     }
 
     deinit {
+        // No assumeIsolated (traps if the last release happens off-main);
+        // NotificationCenter.removeObserver is thread-safe and nonisolated.
         NotificationCenter.default.removeObserver(self)
     }
 

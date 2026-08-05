@@ -38,7 +38,9 @@ private struct EscapeKeyHandler: NSViewRepresentable {
 }
 
 private final class EscapeKeyHandlingView: NSView {
-    private var escapeMonitor: Any?
+    // nonisolated(unsafe): all live access is on the main actor; the annotation exists
+    // solely so nonisolated deinit can remove the monitor (deinit has exclusive access).
+    nonisolated(unsafe) private var escapeMonitor: Any?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -55,6 +57,9 @@ private final class EscapeKeyHandlingView: NSView {
     }
 
     deinit {
+        // No assumeIsolated (traps if the last release happens off-main).
+        // NSEvent.removeMonitor is documented as callable from any thread for
+        // local monitors; deinit has exclusive access to the stored token.
         if let escapeMonitor {
             NSEvent.removeMonitor(escapeMonitor)
         }

@@ -2,6 +2,34 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+/// Bridges Main Actor WebRenderer results back to a waiting export worker. The lock protects both
+/// the image slots and timeout state; the unchecked conformance is limited to that invariant.
+private final class MathRenderResults: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var images: [NSImage?]
+    nonisolated(unsafe) private var acceptsResults = true
+
+    nonisolated init(count: Int) {
+        images = Array(repeating: nil, count: count)
+    }
+
+    @MainActor
+    func store(_ image: NSImage?, at index: Int) {
+        lock.lock()
+        if acceptsResults {
+            images[index] = image
+        }
+        lock.unlock()
+    }
+
+    nonisolated func finish() -> [NSImage?] {
+        lock.lock()
+        defer { lock.unlock() }
+        acceptsResults = false
+        return images
+    }
+}
+
 class ExportManager {
     static let shared = ExportManager()
     private let parser = MarkdownParser.shared
@@ -26,7 +54,7 @@ class ExportManager {
     /// spans. A math span like `$*p < .05. **p < .01. ***p < .001.$` ends up with `<em>` and
     /// `<strong>` tags woven through the LaTeX, which KaTeX then can't parse. Pre-extracting
     /// at the markdown layer keeps the LaTeX pristine.
-    struct MathExtraction {
+    nonisolated struct MathExtraction: Sendable {
         let modified: String
         let math: [(latex: String, display: Bool)]
         let placeholderPrefix: String
@@ -36,7 +64,7 @@ class ExportManager {
         }
     }
 
-    func extractMathFromMarkdown(_ markdown: String) -> MathExtraction {
+    nonisolated func extractMathFromMarkdown(_ markdown: String) -> MathExtraction {
         var math: [(latex: String, display: Bool)] = []
         let placeholderPrefix = Self.mathPlaceholderPrefix(avoiding: markdown)
 
@@ -74,7 +102,7 @@ class ExportManager {
         return MathExtraction(modified: modified, math: math, placeholderPrefix: placeholderPrefix)
     }
 
-    private static func mathPlaceholderPrefix(avoiding source: String) -> String {
+    private nonisolated static func mathPlaceholderPrefix(avoiding source: String) -> String {
         var prefix: String
         repeat {
             let token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -83,7 +111,7 @@ class ExportManager {
         return prefix
     }
 
-    private func protectedMarkdownRanges(in markdown: String) -> [NSRange] {
+    private nonisolated func protectedMarkdownRanges(in markdown: String) -> [NSRange] {
         let ns = markdown as NSString
         let fullRange = NSRange(location: 0, length: ns.length)
         var ranges: [NSRange] = []
@@ -122,13 +150,13 @@ class ExportManager {
         return ranges
     }
 
-    private static func openingFenceMarker(in trimmedLine: String) -> String? {
+    private nonisolated static func openingFenceMarker(in trimmedLine: String) -> String? {
         guard let first = trimmedLine.first, first == "`" || first == "~" else { return nil }
         let marker = String(trimmedLine.prefix { $0 == first })
         return marker.count >= 3 ? marker : nil
     }
 
-    private static func isClosingFence(_ trimmedLine: String, for openingMarker: String) -> Bool {
+    private nonisolated static func isClosingFence(_ trimmedLine: String, for openingMarker: String) -> Bool {
         guard let markerCharacter = openingMarker.first else { return false }
         let closingMarker = String(trimmedLine.prefix { $0 == markerCharacter })
         guard closingMarker.count >= openingMarker.count else { return false }
@@ -136,40 +164,31 @@ class ExportManager {
         return remainder.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    private func rangeIntersects(_ range: NSRange, _ ranges: [NSRange]) -> Bool {
+    private nonisolated func rangeIntersects(_ range: NSRange, _ ranges: [NSRange]) -> Bool {
         ranges.contains { NSIntersectionRange(range, $0).length > 0 }
     }
 
     /// Render each math expression to a base64 PNG `<img>` and substitute into the HTML where
     /// the matching `ZMDMATHPHnZMDEND` placeholder appears. Forces light-theme glyphs so they
     /// stay readable on the white PDF/RTF page.
-    private func substituteMathPlaceholdersInHTML(_ html: String, extraction: MathExtraction) -> String {
+    private nonisolated func substituteMathPlaceholdersInHTML(_ html: String, extraction: MathExtraction) -> String {
         guard !extraction.math.isEmpty else { return html }
 
-        var renderedImages = Array<NSImage?>(repeating: nil, count: extraction.math.count)
-        let renderedImagesLock = NSLock()
+        let renderResults = MathRenderResults(count: extraction.math.count)
         let group = DispatchGroup()
-        var acceptingResults = true
 
         for (i, hit) in extraction.math.enumerated() {
             group.enter()
             DispatchQueue.main.async {
                 WebRenderer.shared.renderMath(hit.latex, displayMode: hit.display, forceLightTheme: true) { image in
-                    renderedImagesLock.lock()
-                    if acceptingResults {
-                        renderedImages[i] = image
-                    }
-                    renderedImagesLock.unlock()
+                    renderResults.store(image, at: i)
                     group.leave()
                 }
             }
         }
 
         _ = group.wait(timeout: .now() + 5)
-        renderedImagesLock.lock()
-        acceptingResults = false
-        let renderedImagesSnapshot = renderedImages
-        renderedImagesLock.unlock()
+        let renderedImagesSnapshot = renderResults.finish()
 
         var result = html
         for (i, hit) in extraction.math.enumerated() {
@@ -195,7 +214,7 @@ class ExportManager {
     }
 
     /// Render an NSImage at exactly `size` (in points), letting AppKit downsample.
-    private func resizeImage(_ image: NSImage, to size: NSSize) -> NSImage? {
+    private nonisolated func resizeImage(_ image: NSImage, to size: NSSize) -> NSImage? {
         let newImage = NSImage(size: size)
         newImage.lockFocus()
         NSGraphicsContext.current?.imageInterpolation = .high
@@ -212,7 +231,7 @@ class ExportManager {
     /// network resources on the main thread; offline or with a slow CDN it hangs for seconds
     /// per resource (H14). KaTeX/Mermaid scripts wouldn't run inside an attributed-string
     /// rendering pass anyway, so dropping them is functionally a no-op for the rendered output.
-    private func stripNetworkResourcesForAttributedString(_ html: String) -> String {
+    private nonisolated func stripNetworkResourcesForAttributedString(_ html: String) -> String {
         var result = html
         // Strip <script>...</script> blocks (case-insensitive).
         result = result.replacingOccurrences(
@@ -239,7 +258,7 @@ class ExportManager {
     /// export resolves images against the document's directory the same way preview does.
     /// Without this `<img src="images/foo.png">` resolves against the process working
     /// directory (typically `/`), and the image silently fails to render in PDF (M15).
-    private func absolutizeImageSrcs(_ html: String, baseURL: URL?) -> String {
+    private nonisolated func absolutizeImageSrcs(_ html: String, baseURL: URL?) -> String {
         guard let baseDir = baseURL?.deletingLastPathComponent() else { return html }
         let pattern = #"(<img\b[^>]*\bsrc\s*=\s*["'])([^"']+)(["'])"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return html }
@@ -520,19 +539,21 @@ class ExportManager {
     }
 
     // Property to track hyperlinks and images during document generation
-    private var hyperlinkRelationships: [(id: String, url: String)] = []
-    private var imageRelationships: [(id: String, fileName: String, data: Data, ext: String)] = []
+    // Accessed only by work submitted to `docxExportQueue`. The queue is serial, so one export
+    // exclusively owns this relationship/counter state from reset through archive creation.
+    nonisolated(unsafe) private var hyperlinkRelationships: [(id: String, url: String)] = []
+    nonisolated(unsafe) private var imageRelationships: [(id: String, fileName: String, data: Data, ext: String)] = []
     // Static relationships occupy rId1..rIdN (numbering, styles, settings, header, footer).
     // L14: derived from `staticDOCXRelationshipCount` instead of a hardcoded literal so adding a
     // new static relationship in `word/_rels/document.xml.rels` only needs that constant updated;
     // hyperlink/image counters auto-shift to avoid collision.
-    private static let staticDOCXRelationshipCount = 5
-    private var nextHyperlinkId = staticDOCXRelationshipCount + 1
-    private var nextImageId = 1
-    private var numberedListCount = 0 // tracks how many separate numbered lists for numId generation
-    private var numberedListStarts: [Int] = [] // start number per numbered list (index 0 = first ordered list)
+    private nonisolated static let staticDOCXRelationshipCount = 5
+    nonisolated(unsafe) private var nextHyperlinkId = staticDOCXRelationshipCount + 1
+    nonisolated(unsafe) private var nextImageId = 1
+    nonisolated(unsafe) private var numberedListCount = 0
+    nonisolated(unsafe) private var numberedListStarts: [Int] = []
 
-    private func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil, baseURL: URL? = nil) throws {
+    private nonisolated func createCustomDOCX(content: String, outputURL: URL, fileName: String? = nil, baseURL: URL? = nil) throws {
         // The per-export accumulators above live on the shared singleton and are safe ONLY
         // because every caller funnels through the serial docxExportQueue. A second entry point
         // that skips the queue would interleave relationship IDs across documents (the rId
@@ -927,7 +948,7 @@ class ExportManager {
 
     // MARK: - DOCX Document XML Generation
 
-    private func generateDocumentXML(markdown: String, baseURL: URL? = nil) -> String {
+    private nonisolated func generateDocumentXML(markdown: String, baseURL: URL? = nil) -> String {
         // Consumes the unified MarkdownParser element tree so DOCX export is bit-for-bit
         // consistent with preview/HTML/RTF/print. The previous line-based generator diverged:
         // H5/H6 lost, no frontmatter/mermaid/math/HTML block handling, ambiguous fence detection,
@@ -1029,7 +1050,7 @@ class ExportManager {
     }
 
     /// Emit a full `<w:tbl>` block from parsed rows. First row is treated as the header.
-    private func generateTableXML(rows: [[String]]) -> String {
+    private nonisolated func generateTableXML(rows: [[String]]) -> String {
         guard !rows.isEmpty else { return "" }
         let columnCount = rows.map { $0.count }.max() ?? 1
         // Page width: 12240 - 1440 left - 1440 right = 9360 DXA
@@ -1103,43 +1124,43 @@ class ExportManager {
 
     // MARK: - DOCX Paragraph Helpers
 
-    private func createHeadingParagraph(text: String, level: Int) -> String {
+    private nonisolated func createHeadingParagraph(text: String, level: Int) -> String {
         return """
         <w:p><w:pPr><w:pStyle w:val="Heading\(level)"/></w:pPr>\(createRunsForFormattedText(text))</w:p>
         """
     }
 
-    private func createNormalParagraph(text: String) -> String {
+    private nonisolated func createNormalParagraph(text: String) -> String {
         return """
         <w:p><w:pPr><w:spacing w:after="160"/></w:pPr>\(createRunsForFormattedText(text))</w:p>
         """
     }
 
-    private func createListParagraph(text: String, numId: Int, level: Int = 0) -> String {
+    private nonisolated func createListParagraph(text: String, numId: Int, level: Int = 0) -> String {
         return """
         <w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="\(level)"/><w:numId w:val="\(numId)"/></w:numPr></w:pPr>\(createRunsForFormattedText(text))</w:p>
         """
     }
 
-    private func createCodeParagraph(text: String) -> String {
+    private nonisolated func createCodeParagraph(text: String) -> String {
         return """
         <w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr><w:r><w:t xml:space="preserve">\(xmlEscape(text))</w:t></w:r></w:p>
         """
     }
 
-    private func createBlockquoteParagraph(text: String) -> String {
+    private nonisolated func createBlockquoteParagraph(text: String) -> String {
         return """
         <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:ind w:left="360"/><w:spacing w:after="120"/></w:pPr>\(createRunsForFormattedText(text, extraRunProperties: "<w:i/><w:color w:val=\"555555\"/>"))</w:p>
         """
     }
 
-    private func createHorizontalRule() -> String {
+    private nonisolated func createHorizontalRule() -> String {
         return """
         <w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/></w:pBdr><w:spacing w:before="200" w:after="200"/></w:pPr></w:p>
         """
     }
 
-    private func createImageParagraph(path: String, alt: String, baseURL: URL?) -> String {
+    private nonisolated func createImageParagraph(path: String, alt: String, baseURL: URL?) -> String {
         // Resolve the image path. H17: a path like `images/foo.png` is RELATIVE to the doc;
         // building `URL(fileURLWithPath:)` from it produced a URL relative to the process working
         // directory (typically `/`), which spuriously matched `/images/foo.png` if it existed and
@@ -1212,17 +1233,17 @@ class ExportManager {
         """
     }
 
-    private func createHeaderCellRun(text: String) -> String {
+    private nonisolated func createHeaderCellRun(text: String) -> String {
         return createRunsForFormattedText(text, extraRunProperties: "<w:b/><w:bCs/><w:color w:val=\"FFFFFF\"/>")
     }
 
-    static func safeDOCXHyperlinkURL(_ url: String) -> String? {
+    nonisolated static func safeDOCXHyperlinkURL(_ url: String) -> String? {
         let safeURL = MarkdownParser.sanitizeURLScheme(url)
         if safeURL == "#" || safeURL.hasPrefix("#") { return nil }
         return safeURL
     }
 
-    private func createRunsForFormattedText(_ text: String, extraRunProperties: String = "", allowLinks: Bool = true) -> String {
+    private nonisolated func createRunsForFormattedText(_ text: String, extraRunProperties: String = "", allowLinks: Bool = true) -> String {
         var result = ""
 
         let content: String
@@ -1265,7 +1286,7 @@ class ExportManager {
         return result
     }
 
-    private func taskListMarker(in text: String) -> (checked: Bool, remaining: String)? {
+    private nonisolated func taskListMarker(in text: String) -> (checked: Bool, remaining: String)? {
         guard let regex = try? NSRegularExpression(pattern: #"^\s*\[([ xX])\]\s+"#),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let markerRange = Range(match.range(at: 1), in: text),
@@ -1275,11 +1296,11 @@ class ExportManager {
         return (String(text[markerRange]).lowercased() == "x", String(text[fullRange.upperBound...]))
     }
 
-    private func runProperties(_ properties: String) -> String {
+    private nonisolated func runProperties(_ properties: String) -> String {
         properties.isEmpty ? "" : "<w:rPr>\(properties)</w:rPr>"
     }
 
-    private func createSimpleRun(text: String, extraRunProperties: String = "") -> String {
+    private nonisolated func createSimpleRun(text: String, extraRunProperties: String = "") -> String {
         guard !text.isEmpty else { return "" }
         return """
             <w:r>
@@ -1289,7 +1310,7 @@ class ExportManager {
         """
     }
 
-    private func createLineBreakRun(extraRunProperties: String = "") -> String {
+    private nonisolated func createLineBreakRun(extraRunProperties: String = "") -> String {
         return """
             <w:r>
                 \(runProperties(extraRunProperties))
@@ -1298,7 +1319,7 @@ class ExportManager {
         """
     }
 
-    private func createFormattedRun(text: String, properties: String, extraRunProperties: String = "") -> String {
+    private nonisolated func createFormattedRun(text: String, properties: String, extraRunProperties: String = "") -> String {
         return """
             <w:r>
                 <w:rPr>
@@ -1310,7 +1331,7 @@ class ExportManager {
         """
     }
 
-    private func createCodeRun(text: String, extraRunProperties: String = "") -> String {
+    private nonisolated func createCodeRun(text: String, extraRunProperties: String = "") -> String {
         return """
             <w:r>
                 <w:rPr>
@@ -1323,7 +1344,7 @@ class ExportManager {
         """
     }
 
-    private func createLinkRun(text: String, url: String, extraRunProperties: String = "") -> String {
+    private nonisolated func createLinkRun(text: String, url: String, extraRunProperties: String = "") -> String {
         guard let safeURL = Self.safeDOCXHyperlinkURL(url) else {
             return createRunsForFormattedText(text, extraRunProperties: extraRunProperties, allowLinks: false)
         }
@@ -1343,7 +1364,7 @@ class ExportManager {
         """
     }
 
-    private func xmlEscape(_ text: String) -> String {
+    private nonisolated func xmlEscape(_ text: String) -> String {
         // M12: XML 1.0 forbids most C0 controls. A markdown file containing U+0008 (or any
         // C0 except tab/LF/CR) produces malformed document.xml that Word/LibreOffice refuse
         // to open. Also drop U+FFFE/U+FFFF which are non-characters per Unicode.
@@ -1362,7 +1383,7 @@ class ExportManager {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    private func createZipArchive(sourceURL: URL, destinationURL: URL) throws {
+    private nonisolated func createZipArchive(sourceURL: URL, destinationURL: URL) throws {
         // Create ZIP in temp directory first (sandbox-safe), then move it
         let tempZip = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).zip")
 

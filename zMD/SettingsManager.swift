@@ -44,9 +44,17 @@ enum Motion {
     /// settled end).
     static var entrance: Animation { .easeOut(duration: 0.2) }
     /// On-screen movement/morphs (sidebars toggling, view-mode switches).
-    static var standard: Animation { .easeInOut(duration: 0.2) }
+    static func layoutAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.2)
+    }
+
+    static var standard: Animation? {
+        layoutAnimation(reduceMotion: reduceMotion)
+    }
     /// Large layout morphs (focus mode). Upper bound of the UI budget.
-    static var morph: Animation { .easeInOut(duration: 0.3) }
+    static var morph: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.3)
+    }
 
     /// A movement transition that degrades to a plain fade under Reduce
     /// Motion — keeps the state-change feedback, drops the position change.
@@ -83,7 +91,7 @@ enum Cache {
 /// CDN resource URLs for preview/export scripts. Both preview (WebRenderer) and exported HTML
 /// (MarkdownParser.toHTML) reference the same strings — defining them once eliminates version
 /// drift between the two consumers.
-enum CDN {
+nonisolated enum CDN {
     // S2: pin Mermaid to an exact version (was the floating `mermaid@10`, which auto-adopted any
     // new 10.x without review) and carry a Subresource Integrity hash for every resource. The
     // `integrity` attribute makes the browser / WKWebView refuse a tampered script instead of
@@ -260,6 +268,8 @@ class SettingsManager: ObservableObject {
     }
 
     deinit {
+        // No assumeIsolated (traps if the last release happens off-main); KVO
+        // invalidate() is thread-safe and deinit has exclusive property access.
         appearanceObserver?.invalidate()
     }
 }

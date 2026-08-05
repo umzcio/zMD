@@ -2,7 +2,8 @@ import Foundation
 
 /// Unified markdown parser used by ExportManager (export) and MarkdownTextView (rendering)
 /// This is the single source of truth for markdown parsing in zMD
-class MarkdownParser {
+/// Stateless and safe to share across rendering and background export workers.
+nonisolated final class MarkdownParser: Sendable {
     static let shared = MarkdownParser()
 
     private init() {}

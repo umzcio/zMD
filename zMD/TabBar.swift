@@ -49,7 +49,8 @@ struct TabBar: View {
             // View mode picker
             Picker("", selection: $documentManager.viewMode) {
                 ForEach(ViewMode.allCases, id: \.self) { mode in
-                    Image(systemName: mode.icon)
+                    Label(mode.rawValue, systemImage: mode.icon)
+                        .labelStyle(.iconOnly)
                         .help(mode.rawValue)
                 }
             }

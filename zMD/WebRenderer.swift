@@ -5,7 +5,7 @@ import CryptoKit
 /// No-op stub — replaces the debug-trace logging used to diagnose the headless-WebView
 /// requestAnimationFrame issue. Kept (vs deleted) so the call sites remain greppable; @inline
 /// makes the optimizer remove the calls in Release.
-@inline(__always) func _zmdNoop(_ msg: String) { _ = msg }
+@inline(__always) nonisolated func _zmdNoop(_ msg: String) { _ = msg }
 
 /// Headless WKWebView-based renderer for Mermaid diagrams and KaTeX math
 @MainActor

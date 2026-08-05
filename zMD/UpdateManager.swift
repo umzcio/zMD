@@ -191,7 +191,7 @@ class UpdateManager: ObservableObject {
     /// Install the new app bundle. MUST be called off main — runs hdiutil subprocesses,
     /// codesign verification, and an /Applications copy that together can take several seconds.
     /// Hops to main only for the relaunch prompt at the end.
-    private func installFromDMG(at stableDMGPath: URL) {
+    private nonisolated func installFromDMG(at stableDMGPath: URL) {
         let fileManager = FileManager.default
 
         func reportError(_ message: String, detachVolume: String? = nil) {
@@ -311,14 +311,14 @@ class UpdateManager: ObservableObject {
 
     // MARK: - Code-signing verification
 
-    private enum VerifyResult {
+    private nonisolated enum VerifyResult {
         case ok
         case invalid(String)
     }
 
     /// The Team ID of the currently-running process bundle. Used as the trust anchor for
     /// auto-update — the new bundle MUST be signed by the same team or we refuse to install.
-    private func currentTeamID() -> String? {
+    private nonisolated func currentTeamID() -> String? {
         var staticCode: SecStaticCode?
         let bundleURL = Bundle.main.bundleURL
         guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode) == errSecSuccess,
@@ -329,7 +329,7 @@ class UpdateManager: ObservableObject {
         return dict[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
-    private func verifySignature(at url: URL, requireTeamID expectedTeamID: String) -> VerifyResult {
+    private nonisolated func verifySignature(at url: URL, requireTeamID expectedTeamID: String) -> VerifyResult {
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
               let code = staticCode else {

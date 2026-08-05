@@ -8,7 +8,10 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: macos-14
+    # macos-26 ships Xcode 27 — required for the Swift 6 / SWIFT_DEFAULT_ACTOR_ISOLATION
+    # build settings (Swift 6.2+). macos-14 is deprecated and its toolchain tops out at
+    # Swift 5 ("SWIFT_VERSION '6.0' is unsupported").
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
