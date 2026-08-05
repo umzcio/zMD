@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 @main
 struct zMDApp: App {
@@ -28,6 +29,7 @@ struct zMDApp: App {
                             let delegate = WindowCloseDelegate.shared
                             delegate.documentManager = documentManager
                             window.delegate = delegate
+                            delegate.attachWindowChrome(to: window)
                             // Set default window size on first launch
                             if window.frame.width < 900 || window.frame.height < 650 {
                                 let screen = window.screen ?? NSScreen.main
@@ -522,6 +524,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 class WindowCloseDelegate: NSObject, NSWindowDelegate {
     static let shared = WindowCloseDelegate()
     weak var documentManager: DocumentManager?
+    private weak var chromeWindow: NSWindow?
+    private var chromeCancellable: AnyCancellable?
+
+    /// Mirror the selected document into the window's titlebar: title, proxy icon
+    /// (representedURL — drag-file-from-titlebar, ⌘-click path menu), and the native
+    /// edited state (red dot in the close button). zMD previously carried document
+    /// identity only in its own tab bar; the OS-level wayfinding affordances every
+    /// macOS document app ships were absent.
+    func attachWindowChrome(to window: NSWindow) {
+        chromeWindow = window
+        updateWindowChrome()
+        chromeCancellable = documentManager?.objectWillChange
+            // objectWillChange fires BEFORE the mutation — hop to the next main-queue
+            // turn so we read post-mutation state.
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateWindowChrome() }
+    }
+
+    private func updateWindowChrome() {
+        guard let window = chromeWindow, let documentManager else { return }
+        let doc = documentManager.selectedDocumentId.flatMap { id in
+            documentManager.openDocuments.first(where: { $0.id == id })
+        }
+        let title = doc?.name ?? "zMD"
+        let url = (doc?.isUntitled == true) ? nil : doc?.url
+        let edited = doc?.isDirty ?? false
+        // Equality guards: this runs on every DocumentManager publish (including
+        // per-keystroke cursor updates); actual window mutations must stay rare.
+        if window.title != title { window.title = title }
+        if window.representedURL != url { window.representedURL = url }
+        if window.isDocumentEdited != edited { window.isDocumentEdited = edited }
+    }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard let documentManager = documentManager else {

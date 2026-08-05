@@ -244,6 +244,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // pane's reaction* to a content change — DocumentManager.updateContent stays fully
         // synchronous, so save/source-editor content is never delayed or dropped.
         nonisolated(unsafe) private var rebuildDebounceTimer: Timer?
+        nonisolated(unsafe) private var interruptibleScrollTimer: Timer?
         // Image cache shared across renders
         static var imageCache: NSCache<NSString, NSImage> = {
             let cache = NSCache<NSString, NSImage>()
@@ -365,20 +366,11 @@ struct MarkdownTextView: NSViewRepresentable {
             let maxY = max(0, textView.frame.height - scrollView.contentView.bounds.height)
             let clampedY = min(max(0, targetY), maxY)
 
-            // Flag programmatic scroll so the bounds-change observer doesn't re-broadcast this
-            // motion as a user scroll event, which would rebound the source side in split mode.
-            isProgrammaticScroll = true
-
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = Motion.reduceMotion ? 0 : 0.3
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: clampedY))
-            }, completionHandler: { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.isProgrammaticScroll = false
-                }
-            })
-            scrollView.reflectScrolledClipView(scrollView.contentView)
+            // Interruptible scroll — replaces the NSAnimationContext.animator() tween, which
+            // could not be grabbed: a wheel/trackpad scroll during the 0.3s flight fought the
+            // animation instead of cancelling it. The driver below yields to user input on
+            // the next frame (see startInterruptibleScroll).
+            startInterruptibleScroll(to: clampedY, in: scrollView, duration: Motion.reduceMotion ? 0 : 0.3)
 
             // Briefly highlight the heading. The text storage can be rebuilt while the delayed
             // clear is pending, so validate the captured range before touching the selection.
@@ -440,6 +432,82 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             return false
+        }
+
+        // MARK: - Interruptible programmatic scroll
+
+        /// Frame-driven eased scroll that the USER can grab: each tick checks whether the clip
+        /// view is still where the previous tick left it — if not, the user scrolled mid-flight
+        /// and the driver yields immediately (their input wins, no fighting, no completion
+        /// hand-back). NSAnimationContext.animator() could not do this: nothing cancels a
+        /// Core-Animation-driven bounds change when wheel deltas arrive.
+        private struct InterruptibleScrollState {
+            let startY: CGFloat
+            let targetY: CGFloat
+            let startTime: Date
+            let duration: TimeInterval
+        }
+        private var interruptibleScrollState: InterruptibleScrollState?
+        private var interruptibleScrollLastAppliedY: CGFloat = -1
+
+        func startInterruptibleScroll(to targetY: CGFloat, in scrollView: NSScrollView, duration: TimeInterval) {
+            cancelInterruptibleScroll()
+            guard duration > 0 else {
+                isProgrammaticScroll = true
+                scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                isProgrammaticScroll = false
+                return
+            }
+            let startY = scrollView.contentView.bounds.origin.y
+            interruptibleScrollState = InterruptibleScrollState(
+                startY: startY, targetY: targetY, startTime: Date.now, duration: duration
+            )
+            interruptibleScrollLastAppliedY = startY
+            interruptibleScrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self, weak scrollView] _ in
+                Task { @MainActor [weak self, weak scrollView] in
+                    guard let scrollView else {
+                        self?.cancelInterruptibleScroll()
+                        return
+                    }
+                    self?.interruptibleScrollTick(scrollView)
+                }
+            }
+        }
+
+        private func interruptibleScrollTick(_ scrollView: NSScrollView) {
+            guard let state = interruptibleScrollState else {
+                cancelInterruptibleScroll()
+                return
+            }
+            let currentY = scrollView.contentView.bounds.origin.y
+            // The clip view moved between our frames — that's user input. Yield.
+            if abs(currentY - interruptibleScrollLastAppliedY) > 0.5 {
+                cancelInterruptibleScroll()
+                return
+            }
+            let t = min(1.0, Date.now.timeIntervalSince(state.startTime) / state.duration)
+            // easeInOut, matching the curve the old NSAnimationContext used.
+            let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
+            let y = state.startY + (state.targetY - state.startY) * eased
+            // Per-frame flag toggle (not held across the whole flight like the old completion
+            // handler did): between frames the flag is FALSE, so a user scroll that lands
+            // there correctly broadcasts as user input to split-mode sync — and the next tick
+            // cancels us anyway.
+            isProgrammaticScroll = true
+            scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: y))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            isProgrammaticScroll = false
+            interruptibleScrollLastAppliedY = scrollView.contentView.bounds.origin.y
+            if t >= 1.0 {
+                cancelInterruptibleScroll()
+            }
+        }
+
+        private func cancelInterruptibleScroll() {
+            interruptibleScrollTimer?.invalidate()
+            interruptibleScrollTimer = nil
+            interruptibleScrollState = nil
         }
 
         // MARK: - Search Methods
@@ -662,6 +730,7 @@ struct MarkdownTextView: NSViewRepresentable {
             syncDebounceTimer?.invalidate()
             diagramCoalesceTimer?.invalidate()
             rebuildDebounceTimer?.invalidate()
+            interruptibleScrollTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }

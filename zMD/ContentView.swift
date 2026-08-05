@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var showFocusExitPill = false
     @State private var magnifyMonitor: Any?
     @State private var baseZoomForGesture: CGFloat = 1.0
+    /// Timestamp of the last zoomLevel write emitted from a live pinch tick (throttle state).
+    @State private var lastZoomGestureEmit: Date = .distantPast
 
     var body: some View {
         ZStack {
@@ -203,7 +205,19 @@ struct ContentView: View {
                     SettingsManager.shared.zoomLevel = (clamped * 10).rounded() / 10
                     baseZoomForGesture = SettingsManager.shared.zoomLevel
                 } else {
-                    SettingsManager.shared.zoomLevel = clamped
+                    // Quantize live ticks to 5% steps and throttle to ~12 writes/s. Every
+                    // zoomLevel write triggers an IMMEDIATE full preview rebuild with a 100%
+                    // element-cache miss (zoom is part of the cache key) — raw .magnify events
+                    // arrive ~60/s, which wired the app's one live-tracked gesture straight
+                    // into its most expensive operation. Keyboard zoom (⌘+/-) is untouched:
+                    // discrete steps stay immediate.
+                    let stepped = (clamped * 20).rounded() / 20
+                    let now = Date.now
+                    if stepped != SettingsManager.shared.zoomLevel,
+                       now.timeIntervalSince(lastZoomGestureEmit) > 0.08 {
+                        lastZoomGestureEmit = now
+                        SettingsManager.shared.zoomLevel = stepped
+                    }
                 }
                 return event
             }

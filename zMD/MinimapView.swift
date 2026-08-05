@@ -4,7 +4,33 @@ import SwiftUI
 class MinimapView: NSView {
 
     weak var linkedTextView: NSTextView?
-    weak var linkedScrollView: NSScrollView?
+    weak var linkedScrollView: NSScrollView? {
+        didSet {
+            guard linkedScrollView !== oldValue else { return }
+            // The viewport indicator in draw(_:) reads the linked scroll position live, but
+            // AppKit only calls draw(_:) when the view is marked dirty — and the only other
+            // needsDisplay site is the (debounced) content-change path. Without this observer
+            // the indicator froze during ordinary scrolling AND during the minimap's own
+            // scrub drag (the document moved 1:1; the box the user was watching did not).
+            // Repaint-only: the bitmap regeneration stays on the content-change debounce.
+            if let old = oldValue {
+                NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: old.contentView)
+            }
+            if let scrollView = linkedScrollView {
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(linkedScrollViewDidScroll(_:)),
+                    name: NSView.boundsDidChangeNotification,
+                    object: scrollView.contentView
+                )
+            }
+        }
+    }
+
+    @objc private func linkedScrollViewDidScroll(_ note: Notification) {
+        needsDisplay = true
+    }
 
     private var cachedImage: CGImage?
     // nonisolated(unsafe): all live access is on the main actor; the annotation exists
@@ -36,8 +62,9 @@ class MinimapView: NSView {
 
     deinit {
         // No assumeIsolated (traps if the last release happens off-main); deinit has
-        // exclusive property access and Timer.invalidate is nonisolated.
+        // exclusive property access and Timer.invalidate / removeObserver are nonisolated.
         debounceTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
 
     func invalidateContent() {

@@ -107,6 +107,13 @@ struct TabItem: View {
     }
 
     var body: some View {
+        // A real Button (pattern proven on the command-palette rows): press-down highlight
+        // and cancel-by-dragging-away come free, and VoiceOver gets a true button instead
+        // of the tap-trait shim. The nested close Button still wins hits on itself, and
+        // onDrag/onDrop/contextMenu attach outside the Button unchanged.
+        Button {
+            documentManager.selectedDocumentId = document.id
+        } label: {
         HStack(spacing: 4) {
             if document.isDirty {
                 Circle()
@@ -159,18 +166,14 @@ struct TabItem: View {
                 .stroke(tabStroke, lineWidth: 1)
         )
         .contentShape(Rectangle())
+        } // Button label
+        .buttonStyle(PressableButtonStyle())
         .help(document.url.path)
         .onHover { hovering in
             withAnimation(Motion.fast) {
                 isHovered = hovering
             }
         }
-        .onTapGesture {
-            documentManager.selectedDocumentId = document.id
-        }
-        // The row can't be a Button (it hosts a nested close Button plus onDrag/onDrop), so at
-        // minimum expose the tap as a button to VoiceOver.
-        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(document.isDirty ? "\(document.name), edited" : document.name)
         .onDrag {
             documentManager.draggingDocumentId = document.id
