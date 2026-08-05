@@ -268,7 +268,7 @@ struct CommandPaletteOverlay: View {
                                         isSelected: index == selectedIndex
                                     )
                                 }
-                                .buttonStyle(PlainButtonStyle())
+                                .buttonStyle(PressableButtonStyle())
                                 .id(index)
                             }
                         }
@@ -276,9 +276,7 @@ struct CommandPaletteOverlay: View {
                     }
                     .frame(maxHeight: 320)
                     .onChange(of: selectedIndex) { _ in
-                        withAnimation(Motion.fast) {
-                            proxy.scrollTo(selectedIndex, anchor: .center)
-                        }
+                        proxy.scrollTo(selectedIndex, anchor: .center)
                     }
                 }
 

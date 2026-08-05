@@ -93,7 +93,7 @@ struct OutlineItemView: View {
                     .fill(isActive ? Color.accentColor.opacity(0.1) : (isHovered ? Color.accentColor.opacity(0.06) : Color.clear))
             )
         }
-        .buttonStyle(PlainButtonStyle())
+        .buttonStyle(PressableButtonStyle())
         .onHover { hovering in
             withAnimation(Motion.fast) {
                 isHovered = hovering

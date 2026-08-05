@@ -370,7 +370,7 @@ struct MarkdownTextView: NSViewRepresentable {
             isProgrammaticScroll = true
 
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.3
+                context.duration = Motion.reduceMotion ? 0 : 0.3
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: clampedY))
             }, completionHandler: { [weak self] in
@@ -649,16 +649,9 @@ struct MarkdownTextView: NSViewRepresentable {
             let targetY = percent * scrollableHeight
 
             isProgrammaticScroll = true
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.15
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
-            }) { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.isProgrammaticScroll = false
-                }
-            }
+            scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
             scrollView.reflectScrolledClipView(scrollView.contentView)
+            isProgrammaticScroll = false
         }
 
         deinit {

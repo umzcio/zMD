@@ -59,7 +59,7 @@ struct WelcomeView: View {
                             .fill(buttonHovered ? Color.accentColor : Color.accentColor.opacity(0.85))
                     )
                     .foregroundStyle(.white)
-                    .scaleEffect(buttonHovered ? 1.03 : 1.0)
+                    .scaleEffect(buttonHovered && !Motion.reduceMotion ? 1.03 : 1.0)
                 }
                 .buttonStyle(PressableButtonStyle())
                 .onHover { hovering in
@@ -103,7 +103,7 @@ struct WelcomeView: View {
                         Spacer()
 
                         Button("Clear") {
-                            withAnimation(Motion.entrance) {
+                            withAnimation(Motion.entranceMovement) {
                                 documentManager.clearRecentFiles()
                             }
                         }
@@ -165,7 +165,7 @@ struct WelcomeView: View {
     private func animateEntrance() {
         // Under Reduce Motion, skip the stagger: one gentle grouped fade.
         if Motion.reduceMotion {
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(Motion.entrance) {
                 showIcon = true
                 iconBounce = true
                 showSubtitle = true
@@ -175,6 +175,9 @@ struct WelcomeView: View {
             }
             return
         }
+        // v2.8.1 feel-checked entrance (plan 023): 60ms stagger steps, last element
+        // ~630ms, icon settling with a slight, dignified overshoot. Plan 009/010's
+        // faster retiming was reviewed and REJECTED — owner kept the original feel.
         withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
             showIcon = true
             iconBounce = true

@@ -15,52 +15,60 @@ struct ContentView: View {
         ZStack {
             VStack(spacing: 0) {
                 if !documentManager.openDocuments.isEmpty {
-                    // Tab bar (hidden in focus mode)
-                    if !documentManager.isFocusModeActive {
-                        TabBar(showOutline: $showOutline)
-                            .environmentObject(documentManager)
+                    // Chrome: tab bar + search bar. Scoped so find-bar toggles
+                    // animate only this sub-stack, never the editor below.
+                    VStack(spacing: 0) {
+                        // Tab bar (hidden in focus mode)
+                        if !documentManager.isFocusModeActive {
+                            TabBar(showOutline: $showOutline)
+                                .environmentObject(documentManager)
+                                .transition(Motion.slideOrFade(edge: .top))
 
-                        Divider()
-                    }
-
-                    // Search bar
-                    if documentManager.isSearching && !documentManager.isFocusModeActive {
-                        Group {
-                            if documentManager.showReplace && documentManager.viewMode != .preview {
-                                SearchBar(
-                                    searchText: $documentManager.searchText,
-                                    isSearching: $documentManager.isSearching,
-                                    currentMatch: documentManager.searchControlMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
-                                    totalMatches: documentManager.searchControlMatchCount,
-                                    onNext: { documentManager.nextMatch() },
-                                    onPrevious: { documentManager.previousMatch() },
-                                    onClose: { documentManager.endSearch() },
-                                    showReplace: true,
-                                    replaceText: $documentManager.replaceText,
-                                    isRegex: documentManager.isRegexSearch,
-                                    isCaseSensitive: documentManager.isCaseSensitive,
-                                    onToggleRegex: { documentManager.isRegexSearch.toggle(); documentManager.performSearch() },
-                                    onToggleCaseSensitive: { documentManager.isCaseSensitive.toggle(); documentManager.performSearch() },
-                                    onReplace: { documentManager.replaceCurrentMatch() },
-                                    onReplaceAll: { documentManager.replaceAllMatches() }
-                                )
-                            } else {
-                                SearchBar(
-                                    searchText: $documentManager.searchText,
-                                    isSearching: $documentManager.isSearching,
-                                    currentMatch: documentManager.searchControlMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
-                                    totalMatches: documentManager.searchControlMatchCount,
-                                    onNext: { documentManager.nextMatch() },
-                                    onPrevious: { documentManager.previousMatch() },
-                                    onClose: { documentManager.endSearch() }
-                                )
-                            }
+                            Divider()
                         }
-                        .padding(8)
-                        .transition(Motion.slideOrFade(edge: .top))
 
-                        Divider()
+                        // Search bar
+                        if documentManager.isSearching && !documentManager.isFocusModeActive {
+                            Group {
+                                if documentManager.showReplace && documentManager.viewMode != .preview {
+                                    SearchBar(
+                                        searchText: $documentManager.searchText,
+                                        isSearching: $documentManager.isSearching,
+                                        currentMatch: documentManager.searchControlMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
+                                        totalMatches: documentManager.searchControlMatchCount,
+                                        onNext: { documentManager.nextMatch() },
+                                        onPrevious: { documentManager.previousMatch() },
+                                        onClose: { documentManager.endSearch() },
+                                        showReplace: true,
+                                        replaceText: $documentManager.replaceText,
+                                        isRegex: documentManager.isRegexSearch,
+                                        isCaseSensitive: documentManager.isCaseSensitive,
+                                        onToggleRegex: { documentManager.isRegexSearch.toggle(); documentManager.performSearch() },
+                                        onToggleCaseSensitive: { documentManager.isCaseSensitive.toggle(); documentManager.performSearch() },
+                                        onReplace: { documentManager.replaceCurrentMatch() },
+                                        onReplaceAll: { documentManager.replaceAllMatches() }
+                                    )
+                                } else {
+                                    SearchBar(
+                                        searchText: $documentManager.searchText,
+                                        isSearching: $documentManager.isSearching,
+                                        currentMatch: documentManager.searchControlMatchCount > 0 ? documentManager.currentMatchIndex + 1 : 0,
+                                        totalMatches: documentManager.searchControlMatchCount,
+                                        onNext: { documentManager.nextMatch() },
+                                        onPrevious: { documentManager.previousMatch() },
+                                        onClose: { documentManager.endSearch() }
+                                    )
+                                }
+                            }
+                            .animation(Motion.fastMovement, value: documentManager.showReplace)
+                            .padding(8)
+                            .transition(Motion.slideOrFade(edge: .top))
+
+                            Divider()
+                        }
                     }
+                    .transition(.opacity)
+                    .animation(Motion.standard, value: documentManager.isSearching)
 
                     // Content area
                     if documentManager.isFocusModeActive {
@@ -79,13 +87,14 @@ struct ContentView: View {
                         Divider()
                         StatusBarView()
                             .environmentObject(documentManager)
+                            .transition(Motion.slideOrFade(edge: .bottom))
                     }
                 } else {
                     WelcomeView()
+                        .transition(.opacity)
                 }
             }
-            .animation(Motion.morph, value: documentManager.isFocusModeActive)
-            .animation(Motion.fast, value: documentManager.isSearching)
+            .animation(Motion.standard, value: documentManager.openDocuments.isEmpty)
             .frame(minWidth: 600, minHeight: 400)
 
             // Focus mode exit pill + Escape handler. Attach a hidden cancelAction button so
@@ -105,7 +114,9 @@ struct ContentView: View {
                 VStack {
                     if showFocusExitPill {
                         Button(action: {
-                            documentManager.isFocusModeActive = false
+                            withAnimation(Motion.morph) {
+                                documentManager.isFocusModeActive = false
+                            }
                         }) {
                             HStack(spacing: 6) {
                                 Image(systemName: "arrow.down.left.and.arrow.up.right")
@@ -128,7 +139,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .onHover { hovering in
-                    withAnimation(Motion.standard) {
+                    withAnimation(Motion.entrance) {
                         showFocusExitPill = hovering
                     }
                 }

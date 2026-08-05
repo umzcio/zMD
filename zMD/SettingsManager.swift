@@ -43,6 +43,12 @@ enum Motion {
     /// Things appearing/entering (entrances want ease-out: fast start,
     /// settled end).
     static var entrance: Animation { .easeOut(duration: 0.2) }
+    /// Like `fast`, but nil under Reduce Motion — use for anything that
+    /// changes position or size (scales, reflows, slides). Keep `fast` for
+    /// color-only fades, which stay enabled either way.
+    static var fastMovement: Animation? { reduceMotion ? nil : fast }
+    /// Like `entrance`, but nil under Reduce Motion.
+    static var entranceMovement: Animation? { reduceMotion ? nil : entrance }
     /// On-screen movement/morphs (sidebars toggling, view-mode switches).
     static func layoutAnimation(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.2)
@@ -54,6 +60,11 @@ enum Motion {
     /// Large layout morphs (focus mode). Upper bound of the UI budget.
     static var morph: Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.3)
+    }
+    /// Subtle spring for stack reflows and rare entrances (toasts, welcome
+    /// icon). Bounce is intentionally quiet; nil under Reduce Motion.
+    static var springy: Animation? {
+        reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8)
     }
 
     /// A movement transition that degrades to a plain fade under Reduce

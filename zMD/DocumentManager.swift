@@ -473,17 +473,21 @@ class DocumentManager: ObservableObject {
 
     func openInSplitView(documentId: UUID) {
         guard documentId != selectedDocumentId else { return }
-        secondaryDocumentId = documentId
-        isSplitViewActive = true
-        splitPrimaryMode = .rendered
-        splitSecondaryMode = .rendered
+        withAnimation(Motion.standard) {
+            secondaryDocumentId = documentId
+            isSplitViewActive = true
+            splitPrimaryMode = .rendered
+            splitSecondaryMode = .rendered
+        }
     }
 
     func closeSplitView() {
-        secondaryDocumentId = nil
-        isSplitViewActive = false
-        splitPrimaryMode = .rendered
-        splitSecondaryMode = .rendered
+        withAnimation(Motion.standard) {
+            secondaryDocumentId = nil
+            isSplitViewActive = false
+            splitPrimaryMode = .rendered
+            splitSecondaryMode = .rendered
+        }
     }
 
     // MARK: - Content Editing & Save

@@ -43,6 +43,9 @@ class ToastManager: ObservableObject {
             guard let self = self else { return }
             let toast = ToastItem(message: message, style: style)
 
+            // v2.8.1 value, deliberately kept (plan 022 said "do NOT touch the toast's
+            // spring — correct as designed"); plan 009's Motion.springy retune was
+            // reviewed and REJECTED by the owner.
             withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
                 self.toasts.append(toast)
                 // Trim to max
@@ -67,7 +70,7 @@ class ToastManager: ObservableObject {
             guard let self = self else { return }
             self.dismissTimers[id]?.invalidate()
             self.dismissTimers.removeValue(forKey: id)
-            withAnimation(Motion.entrance) {
+            withAnimation(Motion.entranceMovement) {
                 self.toasts.removeAll { $0.id == id }
             }
         }

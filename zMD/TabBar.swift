@@ -34,9 +34,9 @@ struct TabBar: View {
                         Circle()
                             .fill(addButtonHovered ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                     )
-                    .scaleEffect(addButtonHovered ? 1.1 : 1.0)
+                    .scaleEffect(addButtonHovered && !Motion.reduceMotion ? 1.1 : 1.0)
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(PressableButtonStyle())
             .onHover { hovering in
                 withAnimation(Motion.fast) {
                     addButtonHovered = hovering
@@ -70,7 +70,7 @@ struct TabBar: View {
                     .foregroundStyle(showOutline ? Color.accentColor : Color.secondary)
                     .frame(width: 28, height: 28)
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(PressableButtonStyle())
             .help("Toggle Outline")
             .accessibilityLabel("Toggle Outline")
             .padding(.horizontal, 8)
@@ -115,12 +115,16 @@ struct TabItem: View {
                     .scaleEffect(dirtyPulse ? 1.0 : 1.4)
                     .opacity(dirtyPulse ? 1.0 : 0.6)
                     .onAppear {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
+                        // v2.8.1 feel-checked pulse (plan 021): one spring drives the whole
+                        // arrival, dampingFraction 0.65 giving a slight, deliberate wobble.
+                        // Plan 008's calmer ease-out was reviewed and REJECTED — owner kept
+                        // the original feel. Reduce Motion still skips the movement.
+                        withAnimation(Motion.reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.65)) {
                             dirtyPulse = true
                         }
                     }
                     .onDisappear { dirtyPulse = false }
-                    .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    .transition(Motion.scaleOrFade(0.5))
             }
 
             Text(document.name)
@@ -138,12 +142,12 @@ struct TabItem: View {
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(PressableButtonStyle())
             .frame(width: 14, height: 14)
             .opacity(isHovered || isSelected ? 1.0 : 0.0)
             .accessibilityLabel("Close \(document.name)")
         }
-        .animation(Motion.fast, value: document.isDirty)
+        .animation(Motion.fastMovement, value: document.isDirty)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
