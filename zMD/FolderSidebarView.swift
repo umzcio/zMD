@@ -33,7 +33,7 @@ struct FolderSidebarView: View {
                                 .fill(closeButtonHovered ? Color(NSColor.controlBackgroundColor) : Color.clear)
                         )
                 }
-                .buttonStyle(PlainButtonStyle())
+                .buttonStyle(PressableButtonStyle())
                 .accessibilityLabel("Close Folder")
                 .onHover { hovering in
                     withAnimation(Motion.fast) {
@@ -132,7 +132,7 @@ struct FileTreeItemView: View {
                         .fill(isActive ? Color.accentColor.opacity(0.12) : (isHovered ? Color.accentColor.opacity(0.06) : Color.clear))
                 )
             }
-            .buttonStyle(PlainButtonStyle())
+            .buttonStyle(PressableButtonStyle())
             .onHover { hovering in
                 withAnimation(Motion.fast) {
                     isHovered = hovering

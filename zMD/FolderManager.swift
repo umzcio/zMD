@@ -78,7 +78,9 @@ class FolderManager: ObservableObject {
         // Start security-scoped access
         securityScopedAccess = url.startAccessingSecurityScopedResource()
         folderURL = url
-        isShowingFolderSidebar = true
+        withAnimation(Motion.standard) {
+            isShowingFolderSidebar = true
+        }
 
         // Initial tree scan happens off-main so opening a folder with thousands of files doesn't
         // freeze the UI. We keep `refreshFileTree` callable synchronously for the
@@ -152,7 +154,9 @@ class FolderManager: ObservableObject {
 
         folderURL = nil
         fileTree = []
-        isShowingFolderSidebar = false
+        withAnimation(Motion.standard) {
+            isShowingFolderSidebar = false
+        }
     }
 
     func restoreFolder() {

@@ -59,7 +59,7 @@ struct WelcomeView: View {
                             .fill(buttonHovered ? Color.accentColor : Color.accentColor.opacity(0.85))
                     )
                     .foregroundStyle(.white)
-                    .scaleEffect(buttonHovered ? 1.03 : 1.0)
+                    .scaleEffect(buttonHovered && !Motion.reduceMotion ? 1.03 : 1.0)
                 }
                 .buttonStyle(PressableButtonStyle())
                 .onHover { hovering in
@@ -103,7 +103,7 @@ struct WelcomeView: View {
                         Spacer()
 
                         Button("Clear") {
-                            withAnimation(Motion.entrance) {
+                            withAnimation(Motion.entranceMovement) {
                                 documentManager.clearRecentFiles()
                             }
                         }
@@ -165,7 +165,7 @@ struct WelcomeView: View {
     private func animateEntrance() {
         // Under Reduce Motion, skip the stagger: one gentle grouped fade.
         if Motion.reduceMotion {
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(Motion.entrance) {
                 showIcon = true
                 iconBounce = true
                 showSubtitle = true
@@ -175,20 +175,20 @@ struct WelcomeView: View {
             }
             return
         }
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+        withAnimation(Motion.springy) {
             showIcon = true
             iconBounce = true
         }
-        withAnimation(.easeOut(duration: 0.35).delay(0.10)) {
+        withAnimation(.easeOut(duration: 0.25).delay(0.05)) {
             showSubtitle = true
         }
-        withAnimation(.easeOut(duration: 0.35).delay(0.16)) {
+        withAnimation(.easeOut(duration: 0.25).delay(0.10)) {
             showButton = true
         }
-        withAnimation(.easeOut(duration: 0.35).delay(0.22)) {
+        withAnimation(.easeOut(duration: 0.25).delay(0.15)) {
             showHint = true
         }
-        withAnimation(.easeOut(duration: 0.35).delay(0.28)) {
+        withAnimation(.easeOut(duration: 0.25).delay(0.20)) {
             showRecents = true
         }
     }

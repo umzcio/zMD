@@ -394,16 +394,9 @@ struct SourceEditorView: NSViewRepresentable {
 
             let targetY = percent * scrollableHeight
             isProgrammaticScroll = true
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.15
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
-            }) { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.isProgrammaticScroll = false
-                }
-            }
+            scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: targetY))
             scrollView.reflectScrolledClipView(scrollView.contentView)
+            isProgrammaticScroll = false
         }
 
         func textDidChange(_ notification: Notification) {

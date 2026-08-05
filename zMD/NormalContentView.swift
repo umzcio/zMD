@@ -62,19 +62,17 @@ struct NormalContentView: View {
                                 )
                             }
                         }
+                        .transition(Motion.slideOrFade(edge: .trailing))
                     } else {
                         DocumentViewModeContent(
                             document: document,
                             selectedHeadingId: $selectedHeadingId
                         )
-                        .animation(Motion.fast, value: documentManager.viewMode)
                     }
                 }
             } else {
                 EmptyDocumentView()
             }
         }
-        .animation(Motion.standard, value: folderManager.isShowingFolderSidebar)
-        .animation(Motion.standard, value: showOutline)
     }
 }

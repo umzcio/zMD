@@ -43,7 +43,7 @@ class ToastManager: ObservableObject {
             guard let self = self else { return }
             let toast = ToastItem(message: message, style: style)
 
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+            withAnimation(Motion.springy) {
                 self.toasts.append(toast)
                 // Trim to max
                 if self.toasts.count > self.maxToasts {
@@ -67,7 +67,7 @@ class ToastManager: ObservableObject {
             guard let self = self else { return }
             self.dismissTimers[id]?.invalidate()
             self.dismissTimers.removeValue(forKey: id)
-            withAnimation(Motion.entrance) {
+            withAnimation(Motion.entranceMovement) {
                 self.toasts.removeAll { $0.id == id }
             }
         }
