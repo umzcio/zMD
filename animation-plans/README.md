@@ -20,9 +20,9 @@ plans live here to keep the numbering independent.
 | 005 | Drive sidebar animations from their toggles | MEDIUM | DONE |
 | 006 | Remove the view-mode switch animation | MEDIUM | DONE |
 | 007 | Add press feedback with asymmetric timing | MEDIUM | DONE |
-| 008 | Calm the dirty-dot entrance and pulse | MEDIUM | DONE |
-| 009 | Consolidate hand-typed springs into a Motion token | MEDIUM | DONE |
-| 010 | Trim the welcome entrance to the UI budget | LOW | DONE |
+| 008 | Calm the dirty-dot entrance and pulse | MEDIUM | REJECTED — owner kept the v2.8.1 feel-checked spring (plans/021) |
+| 009 | Consolidate hand-typed springs into a Motion token | MEDIUM | PARTIAL — toast + welcome-icon springs kept at v2.8.1 values (plans/022, 023); Motion.springy token retained but currently unused |
+| 010 | Trim the welcome entrance to the UI budget | LOW | REJECTED — owner kept the v2.8.1 feel-checked stagger (plans/023) |
 | 011 | Use an entrance curve for the focus-exit pill hover | LOW | DONE |
 | 012 | Animate split view open/close | MEDIUM | DONE |
 | 013 | Crossfade the welcome ⇄ editor window swap | MEDIUM | DONE |

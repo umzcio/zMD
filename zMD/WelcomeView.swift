@@ -175,20 +175,23 @@ struct WelcomeView: View {
             }
             return
         }
-        withAnimation(Motion.springy) {
+        // v2.8.1 feel-checked entrance (plan 023): 60ms stagger steps, last element
+        // ~630ms, icon settling with a slight, dignified overshoot. Plan 009/010's
+        // faster retiming was reviewed and REJECTED — owner kept the original feel.
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
             showIcon = true
             iconBounce = true
         }
-        withAnimation(.easeOut(duration: 0.25).delay(0.05)) {
+        withAnimation(.easeOut(duration: 0.35).delay(0.10)) {
             showSubtitle = true
         }
-        withAnimation(.easeOut(duration: 0.25).delay(0.10)) {
+        withAnimation(.easeOut(duration: 0.35).delay(0.16)) {
             showButton = true
         }
-        withAnimation(.easeOut(duration: 0.25).delay(0.15)) {
+        withAnimation(.easeOut(duration: 0.35).delay(0.22)) {
             showHint = true
         }
-        withAnimation(.easeOut(duration: 0.25).delay(0.20)) {
+        withAnimation(.easeOut(duration: 0.35).delay(0.28)) {
             showRecents = true
         }
     }

@@ -115,12 +115,16 @@ struct TabItem: View {
                     .scaleEffect(dirtyPulse ? 1.0 : 1.4)
                     .opacity(dirtyPulse ? 1.0 : 0.6)
                     .onAppear {
-                        withAnimation(Motion.fastMovement) {
+                        // v2.8.1 feel-checked pulse (plan 021): one spring drives the whole
+                        // arrival, dampingFraction 0.65 giving a slight, deliberate wobble.
+                        // Plan 008's calmer ease-out was reviewed and REJECTED — owner kept
+                        // the original feel. Reduce Motion still skips the movement.
+                        withAnimation(Motion.reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.65)) {
                             dirtyPulse = true
                         }
                     }
                     .onDisappear { dirtyPulse = false }
-                    .transition(Motion.scaleOrFade())
+                    .transition(Motion.scaleOrFade(0.5))
             }
 
             Text(document.name)
