@@ -1,0 +1,23 @@
+version: 2
+
+updates:
+  # GitHub Actions is the only ecosystem Dependabot can see in this repo: zMD is a
+  # plain Xcode project with no SwiftPM / CocoaPods / Carthage manifests, so there is
+  # nothing for the `swift` ecosystem to resolve. The Mermaid + KaTeX versions are CDN
+  # URLs with sha384 SRI hashes in SettingsManager.swift's `CDN` enum — Dependabot
+  # cannot see those; bumping them stays a manual job (change the version, recompute
+  # both hashes, verify a live diagram/math render before shipping).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Batch every action bump into one PR. With a single workflow file, a trickle of
+    # one-line PRs would cost more review attention (and more CI minutes on the
+    # macos-26 runner) than it saves.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
