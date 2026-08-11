@@ -413,11 +413,23 @@ nonisolated final class MarkdownParser: Sendable {
     /// Anchored image-line pattern; group 1 = alt text, group 2 = path.
     static let imageLineRegex = try? NSRegularExpression(pattern: #"^!\[([^\]]*)\]\(([^\)]+)\)$"#)
 
+    /// The complete HTML void-element list — tags that never have a closing tag and so must
+    /// not count toward nesting depth. This must stay complete: any missing element leaves
+    /// `isHTMLBalanced` permanently above zero, and the block accumulator in `parse()` then
+    /// swallows the ENTIRE rest of the document into one HTML block (markdown after it renders
+    /// as literal run-on text, because HTML collapses newlines). That is exactly what a
+    /// `<picture><source ...><source ...><img ...></picture>` header — the standard GitHub
+    /// dark-mode logo pattern — used to do when `source` was absent from this set.
+    private static let voidElements: Set<String> = [
+        "area", "base", "br", "col", "embed", "hr", "img",
+        "input", "link", "meta", "param", "source", "track", "wbr"
+    ]
+
     func isHTMLBalanced(_ html: String) -> Bool {
         guard let regex = Self.htmlTagRegex else { return true }
         let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
         var depth = 0
-        let selfClosing: Set<String> = ["br", "hr", "img", "input", "meta", "link", "col"]
+        let selfClosing = Self.voidElements
         for match in matches {
             guard let tagRange = Range(match.range(at: 2), in: html) else { continue }
             let tag = String(html[tagRange]).lowercased()

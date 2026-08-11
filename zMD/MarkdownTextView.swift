@@ -1455,7 +1455,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // Wrap HTML with styling that matches the app theme
         let styledHTML = """
-        <html><head><style>
+        <html><head><meta charset="utf-8"><style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
                font-size: \(fontSize)px; color: \(textColor); background: \(bgColor);
                line-height: 1.5; margin: 0; padding: 0; }
@@ -1466,10 +1466,20 @@ struct MarkdownTextView: NSViewRepresentable {
         </style></head><body>\(resolvedHTML)</body></html>
         """
 
+        // Explicit .characterEncoding is required. The `NSAttributedString(html:baseURL:…)`
+        // convenience initializer takes no encoding, so AppKit's HTML importer GUESSES and
+        // falls back to Windows-1252 — turning UTF-8 "—" into "â€"", "·" into "Â·", and "×"
+        // into "Ã—" throughout any block containing non-ASCII text. ExportManager already
+        // passes this option; the preview path did not. (The <meta charset> above is a second
+        // belt on the same trousers.)
         guard let data = styledHTML.data(using: .utf8),
-              let attributed = NSAttributedString(
-                html: data,
-                baseURL: baseDir ?? URL(fileURLWithPath: "/"),
+              let attributed = try? NSAttributedString(
+                data: data,
+                options: [
+                    .documentType: NSAttributedString.DocumentType.html,
+                    .characterEncoding: String.Encoding.utf8.rawValue,
+                    .baseURL: baseDir ?? URL(fileURLWithPath: "/")
+                ],
                 documentAttributes: nil
               ) else {
             // Fallback: render as plain text

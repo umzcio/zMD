@@ -211,4 +211,55 @@ nonisolated final class MarkdownParserTests: XCTestCase {
         XCTAssertFalse(lfElements.isEmpty)
         XCTAssertEqual(lfElements.map { $0.id }, crlfElements.map { $0.id })
     }
+
+    // MARK: - 11. HTML void elements must not swallow the document
+
+    /// Regression: `<source>` was missing from the parser's void-element set, so the standard
+    /// GitHub dark-mode logo header left the tag depth permanently above zero. The HTML block
+    /// accumulator then consumed the ENTIRE remaining document — every heading, list, and table
+    /// after the logo rendered as one run-on line of literal markdown.
+    @MainActor
+    func testPictureSourceHeaderDoesNotSwallowFollowingMarkdown() {
+        let content = """
+        <div align="center">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="img/logo-dark.svg">
+            <source media="(prefers-color-scheme: light)" srcset="img/logo.svg">
+            <img src="img/logo.svg" alt="Logo" width="360">
+          </picture>
+        </div>
+
+        # Real Heading
+
+        Body paragraph.
+        """
+
+        let elements = MarkdownParser.shared.parse(content)
+
+        // The heading after the HTML header must survive as a real heading element.
+        let headings = elements.compactMap { element -> String? in
+            if case .heading1(let text) = element { return text }
+            return nil
+        }
+        XCTAssertEqual(headings, ["Real Heading"], "HTML header swallowed the following markdown")
+
+        // And the body must be its own paragraph, not part of an HTML blob.
+        let paragraphs = elements.compactMap { element -> String? in
+            if case .paragraph(let text) = element { return text }
+            return nil
+        }
+        XCTAssertTrue(paragraphs.contains("Body paragraph."))
+    }
+
+    /// Each void element, on its own, must leave a wrapper balanced.
+    @MainActor
+    func testEachVoidElementLeavesWrapperBalanced() {
+        for tag in ["area", "base", "br", "col", "embed", "hr", "img",
+                    "input", "link", "meta", "param", "source", "track", "wbr"] {
+            XCTAssertTrue(
+                MarkdownParser.shared.isHTMLBalanced("<div><\(tag) x=\"1\"></div>"),
+                "<\(tag)> is not treated as a void element — it will unbalance HTML blocks"
+            )
+        }
+    }
 }
