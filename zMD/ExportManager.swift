@@ -1153,7 +1153,7 @@ class ExportManager {
 
     private nonisolated func createBlockquoteParagraph(text: String) -> String {
         return """
-        <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:ind w:left="360"/><w:spacing w:after="120"/></w:pPr>\(createRunsForFormattedText(text, extraRunProperties: "<w:i/><w:color w:val=\"555555\"/>"))</w:p>
+        <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:spacing w:after="120"/><w:ind w:left="360"/></w:pPr>\(createRunsForFormattedText(text, extraRunProperties: "<w:i/><w:color w:val=\"555555\"/>"))</w:p>
         """
     }
 
@@ -1161,13 +1161,18 @@ class ExportManager {
     /// all sharing a left border in the kind's color (Word draws adjacent same-border
     /// paragraphs as one continuous bar).
     private nonisolated func createAlertParagraphs(kind: MarkdownParser.AlertKind, text: String) -> String {
-        let border = "<w:pBdr><w:left w:val=\"single\" w:sz=\"12\" w:space=\"8\" w:color=\"\(kind.hexColor)\"/></w:pBdr><w:ind w:left=\"360\"/>"
+        // Child order inside w:pPr is fixed by the schema (CT_PPr is a sequence): keepNext,
+        // then pBdr, then spacing, then ind. Word tolerates disorder; strict OOXML consumers
+        // (validators, converters) reject it or drop elements — e.g. losing keepNext would let
+        // the title orphan from its body at a page break.
+        let border = "<w:pBdr><w:left w:val=\"single\" w:sz=\"12\" w:space=\"8\" w:color=\"\(kind.hexColor)\"/></w:pBdr>"
+        let indent = "<w:ind w:left=\"360\"/>"
         var xml = """
-        <w:p><w:pPr>\(border)<w:keepNext/><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="\(kind.hexColor)"/></w:rPr><w:t>\(kind.title)</w:t></w:r></w:p>
+        <w:p><w:pPr><w:keepNext/>\(border)<w:spacing w:after="60"/>\(indent)</w:pPr><w:r><w:rPr><w:b/><w:color w:val="\(kind.hexColor)"/></w:rPr><w:t>\(kind.title)</w:t></w:r></w:p>
         """
         for paragraph in MarkdownParser.alertParagraphs(text) {
             xml += """
-            <w:p><w:pPr>\(border)<w:spacing w:after="120"/></w:pPr>\(createRunsForFormattedText(paragraph))</w:p>
+            <w:p><w:pPr>\(border)<w:spacing w:after="120"/>\(indent)</w:pPr>\(createRunsForFormattedText(paragraph))</w:p>
             """
         }
         return xml

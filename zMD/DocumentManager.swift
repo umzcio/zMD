@@ -102,6 +102,12 @@ class DocumentManager: ObservableObject {
     @Published var searchMatches: [SearchMatch] = []
     @Published var renderedMatchCount: Int = 0
 
+    // Folder-search hit reveal (stored here: the search code lives in an extension).
+    /// A hit the PREVIEW still has to locate in its rendered text — see revealSearchHit.
+    fileprivate(set) var pendingSearchReveal: PendingSearchReveal?
+    /// Find-bar modes to put back when the search ends — see revealSearchHit.
+    fileprivate var searchModeBeforeReveal: (regex: Bool, caseSensitive: Bool)?
+
     // Find & Replace state
     @Published var replaceText: String = ""
     @Published var isRegexSearch: Bool = false
@@ -1081,6 +1087,16 @@ extension DocumentManager {
     }
 
     func endSearch() {
+        pendingSearchReveal = nil
+        // Put back find-bar modes a folder-search reveal switched off — unless the user has
+        // since changed them, in which case their explicit choice stands.
+        if let saved = searchModeBeforeReveal {
+            if !isRegexSearch && !isCaseSensitive {
+                isRegexSearch = saved.regex
+                isCaseSensitive = saved.caseSensitive
+            }
+            searchModeBeforeReveal = nil
+        }
         isSearching = false
         searchText = ""
         searchMatches = []
@@ -1115,6 +1131,77 @@ extension DocumentManager {
         }
     }
 
+    // MARK: Folder-search hit reveal
+
+    /// A folder-search hit the PREVIEW still has to locate in its rendered text. Consumed by
+    /// MarkdownTextView's coordinator right after it computes match ranges for `query`.
+    struct PendingSearchReveal {
+        let documentId: UUID
+        let query: String
+        let snippet: String
+        let matchStart: Int
+        let matchLength: Int
+        let sourceOccurrence: Int
+    }
+    func takePendingSearchReveal(documentId: UUID?, query: String) -> PendingSearchReveal? {
+        guard viewMode == .preview, let pending = pendingSearchReveal,
+              pending.documentId == documentId, pending.query == query else { return nil }
+        pendingSearchReveal = nil
+        return pending
+    }
+
+    /// After opening a folder-search hit: put the find bar on THAT occurrence.
+    func revealSearchHit(_ hit: FolderSearchHit, query: String) {
+        // The hit's file must actually be the selected document. If loadDocument failed (error
+        // alert), the previously selected document is still selected — starting a search in
+        // IT would be wrong, so do nothing.
+        guard let selectedId = selectedDocumentId,
+              let document = openDocuments.first(where: { $0.id == selectedId }),
+              Self.canonicalKey(for: document.url) == Self.canonicalKey(for: hit.url) else { return }
+
+        // The hit was computed from the file ON DISK. The open document can have unsaved edits
+        // that add or remove occurrences above it, so re-locate the hit in the live buffer:
+        // same line + text, else the same text nearest that line, else the nearest line.
+        let liveHits = FolderSearch.hits(for: query, in: document.content, url: document.url, limit: Int.max)
+        func distance(_ candidate: FolderSearchHit) -> Int { abs(candidate.lineNumber - hit.lineNumber) }
+        let live = liveHits.first { $0.lineNumber == hit.lineNumber && $0.snippet == hit.snippet }
+            ?? liveHits.filter { $0.snippet == hit.snippet }.min { distance($0) < distance($1) }
+            ?? liveHits.min { distance($0) < distance($1) }
+
+        // Folder search is literal + case-insensitive; the find bar must search the same way
+        // or it may find nothing. Remember the user's modes and restore them when this search
+        // ends — silently leaving regex/case toggles off changed how their NEXT find behaved.
+        if isRegexSearch || isCaseSensitive {
+            searchModeBeforeReveal = (isRegexSearch, isCaseSensitive)
+            isRegexSearch = false
+            isCaseSensitive = false
+        }
+        searchText = query
+        isSearching = true
+        performSearch(immediate: true)
+
+        guard let live else {
+            currentMatchIndex = 0
+            return
+        }
+        // Source/split: find-bar matches ARE source matches, so the occurrence index is exact.
+        let count = searchMatches.count
+        currentMatchIndex = count > 0 ? min(live.occurrenceInFile, count - 1) : 0
+
+        // Preview: the find bar indexes matches in the RENDERED text, which drops markup (a
+        // query inside a link URL exists in the source but not on screen), and its match count
+        // arrives asynchronously — a stale count for a previous query can even reset the index
+        // in between. So the preview resolves the index itself, by context, once it has
+        // computed ranges for this query; it gets the last word.
+        if viewMode == .preview {
+            pendingSearchReveal = PendingSearchReveal(
+                documentId: selectedId, query: query, snippet: live.snippet,
+                matchStart: live.matchStart, matchLength: live.matchLength,
+                sourceOccurrence: live.occurrenceInFile
+            )
+        }
+    }
+
     /// Run the current search.
     ///
     /// Plain text search runs synchronously on the main thread (it's cheap even on multi-MB docs).
@@ -1124,21 +1211,6 @@ extension DocumentManager {
     ///
     /// Pass `immediate: true` to bypass debouncing (used for explicit user actions like clicking
     /// Next/Previous after a programmatic edit).
-    /// After opening a folder-search hit: put the find bar on that exact occurrence. The folder
-    /// search is literal + case-insensitive, so the find bar is set to match before searching.
-    func revealSearchHit(query: String, occurrenceInFile: Int) {
-        isRegexSearch = false
-        isCaseSensitive = false
-        searchText = query
-        isSearching = true
-        performSearch(immediate: true)
-        // Source/split count source matches (exact). Preview counts RENDERED matches, which
-        // arrive asynchronously and can differ slightly (markup characters); setRenderedMatchCount
-        // clamps an out-of-range index, so this is safe either way.
-        let count = searchMatches.count
-        currentMatchIndex = count > 0 ? min(occurrenceInFile, count - 1) : 0
-    }
-
     func performSearch(immediate: Bool = false) {
         searchDebounceTimer?.invalidate()
         if immediate {

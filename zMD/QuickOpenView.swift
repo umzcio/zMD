@@ -27,7 +27,7 @@ struct QuickOpenView: NSViewRepresentable {
             isPresented = false
             // Next turn: let the newly selected document settle before the find bar searches it.
             DispatchQueue.main.async {
-                documentManager.revealSearchHit(query: query, occurrenceInFile: hit.occurrenceInFile)
+                documentManager.revealSearchHit(hit, query: query)
             }
         }
         return view
@@ -73,6 +73,11 @@ class QuickOpenNSView: NSView {
     nonisolated(unsafe) private var contentSearchDebounce: Timer?
     private var contentSearchResults: [QuickOpenItem] = []
     private var contentSearchResultsQuery = ""
+    /// The query currently debouncing or in flight. `updateContentSearchResults` runs on EVERY
+    /// reload — including each manager publish (FS events, file-watcher reloads, scroll-position
+    /// persists) — so without this it restarted the debounce and cancelled the running search
+    /// on every publish: on a big folder, results could be postponed indefinitely.
+    private var pendingContentQuery: String?
 
     private var searchField: NSTextField!
     private var tableView: NSTableView!
@@ -278,23 +283,27 @@ class QuickOpenNSView: NSView {
     /// debounced and asynchronous, and re-enters via `reloadData` when results land.
     private func updateContentSearchResults(query: String) {
         guard query.count >= FolderSearch.minimumQueryLength else {
-            contentSearchDebounce?.invalidate()
-            contentSearchTask?.cancel()
-            contentSearchGeneration += 1
+            cancelPendingContentSearch()
             contentSearchResults = []
             contentSearchResultsQuery = ""
             filteredItems = []
             return
         }
-        // Results already in hand for this exact query (this is the post-search reload, or an
-        // unrelated manager publish) — show them, don't search again.
+        // Results already in hand for this exact query (the post-search reload, or an unrelated
+        // manager publish) — show them. Also drop any search still pending for a DIFFERENT
+        // query: type "foob" then backspace to "foo" inside the debounce, and the "foob"
+        // results would otherwise land under a field that reads "foo".
         if query == contentSearchResultsQuery {
+            if pendingContentQuery != nil { cancelPendingContentSearch() }
             filteredItems = contentSearchResults
             return
         }
         // Keep the previous results on screen while the new search runs: blanking the list on
         // every keystroke makes it strobe.
         filteredItems = contentSearchResults
+        // Already scheduled or running for this query — leave it alone (see pendingContentQuery).
+        if query == pendingContentQuery { return }
+        pendingContentQuery = query
 
         contentSearchDebounce?.invalidate()
         contentSearchDebounce = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
@@ -302,6 +311,13 @@ class QuickOpenNSView: NSView {
                 self?.startContentSearch(query: query)
             }
         }
+    }
+
+    private func cancelPendingContentSearch() {
+        contentSearchDebounce?.invalidate()
+        contentSearchTask?.cancel()
+        contentSearchGeneration += 1
+        pendingContentQuery = nil
     }
 
     private func startContentSearch(query: String) {
@@ -333,6 +349,7 @@ class QuickOpenNSView: NSView {
                 )
             }
             self.contentSearchResultsQuery = query
+            self.pendingContentQuery = nil
             self.reloadData()
         }
     }

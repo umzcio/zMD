@@ -356,7 +356,67 @@ nonisolated enum FolderSearch {
     private static func readText(_ url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: maxFileBytes), !data.isEmpty else { return nil }
-        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252)
+        // One byte past the cap tells us the file continues (so a cut UTF-8 tail is expected).
+        guard let raw = try? handle.read(upToCount: maxFileBytes + 1), !raw.isEmpty else { return nil }
+        let truncated = raw.count > maxFileBytes
+        return decode(truncated ? raw.prefix(maxFileBytes) : raw, truncated: truncated)
+    }
+
+    /// Same ordering the app uses to open files: BOM-marked UTF-16, UTF-8, then CP1252 /
+    /// Latin-1. Without the BOM check a UTF-16 file decoded as CP1252 with a NUL between every
+    /// letter, so NO query ever matched it; and a read cut mid-character at the cap failed
+    /// UTF-8 outright and turned the whole file into CP1252 mojibake.
+    static func decode(_ data: Data, truncated: Bool) -> String? {
+        let bom = [UInt8](data.prefix(2))
+        if bom == [0xFF, 0xFE] || bom == [0xFE, 0xFF] {
+            let even = data.count % 2 == 0 ? data : data.dropLast()
+            if let text = String(data: even, encoding: .utf16) { return text }
+        } else {
+            // Up to 3 bytes covers the longest incomplete UTF-8 tail. Only for truncated reads —
+            // a COMPLETE file with a bad tail genuinely isn't UTF-8.
+            for trim in 0...(truncated ? 3 : 0) where data.count >= trim {
+                if let text = String(data: data.dropLast(trim), encoding: .utf8) { return text }
+            }
+        }
+        return String(data: data, encoding: .windowsCP1252) ?? String(data: data, encoding: .isoLatin1)
+    }
+
+    /// Which rendered match corresponds to a SOURCE-text hit. The preview's find bar indexes
+    /// matches in the RENDERED text, which drops markup: a query that also occurs inside a link
+    /// URL exists in the source but not on screen, so a source occurrence index lands on the
+    /// wrong match. Instead, anchor on context: compare the letters/digits around the hit with
+    /// the letters/digits around each rendered match and take the best agreement (ties go to
+    /// the match nearest `fallback`, the source index).
+    static func renderedMatchIndex(snippet: String, matchStart: Int, matchLength: Int,
+                                   rendered: NSString, matchRanges: [NSRange], fallback: Int) -> Int {
+        guard !matchRanges.isEmpty else { return 0 }
+        let clampedFallback = min(max(0, fallback), matchRanges.count - 1)
+        let chars = Array(snippet)
+        guard matchStart >= 0, matchStart + matchLength <= chars.count else { return clampedFallback }
+
+        func normalize(_ s: String) -> [Character] { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        let window = 24
+        let sourceBefore = Array(normalize(String(chars[..<matchStart])).suffix(window))
+        let sourceAfter = Array(normalize(String(chars[(matchStart + matchLength)...])).prefix(window))
+
+        var best = clampedFallback
+        var bestScore = 0
+        for (index, range) in matchRanges.enumerated() {
+            let beforeStart = max(0, range.location - window * 4)
+            let before = normalize(rendered.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart)))
+            let afterLength = min(window * 4, rendered.length - NSMaxRange(range))
+            let after = normalize(rendered.substring(with: NSRange(location: NSMaxRange(range), length: max(0, afterLength))))
+
+            var score = 0
+            for (a, b) in zip(sourceAfter, after) { if a == b { score += 1 } else { break } }
+            for (a, b) in zip(sourceBefore.reversed(), before.reversed()) { if a == b { score += 1 } else { break } }
+
+            let closer = abs(index - clampedFallback) < abs(best - clampedFallback)
+            if score > bestScore || (score == bestScore && score > 0 && closer) {
+                best = index
+                bestScore = score
+            }
+        }
+        return best
     }
 }

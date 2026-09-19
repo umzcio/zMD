@@ -13,14 +13,14 @@ nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingControll
         let url = request.fileURL
         let (data, truncated) = try QuickLookHTML.readPrefix(of: url)
 
-        var markdown = QuickLookHTML.decode(data, truncated: truncated)
-        if truncated {
-            markdown += QuickLookHTML.truncationNotice
-        }
+        let markdown = QuickLookHTML.decode(data, truncated: truncated)
 
-        let html = QuickLookHTML.makeOfflineSafe(
+        var html = QuickLookHTML.makeOfflineSafe(
             MarkdownParser.shared.toHTML(markdown, includeStyles: true)
         )
+        if truncated {
+            html = QuickLookHTML.appendingTruncationNotice(to: html)
+        }
         let htmlData = Data(html.utf8)
 
         // contentSize is only a hint for the initial panel size; the HTML reflows to fit.

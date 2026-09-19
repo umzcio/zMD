@@ -1030,3 +1030,125 @@ nonisolated final class FolderSearchTests: XCTestCase {
         XCTAssertTrue(FolderSearch.search(query: "find me", in: [matching, flood], isCancelled: { true }).isEmpty)
     }
 }
+
+/// Fixes from the pre-release code review of the folder-search / Quick Look work.
+nonisolated final class ReviewFixTests: XCTestCase {
+    // MARK: Rendered-index anchoring
+
+    /// The reviewer's scenario: the query also occurs inside a link URL, which exists in the
+    /// SOURCE but not in the rendered text — so a source occurrence index overshoots by one.
+    func testRenderedIndexIgnoresOccurrencesThatOnlyExistInMarkup() {
+        let source = "See [docs](http://x.example) first.\nUse http for local work.\nNever http in prod."
+        let hits = FolderSearch.hits(for: "http", in: source, url: URL(fileURLWithPath: "/tmp/a.md"), limit: 50)
+        let chosen = hits[2]                                  // "Never http in prod."
+        XCTAssertEqual(chosen.occurrenceInFile, 2, "source counts the URL occurrence")
+
+        let rendered = "See docs first.\nUse http for local work.\nNever http in prod." as NSString
+        var ranges: [NSRange] = []
+        var search = NSRange(location: 0, length: rendered.length)
+        while true {
+            let r = rendered.range(of: "http", options: .caseInsensitive, range: search)
+            guard r.location != NSNotFound else { break }
+            ranges.append(r)
+            search = NSRange(location: NSMaxRange(r), length: rendered.length - NSMaxRange(r))
+        }
+        XCTAssertEqual(ranges.count, 2, "rendered text has only the two prose occurrences")
+
+        let index = FolderSearch.renderedMatchIndex(
+            snippet: chosen.snippet, matchStart: chosen.matchStart, matchLength: chosen.matchLength,
+            rendered: rendered, matchRanges: ranges, fallback: chosen.occurrenceInFile)
+        XCTAssertEqual(index, 1, "must land on 'Never http in prod', not clamp/overshoot")
+
+        // And the first prose hit resolves to rendered match 0 even though its source index is 1.
+        let first = hits[1]
+        XCTAssertEqual(FolderSearch.renderedMatchIndex(
+            snippet: first.snippet, matchStart: first.matchStart, matchLength: first.matchLength,
+            rendered: rendered, matchRanges: ranges, fallback: first.occurrenceInFile), 0)
+    }
+
+    func testRenderedIndexFallsBackSafelyWithNoContextOrNoMatches() {
+        XCTAssertEqual(FolderSearch.renderedMatchIndex(snippet: "x", matchStart: 0, matchLength: 1,
+                                                       rendered: "" as NSString, matchRanges: [], fallback: 5), 0)
+        let rendered = "zz zz zz" as NSString
+        let ranges = [NSRange(location: 0, length: 2), NSRange(location: 3, length: 2), NSRange(location: 6, length: 2)]
+        // No usable context agreement → clamped fallback, never out of range.
+        XCTAssertEqual(FolderSearch.renderedMatchIndex(snippet: "??", matchStart: 0, matchLength: 2,
+                                                       rendered: rendered, matchRanges: ranges, fallback: 99), 2)
+    }
+
+    // MARK: Decoder parity
+
+    func testFolderSearchDecodesUTF16AndRepairsATruncatedUTF8Tail() throws {
+        let utf16 = try XCTUnwrap("needle in utf16".data(using: .utf16))   // carries a BOM
+        XCTAssertEqual(FolderSearch.decode(utf16, truncated: false), "needle in utf16")
+
+        var cut = Data("caf\u{00E9} needle \u{1F600}".utf8)
+        cut.removeLast(2)                                     // slice the 4-byte emoji mid-scalar
+        let repaired = FolderSearch.decode(cut, truncated: true)
+        XCTAssertEqual(repaired, "caf\u{00E9} needle ", "must stay UTF-8, not fall back to CP1252 mojibake")
+        // The same bytes from a COMPLETE file genuinely are not UTF-8 → legacy fallback, not nil.
+        XCTAssertNotNil(FolderSearch.decode(cut, truncated: false))
+        XCTAssertNotEqual(FolderSearch.decode(cut, truncated: false), repaired)
+    }
+
+    // MARK: Quick Look truncation notice
+
+    func testTruncationNoticeIsHTMLInsideTheBodyNotMarkdownInsideAnOpenFence() {
+        // A file cut inside a fence: everything after the fence opener is code.
+        let html = QuickLookHTML.makeOfflineSafe(MarkdownParser.shared.toHTML("```\ncut mid-fence", includeStyles: true))
+        let noticed = QuickLookHTML.appendingTruncationNotice(to: html)
+        let noticeAt = try? XCTUnwrap(noticed.range(of: "Preview truncated"))
+        let bodyEnd = noticed.range(of: "</body>", options: .backwards)
+        let lastCodeEnd = noticed.range(of: "</pre>", options: .backwards) ?? noticed.range(of: "</code>", options: .backwards)
+        XCTAssertNotNil(noticeAt)
+        if let noticeAt, let bodyEnd { XCTAssertLessThan(noticeAt.lowerBound, bodyEnd.lowerBound) }
+        if let noticeAt, let lastCodeEnd {
+            XCTAssertGreaterThan(noticeAt.lowerBound, lastCodeEnd.lowerBound, "notice must sit OUTSIDE the code block")
+        }
+    }
+
+    // MARK: revealSearchHit
+
+    @MainActor
+    func testRevealRelocatesInTheLiveBufferRestoresFindModesAndIgnoresUnselectedFiles() {
+        let manager = DocumentManager.shared
+        let saved = (manager.openDocuments, manager.selectedDocumentId, manager.viewMode, manager.searchText,
+                     manager.isSearching, manager.isRegexSearch, manager.isCaseSensitive, manager.currentMatchIndex,
+                     manager.searchMatches, manager.autoSaveEnabled)
+        defer {
+            manager.endSearch()
+            (manager.openDocuments, manager.selectedDocumentId, manager.viewMode, manager.searchText) = (saved.0, saved.1, saved.2, saved.3)
+            (manager.isSearching, manager.isRegexSearch, manager.isCaseSensitive, manager.currentMatchIndex) = (saved.4, saved.5, saved.6, saved.7)
+            manager.searchMatches = saved.8
+            manager.autoSaveEnabled = saved.9
+        }
+        manager.autoSaveEnabled = false
+        manager.viewMode = .source
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("zmd-reveal-\(UUID().uuidString).md")
+        let onDisk = "cat one\ncat two\n"
+        // Unsaved edit ABOVE the hit adds an occurrence: disk index 1 is now live index 2.
+        let live = "cat zero\n" + onDisk
+        let id = UUID()
+        manager.openDocuments = [MarkdownDocument(id: id, url: url, content: live)]
+        manager.selectedDocumentId = id
+        manager.isRegexSearch = true
+        manager.isCaseSensitive = true
+
+        let diskHit = FolderSearch.hits(for: "cat", in: onDisk, url: url, limit: 10)[1]   // "cat two", index 1
+        manager.revealSearchHit(diskHit, query: "cat")
+        XCTAssertEqual(manager.searchMatches.count, 3)
+        XCTAssertEqual(manager.currentMatchIndex, 2, "must follow 'cat two' into the edited buffer")
+        XCTAssertFalse(manager.isRegexSearch)
+
+        manager.endSearch()
+        XCTAssertTrue(manager.isRegexSearch, "find-bar modes must come back when the reveal's search ends")
+        XCTAssertTrue(manager.isCaseSensitive)
+
+        // A hit for a file that is NOT the selected document (e.g. its load failed) is a no-op.
+        let other = FolderSearchHit(url: URL(fileURLWithPath: "/tmp/not-open-\(UUID().uuidString).md"),
+                                    lineNumber: 1, snippet: "cat", matchStart: 0, matchLength: 3, occurrenceInFile: 0)
+        manager.revealSearchHit(other, query: "cat")
+        XCTAssertFalse(manager.isSearching, "must not start a search in whatever document happened to be selected")
+    }
+}

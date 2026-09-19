@@ -11,8 +11,20 @@ nonisolated enum QuickLookHTML {
     /// arrowing through Finder; a multi-hundred-MB log file renamed `.md` must not stall it.
     static let maxInputBytes = 2 * 1024 * 1024
 
-    /// Markdown appended to the source when the file was cut at `maxInputBytes`.
-    static let truncationNotice = "\n\n---\n\n*Preview truncated — open the file in zMD to see the whole document.*\n"
+    /// Notice shown when the file was cut at `maxInputBytes`. HTML, inserted AFTER rendering:
+    /// the cut lands at an arbitrary byte, often inside a fenced code / `$$` / HTML block, and
+    /// a notice appended as markdown gets swallowed by that open block as literal text — the
+    /// user would never learn the preview is incomplete.
+    static let truncationNoticeHTML = "<hr><p><em>Preview truncated — open the file in zMD to see the whole document.</em></p>"
+
+    static func appendingTruncationNotice(to html: String) -> String {
+        if let bodyEnd = html.range(of: "</body>", options: [.caseInsensitive, .backwards]) {
+            var result = html
+            result.insert(contentsOf: truncationNoticeHTML + "\n", at: bodyEnd.lowerBound)
+            return result
+        }
+        return html + truncationNoticeHTML
+    }
 
     // MARK: - Reading
 

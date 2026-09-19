@@ -598,6 +598,20 @@ struct MarkdownTextView: NSViewRepresentable {
 
             // Report match count back (deferred — see reportMatchCount)
             reportMatchCount(matchRanges.count)
+
+            // A folder-search hit waiting to be located in THIS rendered text (preview mode).
+            // Queued AFTER the count report on the same FIFO main queue, so it lands after
+            // setRenderedMatchCount's clamp — and after any stale count for a previous query —
+            // and therefore has the last word on the index.
+            if let reveal = DocumentManager.shared.takePendingSearchReveal(documentId: documentId, query: searchText) {
+                let index = FolderSearch.renderedMatchIndex(
+                    snippet: reveal.snippet, matchStart: reveal.matchStart, matchLength: reveal.matchLength,
+                    rendered: string, matchRanges: matchRanges, fallback: reveal.sourceOccurrence
+                )
+                DispatchQueue.main.async {
+                    DocumentManager.shared.currentMatchIndex = index
+                }
+            }
         }
 
         func scrollToMatch(at index: Int, in textView: NSTextView) {
@@ -731,7 +745,8 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             // Scroll sync percent reporting
-            if !isProgrammaticScroll, let sv = scrollView, let docView = sv.documentView {
+            let isReflowAdjustment = (textView as? PreviewTextView)?.isRestoringScrollAnchor == true
+            if !isProgrammaticScroll, !isReflowAdjustment, let sv = scrollView, let docView = sv.documentView {
                 let contentHeight = docView.frame.height
                 let viewportHeight = sv.contentView.bounds.height
                 let scrollableHeight = contentHeight - viewportHeight
@@ -974,13 +989,11 @@ struct MarkdownTextView: NSViewRepresentable {
             var bulletPrefix: String
             var itemText = text
 
-            // Check for task list items
-            if text.hasPrefix("[ ] ") {
-                bulletPrefix = "☐  "
-                itemText = String(text.dropFirst(4))
-                orderedCounters[level] = nil
-            } else if text.hasPrefix("[x] ") || text.hasPrefix("[X] ") {
-                bulletPrefix = "☑  "
+            // Task list items. MarkdownParser.taskState is the ONE definition of "is a task item"
+            // on the click-to-toggle path: the parser uses it to record source lines, and the
+            // Nth box rendered here must be the Nth line it recorded, or toggles get refused.
+            if let isChecked = MarkdownParser.taskState(ofItemText: text) {
+                bulletPrefix = isChecked ? "☑  " : "☐  "
                 itemText = String(text.dropFirst(4))
                 orderedCounters[level] = nil
             } else if isOrdered {
@@ -1860,9 +1873,19 @@ final class PreviewTextView: NSTextView {
             // they take the cheap path and behave like any wrapping text view.)
             let anchor = firstVisibleCharacterIndex()
             updateColumnWidth()
-            if let anchor { scrollCharacterToTop(anchor) }
+            // Deferred: this setter runs INSIDE updateNSView. Scrolling here fired the
+            // bounds-change observer synchronously, which published scroll-sync state during
+            // the SwiftUI update pass (the hazard reportMatchCount defers around).
+            if let anchor {
+                Task { @MainActor [weak self] in
+                    self?.scrollCharacterToTop(anchor)
+                }
+            }
         }
     }
+
+    /// True only while a width-change reflow is re-pinning the scroll position.
+    private(set) var isRestoringScrollAnchor = false
 
     nonisolated private static let minimumColumnWidth: CGFloat = 200
 
@@ -1911,8 +1934,13 @@ final class PreviewTextView: NSTextView {
         let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         let maxY = max(0, frame.height - scrollView.contentView.bounds.height)
         let y = min(max(0, rect.minY + textContainerOrigin.y), maxY)
+        // Bounds-change notifications fire synchronously inside setBoundsOrigin, so this flag
+        // brackets them: a reflow adjustment is not the user scrolling, and must not be
+        // broadcast to the source editor in split mode (it jumped as if they had).
+        isRestoringScrollAnchor = true
         scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: y))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        isRestoringScrollAnchor = false
     }
 
     // MARK: Code-block copy button
