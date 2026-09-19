@@ -58,6 +58,15 @@
 		8B2C3D4E5F6A71B2C3D4E5F6 /* AutocompleteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1B2C3D4E5F60A1B2C3D4E5 /* AutocompleteView.swift */; };
 		E77A00000000000000000202 /* InlineMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A00000000000000000201 /* InlineMarkdownTests.swift */; };
 		84B9A8D6DB385775F9778A9E /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */; };
+		51AA00000000000000000011 /* SharedConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000001 /* SharedConstants.swift */; };
+		51AA00000000000000000012 /* SharedConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000001 /* SharedConstants.swift */; };
+		51AA00000000000000000013 /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1A2B3C4D5E6F7084 /* MarkdownParser.swift */; };
+		51AA00000000000000000014 /* InlineMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77A00000000000000000100 /* InlineMarkdown.swift */; };
+		51AA00000000000000000015 /* PreviewProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000002 /* PreviewProvider.swift */; };
+		51AA00000000000000000016 /* QuickLookHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000003 /* QuickLookHTML.swift */; };
+		51AA00000000000000000017 /* zMDQuickLook.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000006 /* zMDQuickLook.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		51AA00000000000000000018 /* QuickLookHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000003 /* QuickLookHTML.swift */; };
+		51AA00000000000000000019 /* QuickLookHTMLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000007 /* QuickLookHTMLTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,7 +77,28 @@
 			remoteGlobalIDString = A6666666;
 			remoteInfo = zMD;
 		};
+		51AA00000000000000000041 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AAAAAAAA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 51AA00000000000000000040;
+			remoteInfo = zMDQuickLook;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		51AA00000000000000000033 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				51AA00000000000000000017 /* zMDQuickLook.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		F60000000000000000000000 /* AccessibilityCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityCopy.swift; sourceTree = "<group>"; };
@@ -124,6 +154,13 @@
 		E77A00000000000000000201 /* InlineMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMarkdownTests.swift; sourceTree = "<group>"; };
 		6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
 		E77A00000000000000000203 /* zMDTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = zMDTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		51AA00000000000000000001 /* SharedConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedConstants.swift; sourceTree = "<group>"; };
+		51AA00000000000000000002 /* PreviewProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewProvider.swift; sourceTree = "<group>"; };
+		51AA00000000000000000003 /* QuickLookHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookHTML.swift; sourceTree = "<group>"; };
+		51AA00000000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		51AA00000000000000000005 /* zMDQuickLook.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = zMDQuickLook.entitlements; sourceTree = "<group>"; };
+		51AA00000000000000000006 /* zMDQuickLook.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = zMDQuickLook.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		51AA00000000000000000007 /* QuickLookHTMLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookHTMLTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -141,6 +178,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		51AA00000000000000000031 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -148,6 +192,7 @@
 			isa = PBXGroup;
 			children = (
 				A4444444 /* zMD */,
+				51AA00000000000000000020 /* zMDQuickLook */,
 				E77A00000000000000000200 /* zMDTests */,
 				A5555555 /* Products */,
 			);
@@ -181,6 +226,7 @@
 				F1A2B3C4D5E6F7082 /* FileWatcher.swift */,
 				F1A2B3C4D5E6F7084 /* MarkdownParser.swift */,
 				E77A00000000000000000100 /* InlineMarkdown.swift */,
+				51AA00000000000000000001 /* SharedConstants.swift */,
 				F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */,
 				F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */,
 				F1A2B3C4D5E6F708A /* QuickOpenView.swift */,
@@ -214,6 +260,7 @@
 			isa = PBXGroup;
 			children = (
 A1111111 /* zMD.app */,
+				51AA00000000000000000006 /* zMDQuickLook.appex */,
 				E77A00000000000000000203 /* zMDTests.xctest */,
 			);
 			name = Products;
@@ -224,8 +271,20 @@ A1111111 /* zMD.app */,
 			children = (
 				E77A00000000000000000201 /* InlineMarkdownTests.swift */,
 				6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */,
+				51AA00000000000000000007 /* QuickLookHTMLTests.swift */,
 			);
 			path = zMDTests;
+			sourceTree = "<group>";
+		};
+		51AA00000000000000000020 /* zMDQuickLook */ = {
+			isa = PBXGroup;
+			children = (
+				51AA00000000000000000002 /* PreviewProvider.swift */,
+				51AA00000000000000000003 /* QuickLookHTML.swift */,
+				51AA00000000000000000004 /* Info.plist */,
+				51AA00000000000000000005 /* zMDQuickLook.entitlements */,
+			);
+			path = zMDQuickLook;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -238,10 +297,12 @@ A1111111 /* zMD.app */,
 				A8888888 /* Sources */,
 				A2222222 /* Frameworks */,
 				A9999999 /* Resources */,
+				51AA00000000000000000033 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				51AA00000000000000000042 /* PBXTargetDependency */,
 			);
 			name = zMD;
 			productName = zMD;
@@ -265,6 +326,23 @@ A1111111 /* zMD.app */,
 			productReference = E77A00000000000000000203 /* zMDTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		51AA00000000000000000040 /* zMDQuickLook */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 51AA00000000000000000052 /* Build configuration list for PBXNativeTarget "zMDQuickLook" */;
+			buildPhases = (
+				51AA00000000000000000030 /* Sources */,
+				51AA00000000000000000031 /* Frameworks */,
+				51AA00000000000000000032 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = zMDQuickLook;
+			productName = zMDQuickLook;
+			productReference = 51AA00000000000000000006 /* zMDQuickLook.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -276,6 +354,9 @@ A1111111 /* zMD.app */,
 				LastUpgradeCheck = 2610;
 				TargetAttributes = {
 					A6666666 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					51AA00000000000000000040 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 					E77A00000000000000000207 = {
@@ -299,6 +380,7 @@ A1111111 /* zMD.app */,
 			targets = (
 				A6666666 /* zMD */,
 				E77A00000000000000000207 /* zMDTests */,
+				51AA00000000000000000040 /* zMDQuickLook */,
 			);
 		};
 /* End PBXProject section */
@@ -311,6 +393,13 @@ A1111111 /* zMD.app */,
 				A1000000B /* Assets.xcassets in Resources */,
 			
 				2208643A1E114A2C9A4C7331 /* Resources in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		51AA00000000000000000032 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -346,6 +435,7 @@ A1111111 /* zMD.app */,
 				F1A2B3C4D5E6F7083 /* FileWatcher.swift in Sources */,
 				F1A2B3C4D5E6F7085 /* MarkdownParser.swift in Sources */,
 				E77A00000000000000000101 /* InlineMarkdown.swift in Sources */,
+				51AA00000000000000000011 /* SharedConstants.swift in Sources */,
 				F1A2B3C4D5E6F7087 /* MarkdownTextView.swift in Sources */,
 				F1A2B3C4D5E6F7089 /* SyntaxHighlighter.swift in Sources */,
 				F1A2B3C4D5E6F708B /* QuickOpenView.swift in Sources */,
@@ -377,6 +467,20 @@ A1111111 /* zMD.app */,
 			files = (
 				E77A00000000000000000202 /* InlineMarkdownTests.swift in Sources */,
 				84B9A8D6DB385775F9778A9E /* MarkdownParserTests.swift in Sources */,
+				51AA00000000000000000018 /* QuickLookHTML.swift in Sources */,
+				51AA00000000000000000019 /* QuickLookHTMLTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		51AA00000000000000000030 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				51AA00000000000000000015 /* PreviewProvider.swift in Sources */,
+				51AA00000000000000000016 /* QuickLookHTML.swift in Sources */,
+				51AA00000000000000000013 /* MarkdownParser.swift in Sources */,
+				51AA00000000000000000014 /* InlineMarkdown.swift in Sources */,
+				51AA00000000000000000012 /* SharedConstants.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -387,6 +491,11 @@ A1111111 /* zMD.app */,
 			isa = PBXTargetDependency;
 			target = A6666666 /* zMD */;
 			targetProxy = E77A00000000000000000209 /* PBXContainerItemProxy */;
+		};
+		51AA00000000000000000042 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 51AA00000000000000000040 /* zMDQuickLook */;
+			targetProxy = 51AA00000000000000000041 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -631,6 +740,68 @@ A1111111 /* zMD.app */,
 			};
 			name = Release;
 		};
+		51AA00000000000000000050 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = zMDQuickLook/zMDQuickLook.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 5JJ6G6A84S;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = zMDQuickLook/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 2.8.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app.QuickLook;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		51AA00000000000000000051 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = zMDQuickLook/zMDQuickLook.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 5JJ6G6A84S;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = zMDQuickLook/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 2.8.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zmd.app.QuickLook;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -657,6 +828,15 @@ A1111111 /* zMD.app */,
 			buildConfigurations = (
 				CCCCCCCC /* Debug */,
 				DDDDDDDD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		51AA00000000000000000052 /* Build configuration list for PBXNativeTarget "zMDQuickLook" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				51AA00000000000000000050 /* Debug */,
+				51AA00000000000000000051 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -89,6 +89,17 @@ zMDApp (App entry point)
 
 All exports use `NSSavePanel` and run on main thread. HTML conversion routes through `MarkdownParser.shared.toHTML()` for consistent, safe output.
 
+### Quick Look Extension
+
+`zMDQuickLook/` is a separate app-extension target (`zMDQuickLook.appex`, bundle id `com.zmd.app.QuickLook`) embedded in `zMD.app/Contents/PlugIns`. It previews `net.daringfireball.markdown` files in Finder (Space) as HTML.
+
+- `PreviewProvider.swift`: `QLPreviewProvider` principal class (data-based preview). Reads ≤2 MB, decodes, calls `MarkdownParser.shared.toHTML`, post-processes, returns `QLPreviewReply` HTML.
+- `QuickLookHTML.swift`: pure Foundation helpers — bounded read, decoding (UTF-8 → BOM UTF-16 → CP1252), and `makeOfflineSafe` (strips `<script>`/`<link>`, keeps display-math source visible, injects CSP + dark-mode CSS). Also compiled into `zMDTests` (`QuickLookHTMLTests.swift`).
+- Shared with the app by target membership (not copies): `MarkdownParser.swift`, `InlineMarkdown.swift`, `SharedConstants.swift` (the `CDN` enum). Anything `MarkdownParser`/`InlineMarkdown` reference must stay Foundation-only and live in a file that is a member of both targets, or the extension stops compiling.
+- The extension **is sandboxed** (`zMDQuickLook.entitlements`; required for app extensions) even though the app is not. No network, and it can only read the previewed file — so Mermaid/KaTeX render as source text and relative images do not load.
+- `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` are set on the extension target too — bump them together with the app's.
+- Building registers the appex with PlugInKit via LaunchServices. To clean up a dev build: `pluginkit -r <path to .appex>`; list with `pluginkit -m -A -D -v -i com.zmd.app.QuickLook`.
+
 ### Menu Commands & Shortcuts
 
 Defined in `zMDApp.swift` using SwiftUI's `.commands` modifier:
