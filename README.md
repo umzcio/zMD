@@ -66,7 +66,10 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 - **Nested lists** — proper indentation with different bullet styles (•, ◦, ▪, ▹)
 - **YAML frontmatter** — displays document metadata from `---` blocks
 - **Clickable links** — external URLs open in browser, relative `.md` links open as new tabs
-- **Task lists** — `- [ ]` / `- [x]` rendered as checkboxes
+- **Task lists** — `- [ ]` / `- [x]` rendered as checkboxes; **click one to toggle it** in the source
+- **GitHub alerts** — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` callouts (preview and every export)
+- **Code block copy** — hover a code block for a copy button, or right-click → Copy Code Block
+- **Layout** — position the text column left / center / right and choose its width (Narrow → Full), from Settings or the status bar
 
 ### Navigation & Search
 - **Multi-tab interface** — drag to reorder, right-click for tab options
@@ -75,6 +78,8 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 - **Quick switcher** (`⌘⇧O`) — fuzzy search across open files, or `@file` / `#heading` targeted search
 - **Command palette** (`⌘K`) — every app action, searchable
 - **Find in document** (`⌘F`) — match highlighting with next/previous navigation
+- **Search in folder** (`⌃⇧F`, or type `>` in the quick switcher) — search file contents across the open folder; Enter opens the file on that exact match
+- **Quick Look** — press Space on a `.md` file in Finder for a rendered preview
 - **Reading position memory** — automatically remembers scroll position per document
 
 ### Export & Print

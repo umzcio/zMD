@@ -157,6 +157,8 @@ The app currently ships **un-sandboxed** (direct `.dmg` distribution, not Mac Ap
 
 ### Known Limitations
 
+- Quick Look previews (sandboxed, no network): Mermaid/KaTeX show as source text; relative and remote images do not load
+- Images/diagrams are sized once at build time, so one wider than a very narrow pane still overflows (text reflows; attachments don't)
 - Text selection implementation is incomplete (partially works)
 - Table rendering may overflow on very wide tables
 - Markdown parser is simplified (doesn't support all CommonMark features)
