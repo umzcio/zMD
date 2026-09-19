@@ -166,6 +166,12 @@ nonisolated enum QuickLookHTML {
                 blockquote { border-left-color: #666; color: #b0b0b0; }
                 hr { border-top-color: #555; }
                 .frontmatter { background-color: #262626; border-color: #3a3a3a; }
+                /* GitHub's DARK-theme alert accents; the parser's sheet carries the light ones. */
+                .markdown-alert-note { border-left-color: #4493f8; } .markdown-alert-note .markdown-alert-title { color: #4493f8; }
+                .markdown-alert-tip { border-left-color: #3fb950; } .markdown-alert-tip .markdown-alert-title { color: #3fb950; }
+                .markdown-alert-important { border-left-color: #ab7df8; } .markdown-alert-important .markdown-alert-title { color: #ab7df8; }
+                .markdown-alert-warning { border-left-color: #d29922; } .markdown-alert-warning .markdown-alert-title { color: #d29922; }
+                .markdown-alert-caution { border-left-color: #f85149; } .markdown-alert-caution .markdown-alert-title { color: #f85149; }
             }
         </style>
         """
