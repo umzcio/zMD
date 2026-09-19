@@ -23,6 +23,62 @@ nonisolated final class MarkdownParser: Sendable {
 
     // MARK: - Element Types
 
+    /// The five GitHub alert kinds (`> [!NOTE]` …). Shared by every rendering backend so the
+    /// title, icon, and color of a kind can't drift between preview, HTML/PDF, DOCX, and print.
+    nonisolated enum AlertKind: String, CaseIterable, Sendable {
+        case note, tip, important, warning, caution
+
+        var title: String { rawValue.capitalized }
+
+        /// GitHub's light-theme accent. For the exports, which always render on a white page;
+        /// the live preview uses adaptive system colors instead.
+        var hexColor: String {
+            switch self {
+            case .note: return "0969DA"
+            case .tip: return "1A7F37"
+            case .important: return "8250DF"
+            case .warning: return "9A6700"
+            case .caution: return "CF222E"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .note: return "info.circle"
+            case .tip: return "lightbulb"
+            case .important: return "exclamationmark.bubble"
+            case .warning: return "exclamationmark.triangle"
+            case .caution: return "exclamationmark.octagon"
+            }
+        }
+
+        /// Matches a blockquote's first line. GitHub requires the marker alone on its line;
+        /// `> [!NOTE] some text` is an ordinary quote, and stays one here.
+        static func parse(markerLine: String) -> AlertKind? {
+            let trimmed = markerLine.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("[!"), trimmed.hasSuffix("]") else { return nil }
+            return AlertKind(rawValue: trimmed.dropFirst(2).dropLast().lowercased())
+        }
+    }
+
+    /// An alert body as paragraphs. Source lines inside one paragraph are soft-wrapped — joined
+    /// with a space, as markdown specifies — because README authors hard-wrap alert text at
+    /// ~80 columns and rendering each source line on its own row looks broken. A bare `>`
+    /// (empty line in `text`) separates paragraphs.
+    static func alertParagraphs(_ text: String) -> [String] {
+        var paragraphs: [String] = []
+        var current: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if !current.isEmpty { paragraphs.append(current.joined(separator: " ")); current = [] }
+            } else {
+                current.append(line.trimmingCharacters(in: .whitespaces))
+            }
+        }
+        if !current.isEmpty { paragraphs.append(current.joined(separator: " ")) }
+        return paragraphs
+    }
+
     enum Element: Identifiable {
         case heading1(String)
         case heading2(String)
@@ -40,6 +96,9 @@ nonisolated final class MarkdownParser: Sendable {
         case image(alt: String, path: String)
         case horizontalRule
         case blockquote(String)
+        /// GitHub-style alert: a blockquote whose first line is exactly `[!NOTE]`, `[!TIP]`,
+        /// `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]`. `text` is the body without the marker.
+        case alert(kind: AlertKind, text: String)
         case htmlBlock(String)
 
         /// Content-addressed identity used as the element cache key.
@@ -68,6 +127,7 @@ nonisolated final class MarkdownParser: Sendable {
             case .image(let alt, let path): return "img\(unit)\(alt)\(unit)\(path)"
             case .horizontalRule: return "hr"
             case .blockquote(let text): return "quote\(unit)\(text)"
+            case .alert(let kind, let text): return "alert\(unit)\(kind.rawValue)\(unit)\(text)"
             case .htmlBlock(let html): return "html\(unit)\(html)"
             }
         }
@@ -272,7 +332,11 @@ nonisolated final class MarkdownParser: Sendable {
                     quoteLines.append(body)
                     i += 1
                 }
-                elements.append(.blockquote(quoteLines.joined(separator: "\n")))
+                if let first = quoteLines.first, let kind = AlertKind.parse(markerLine: first) {
+                    elements.append(.alert(kind: kind, text: quoteLines.dropFirst().joined(separator: "\n")))
+                } else {
+                    elements.append(.blockquote(quoteLines.joined(separator: "\n")))
+                }
                 i -= 1 // Adjust because we'll increment at the end
             }
             // Empty line
@@ -595,6 +659,14 @@ nonisolated final class MarkdownParser: Sendable {
                         color: #555;
                         font-style: italic;
                     }
+                    .markdown-alert {
+                        border-left: 3px solid #999;
+                        padding: 2pt 0 2pt 12pt;
+                        margin: 12pt 0;
+                    }
+                    .markdown-alert p { margin: 4pt 0; }
+                    .markdown-alert-title { font-weight: 600; }
+                    \(AlertKind.allCases.map { ".markdown-alert-\($0.rawValue) { border-left-color: #\($0.hexColor); } .markdown-alert-\($0.rawValue) .markdown-alert-title { color: #\($0.hexColor); }" }.joined(separator: "\n                    "))
                     hr {
                         border: none;
                         border-top: 1px solid #999;
@@ -738,6 +810,11 @@ nonisolated final class MarkdownParser: Sendable {
             return "<hr>\n"
         case .blockquote(let text):
             return "<blockquote>\(formatInlineHTML(text))</blockquote>\n"
+        case .alert(let kind, let text):
+            // Class names follow GitHub's own markup so exported HTML picks up any GitHub-
+            // compatible stylesheet; the title text keeps it readable with no styles at all.
+            let body = Self.alertParagraphs(text).map { "<p>\(formatInlineHTML($0))</p>" }.joined()
+            return "<div class=\"markdown-alert markdown-alert-\(kind.rawValue)\"><p class=\"markdown-alert-title\">\(kind.title)</p>\(body)</div>\n"
         case .htmlBlock(let html):
             // Raw HTML blocks are user-controlled. Export them as visible text rather than
             // attempting regex sanitization of browser HTML.

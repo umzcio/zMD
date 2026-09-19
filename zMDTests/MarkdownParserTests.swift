@@ -262,4 +262,68 @@ nonisolated final class MarkdownParserTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - 12. GitHub alerts
+
+    private func alerts(in content: String) -> [(MarkdownParser.AlertKind, String)] {
+        MarkdownParser.shared.parse(content).compactMap { element in
+            if case .alert(let kind, let text) = element { return (kind, text) }
+            return nil
+        }
+    }
+
+    private func blockquotes(in content: String) -> [String] {
+        MarkdownParser.shared.parse(content).compactMap { element in
+            if case .blockquote(let text) = element { return text }
+            return nil
+        }
+    }
+
+    @MainActor
+    func testAllFiveAlertKindsParseCaseInsensitively() {
+        for (marker, kind) in [("NOTE", MarkdownParser.AlertKind.note), ("Tip", .tip), ("important", .important),
+                               ("WARNING", .warning), ("Caution", .caution)] {
+            let found = alerts(in: "> [!\(marker)]\n> Body text.")
+            XCTAssertEqual(found.count, 1, marker)
+            XCTAssertEqual(found.first?.0, kind, marker)
+            XCTAssertEqual(found.first?.1, "Body text.", marker)
+        }
+    }
+
+    /// GitHub only treats the marker as an alert when it is alone on the first line. Anything
+    /// else must remain an ordinary quote — never silently eat a user's text as a "marker".
+    @MainActor
+    func testNonAlertQuotesStayBlockquotes() {
+        for content in ["> [!NOTE] trailing text on the marker line",
+                        "> [!BOGUS]\n> unknown kind",
+                        "> Just a quote\n> [!NOTE]",
+                        "> [NOTE]\n> missing bang"] {
+            XCTAssertTrue(alerts(in: content).isEmpty, content)
+            XCTAssertEqual(blockquotes(in: content).count, 1, content)
+        }
+    }
+
+    @MainActor
+    func testAlertBodySoftWrapsLinesAndSplitsParagraphsOnBareQuoteMarker() {
+        let content = "> [!WARNING]\n> First line hard-wrapped\n> by the README author.\n>\n> Second paragraph."
+        let body = alerts(in: content).first?.1 ?? ""
+        XCTAssertEqual(MarkdownParser.alertParagraphs(body),
+                       ["First line hard-wrapped by the README author.", "Second paragraph."])
+    }
+
+    @MainActor
+    func testAlertHTMLUsesGitHubClassNamesAndEscapesBody() {
+        let html = MarkdownParser.shared.toHTMLBody("> [!CAUTION]\n> Don't run <script> here & now.")
+        XCTAssertTrue(html.contains("class=\"markdown-alert markdown-alert-caution\""), html)
+        XCTAssertTrue(html.contains("<p class=\"markdown-alert-title\">Caution</p>"), html)
+        XCTAssertTrue(html.contains("&lt;script&gt;"), "alert body must be HTML-escaped: \(html)")
+        XCTAssertFalse(html.contains("[!CAUTION]"), "marker text must not leak into output")
+    }
+
+    @MainActor
+    func testAlertEndsAtTheQuoteBoundaryAndFollowingMarkdownSurvives() {
+        let elements = MarkdownParser.shared.parse("> [!TIP]\n> Tip body.\n\n## After\n\nParagraph.")
+        XCTAssertEqual(elements.count, 3)
+        if case .heading2(let text) = elements[1] { XCTAssertEqual(text, "After") } else { XCTFail("expected heading") }
+    }
 }

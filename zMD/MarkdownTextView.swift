@@ -869,6 +869,7 @@ struct MarkdownTextView: NSViewRepresentable {
         case .image(let alt, let path): appendImage(alt: alt, path: path, to: result)
         case .horizontalRule: appendHorizontalRule(to: result)
         case .blockquote(let text): appendBlockquote(text: text, to: result)
+        case .alert(let kind, let text): appendAlert(kind: kind, text: text, to: result)
         case .htmlBlock(let html): appendHTMLBlock(html: html, to: result)
         }
     }
@@ -1160,6 +1161,76 @@ struct MarkdownTextView: NSViewRepresentable {
 
         result.append(formatInlineMarkdown(text, attributes: attributes))
         result.append(NSAttributedString(string: "\n", attributes: attributes))
+    }
+
+    /// GitHub-style alert: colored bar, icon + bold kind title, then the body in regular (not
+    /// italic) text — an alert is a callout, not a quotation. Adaptive system colors, so it
+    /// reads correctly in both appearances without baking RGB into the cached fragment.
+    private func appendAlert(kind: MarkdownParser.AlertKind, text: String, to result: NSMutableAttributedString) {
+        let color: NSColor
+        switch kind {
+        case .note: color = .systemBlue
+        case .tip: color = .systemGreen
+        case .important: color = .systemPurple
+        case .warning: color = .systemOrange
+        case .caution: color = .systemRed
+        }
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.headIndent = 24
+        paragraphStyle.firstLineHeadIndent = 24
+        paragraphStyle.paragraphSpacingBefore = 2
+        paragraphStyle.paragraphSpacing = 2
+        paragraphStyle.lineSpacing = 3
+
+        let titleStyle = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+        titleStyle.paragraphSpacingBefore = 10
+
+        let lastStyle = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+        lastStyle.paragraphSpacing = 10
+
+        func bar(_ style: NSParagraphStyle) -> NSAttributedString {
+            NSAttributedString(string: "  ┃ ", attributes: [
+                .font: NSFont.systemFont(ofSize: 16 * zoomLevel),
+                .foregroundColor: color,
+                .paragraphStyle: style
+            ])
+        }
+
+        // Title row: bar, tinted SF Symbol, bold kind name.
+        let titleFont = fontStyle.nsFont(size: 15 * zoomLevel).withWeight(.semibold)
+        result.append(bar(titleStyle))
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 14 * zoomLevel, weight: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        if let symbol = NSImage(systemSymbolName: kind.symbolName, accessibilityDescription: kind.title)?
+            .withSymbolConfiguration(symbolConfig) {
+            let attachment = NSTextAttachment()
+            attachment.image = symbol
+            // Drop the glyph slightly so it sits on the text baseline rather than floating.
+            attachment.bounds = NSRect(x: 0, y: -2.5 * zoomLevel, width: symbol.size.width, height: symbol.size.height)
+            let icon = NSMutableAttributedString(attachment: attachment)
+            icon.addAttribute(.paragraphStyle, value: titleStyle, range: NSRange(location: 0, length: icon.length))
+            result.append(icon)
+            result.append(NSAttributedString(string: " ", attributes: [.font: titleFont, .paragraphStyle: titleStyle]))
+        }
+        result.append(NSAttributedString(string: kind.title + "\n", attributes: [
+            .font: titleFont,
+            .foregroundColor: color,
+            .paragraphStyle: titleStyle
+        ]))
+
+        let paragraphs = MarkdownParser.alertParagraphs(text)
+        for (index, paragraph) in paragraphs.enumerated() {
+            let style = index == paragraphs.count - 1 ? lastStyle : paragraphStyle
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: fontStyle.nsFont(size: 16 * zoomLevel),
+                .foregroundColor: NSColor.textColor,
+                .paragraphStyle: style
+            ]
+            result.append(bar(style))
+            result.append(formatInlineMarkdown(paragraph, attributes: attributes))
+            result.append(NSAttributedString(string: "\n", attributes: attributes))
+        }
     }
 
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {

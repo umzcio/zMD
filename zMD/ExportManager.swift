@@ -1029,6 +1029,9 @@ class ExportManager {
             case .blockquote(let text):
                 xml += createBlockquoteParagraph(text: text)
 
+            case .alert(let kind, let text):
+                xml += createAlertParagraphs(kind: kind, text: text)
+
             case .htmlBlock(let html):
                 // Fallback: emit the raw HTML source as a paragraph so nothing disappears silently.
                 xml += createNormalParagraph(text: html)
@@ -1152,6 +1155,22 @@ class ExportManager {
         return """
         <w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="CCCCCC"/></w:pBdr><w:ind w:left="360"/><w:spacing w:after="120"/></w:pPr>\(createRunsForFormattedText(text, extraRunProperties: "<w:i/><w:color w:val=\"555555\"/>"))</w:p>
         """
+    }
+
+    /// GitHub-style alert: a bold, kind-colored title paragraph followed by the body paragraphs,
+    /// all sharing a left border in the kind's color (Word draws adjacent same-border
+    /// paragraphs as one continuous bar).
+    private nonisolated func createAlertParagraphs(kind: MarkdownParser.AlertKind, text: String) -> String {
+        let border = "<w:pBdr><w:left w:val=\"single\" w:sz=\"12\" w:space=\"8\" w:color=\"\(kind.hexColor)\"/></w:pBdr><w:ind w:left=\"360\"/>"
+        var xml = """
+        <w:p><w:pPr>\(border)<w:keepNext/><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="\(kind.hexColor)"/></w:rPr><w:t>\(kind.title)</w:t></w:r></w:p>
+        """
+        for paragraph in MarkdownParser.alertParagraphs(text) {
+            xml += """
+            <w:p><w:pPr>\(border)<w:spacing w:after="120"/></w:pPr>\(createRunsForFormattedText(paragraph))</w:p>
+            """
+        }
+        return xml
     }
 
     private nonisolated func createHorizontalRule() -> String {

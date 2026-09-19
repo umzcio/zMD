@@ -96,6 +96,7 @@ class PrintManager {
                 appendParagraph(text: "[Image: \(alt.isEmpty ? path : alt)]", to: result)
             case .horizontalRule: appendHorizontalRule(to: result)
             case .blockquote(let text): appendBlockquote(text: text, to: result)
+            case .alert(let kind, let text): appendAlert(kind: kind, text: text, to: result)
             case .htmlBlock(let html): appendParagraph(text: html, to: result)
             }
             result.append(NSAttributedString(string: "\n", attributes: defaultAttributes))
@@ -230,6 +231,44 @@ class PrintManager {
         ]
 
         result.append(NSAttributedString(string: text + "\n", attributes: attributes))
+    }
+
+    /// "RRGGBB" → NSColor; dark gray if malformed.
+    private static func color(fromHex hex: String) -> NSColor {
+        guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return .darkGray }
+        return NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+
+    /// GitHub-style alert for print: bold colored kind title, then the body, indented like a
+    /// blockquote. Uses the fixed light-theme accents — paper is always white.
+    private func appendAlert(kind: MarkdownParser.AlertKind, text: String, to result: NSMutableAttributedString) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.headIndent = 18
+        paragraphStyle.firstLineHeadIndent = 18
+        paragraphStyle.paragraphSpacingBefore = 4
+        paragraphStyle.paragraphSpacing = 4
+
+        let color = Self.color(fromHex: kind.hexColor)
+        result.append(NSAttributedString(string: kind.title + "\n", attributes: [
+            .font: NSFont.boldSystemFont(ofSize: 11),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]))
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraphStyle
+        ]
+        for paragraph in MarkdownParser.alertParagraphs(text) {
+            result.append(formatInlineMarkdown(paragraph, attributes: attributes))
+            result.append(NSAttributedString(string: "\n", attributes: attributes))
+        }
     }
 
     private func appendTable(rows: [[String]], to result: NSMutableAttributedString) {
