@@ -142,6 +142,19 @@ struct AppearanceSettingsTab: View {
                 }
             }
 
+            Section("Layout") {
+                Picker("Content alignment", selection: $settings.contentAlignment) {
+                    ForEach(SettingsManager.ContentAlignment.allCases, id: \.self) { alignment in
+                        Label(alignment.displayName, systemImage: alignment.icon).tag(alignment)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("Where the preview's text column sits when the window is wider than the text.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Zoom") {
                 HStack {
                     Button {

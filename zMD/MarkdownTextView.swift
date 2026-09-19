@@ -26,8 +26,12 @@ struct MarkdownTextView: NSViewRepresentable {
     /// previously the preview hardcoded case-insensitive literal matching and diverged.
     let isRegexSearch: Bool
     let isCaseSensitive: Bool
+    /// Horizontal placement of the text column within the pane (Settings → Appearance and the
+    /// status bar). Pure positioning — it never touches the attributed string, so changing it
+    /// costs a redraw, not a rebuild.
+    let contentAlignment: SettingsManager.ContentAlignment
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
@@ -44,11 +48,16 @@ struct MarkdownTextView: NSViewRepresentable {
         self.scrollToPercent = scrollToPercent
         self.isRegexSearch = isRegexSearch
         self.isCaseSensitive = isCaseSensitive
+        self.contentAlignment = contentAlignment
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
+        // PreviewTextView (bottom of this file) so the text column can be positioned
+        // left/center/right. scrollableTextView() instantiates the receiving class, so the
+        // factory's stock scroll-view configuration is unchanged.
+        let scrollView = PreviewTextView.scrollableTextView()
         let textView = scrollView.documentView as! NSTextView
+        (textView as? PreviewTextView)?.contentAlignment = contentAlignment
 
         // Configure text view
         textView.isEditable = false
@@ -101,6 +110,10 @@ struct MarkdownTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+
+        // Cheap: the setter no-ops when unchanged, and a change only invalidates the container
+        // origin + redraws (no rebuild — alignment isn't part of the attributed string).
+        (textView as? PreviewTextView)?.contentAlignment = contentAlignment
 
         // Captured BEFORE the reassignment below so we can tell a tab/document switch apart
         // from a same-document content edit (Plan 009) — the coordinator is reused across
@@ -578,11 +591,13 @@ struct MarkdownTextView: NSViewRepresentable {
             let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             let matchRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
 
-            // Adjust for text container inset
-            let inset = textView.textContainerInset
+            // Adjust for the text container's position. textContainerOrigin, not
+            // textContainerInset: with center/right content alignment the container's x is no
+            // longer the inset width.
+            let containerOrigin = textView.textContainerOrigin
             let adjustedRect = NSRect(
-                x: matchRect.origin.x + inset.width,
-                y: matchRect.origin.y + inset.height,
+                x: matchRect.origin.x + containerOrigin.x,
+                y: matchRect.origin.y + containerOrigin.y,
                 width: matchRect.width,
                 height: matchRect.height
             )
@@ -1694,6 +1709,62 @@ extension SettingsManager.FontStyle {
             return NSFont(name: "New York", size: size) ?? NSFont(name: "Georgia", size: size) ?? NSFont.systemFont(ofSize: size)
         case .monospace:
             return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        }
+    }
+}
+
+// MARK: - Preview text view (column alignment)
+
+/// The preview's NSTextView, able to place its fixed-width text column left, center, or right
+/// within the pane.
+///
+/// Why a subclass: `textContainerInset` is symmetric — the same value pads both sides — so it
+/// can express "centered" at best and can never express "right". Overriding
+/// `textContainerOrigin` is AppKit's supported hook for positioning the container; drawing,
+/// hit-testing (link clicks, selection), and temporary-attribute highlights all route through
+/// it, so everything stays consistent with the moved column.
+final class PreviewTextView: NSTextView {
+    var contentAlignment: SettingsManager.ContentAlignment = .left {
+        didSet {
+            guard oldValue != contentAlignment else { return }
+            invalidateTextContainerOrigin()
+            needsDisplay = true
+        }
+    }
+
+    override var textContainerOrigin: NSPoint {
+        let base = super.textContainerOrigin
+        guard let container = textContainer else { return base }
+        let x = Self.containerOriginX(
+            alignment: contentAlignment,
+            viewWidth: bounds.width,
+            containerWidth: container.containerSize.width,
+            inset: textContainerInset.width
+        )
+        return NSPoint(x: x, y: base.y)
+    }
+
+    /// AppKit caches the origin; a resize changes the free space the column floats in.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        invalidateTextContainerOrigin()
+    }
+
+    /// Pure placement math (unit-tested). The inset is a MINIMUM margin on both sides: when
+    /// the pane has no free space beyond column + margins, every alignment collapses to the
+    /// left position instead of pushing the column off-screen.
+    nonisolated static func containerOriginX(
+        alignment: SettingsManager.ContentAlignment,
+        viewWidth: CGFloat,
+        containerWidth: CGFloat,
+        inset: CGFloat
+    ) -> CGFloat {
+        let freeSpace = viewWidth - containerWidth - inset * 2
+        guard freeSpace > 0 else { return inset }
+        switch alignment {
+        case .left: return inset
+        case .center: return inset + freeSpace / 2
+        case .right: return inset + freeSpace
         }
     }
 }

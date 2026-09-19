@@ -125,6 +125,7 @@ enum DefaultsKeys {
     // MARK: Settings (SettingsManager)
     static let colorScheme = "colorScheme"
     static let fontStyle = "fontStyle"
+    static let contentAlignment = "contentAlignment"
     static let zoomLevel = "zoomLevel"
     static let tabWidth = "tabWidth"
     static let autoCloseBrackets = "autoCloseBrackets"
@@ -159,6 +160,13 @@ class SettingsManager: ObservableObject {
     @Published var fontStyle: FontStyle {
         didSet {
             UserDefaults.standard.set(fontStyle.rawValue, forKey: DefaultsKeys.fontStyle)
+        }
+    }
+
+    /// Where the preview's fixed-width text column sits when the pane is wider than the column.
+    @Published var contentAlignment: ContentAlignment {
+        didSet {
+            UserDefaults.standard.set(contentAlignment.rawValue, forKey: DefaultsKeys.contentAlignment)
         }
     }
 
@@ -229,10 +237,35 @@ class SettingsManager: ObservableObject {
         }
     }
 
+    /// Horizontal placement of the preview's text column. This positions the whole column
+    /// within the pane — text inside the column stays left-aligned (it is not paragraph
+    /// alignment). Only visible when the pane is wider than the column plus its margins;
+    /// in narrow panes and Focus Mode all three settings look the same.
+    enum ContentAlignment: String, CaseIterable {
+        case left = "Left"
+        case center = "Center"
+        case right = "Right"
+
+        var displayName: String {
+            return self.rawValue
+        }
+
+        var icon: String {
+            switch self {
+            case .left: return "text.alignleft"
+            case .center: return "text.aligncenter"
+            case .right: return "text.alignright"
+            }
+        }
+    }
+
     init() {
         // Load saved preferences
         let savedFont = UserDefaults.standard.string(forKey: DefaultsKeys.fontStyle) ?? FontStyle.system.rawValue
         self.fontStyle = FontStyle(rawValue: savedFont) ?? .system
+
+        let savedAlignment = UserDefaults.standard.string(forKey: DefaultsKeys.contentAlignment) ?? ContentAlignment.left.rawValue
+        self.contentAlignment = ContentAlignment(rawValue: savedAlignment) ?? .left
 
         let savedZoom = UserDefaults.standard.double(forKey: DefaultsKeys.zoomLevel)
         self.zoomLevel = savedZoom > 0 ? CGFloat(savedZoom) : 1.0

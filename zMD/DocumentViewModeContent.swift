@@ -122,7 +122,8 @@ struct DocumentViewModeContent: View {
                 ? documentManager.scrollSyncPreviewPercent
                 : nil,
             isRegexSearch: searchEnabled && documentManager.isRegexSearch,
-            isCaseSensitive: searchEnabled && documentManager.isCaseSensitive
+            isCaseSensitive: searchEnabled && documentManager.isCaseSensitive,
+            contentAlignment: settings.contentAlignment
         )
     }
 }

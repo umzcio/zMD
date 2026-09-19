@@ -21,6 +21,29 @@ struct StatusBarView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(Color(NSColor.tertiaryLabelColor))
                     }
+                    if documentManager.viewMode != .source {
+                        // Content alignment positions the PREVIEW's text column, so the control
+                        // hides in Source mode where there is no preview column to move. An inline
+                        // Picker gives native menu checkmarks plus a self-describing header row.
+                        Menu {
+                            Picker("Content Alignment", selection: $settings.contentAlignment) {
+                                ForEach(SettingsManager.ContentAlignment.allCases, id: \.self) { alignment in
+                                    Label(alignment.displayName, systemImage: alignment.icon).tag(alignment)
+                                }
+                            }
+                            .pickerStyle(.inline)
+                        } label: {
+                            Image(systemName: settings.contentAlignment.icon)
+                                .font(.system(size: 11))
+                                .foregroundStyle(settings.contentAlignment != .left ? .secondary : Color(NSColor.tertiaryLabelColor))
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Content Alignment")
+                        .accessibilityLabel("Content Alignment")
+                        .accessibilityValue(settings.contentAlignment.displayName)
+                    }
+
                     Menu {
                         ForEach([50, 75, 90, 100, 110, 125, 150, 175, 200], id: \.self) { percent in
                             Button {

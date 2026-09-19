@@ -764,3 +764,35 @@ nonisolated final class DocumentManagerTerminationTests: XCTestCase {
         XCTAssertEqual(onDisk, "unsaved edits")
     }
 }
+
+/// Placement math for the preview's left/center/right text-column alignment
+/// (`PreviewTextView.containerOriginX`). Column 800pt, margin 50pt — the app's real values.
+nonisolated final class ContentAlignmentTests: XCTestCase {
+    private func originX(_ alignment: SettingsManager.ContentAlignment, viewWidth: CGFloat) -> CGFloat {
+        PreviewTextView.containerOriginX(alignment: alignment, viewWidth: viewWidth, containerWidth: 800, inset: 50)
+    }
+
+    func testWidePanePlacesColumnLeftCenterRight() {
+        // 1500 wide → 600pt of free space beyond column + both margins.
+        XCTAssertEqual(originX(.left, viewWidth: 1500), 50)
+        XCTAssertEqual(originX(.center, viewWidth: 1500), 350)   // equal space on both sides
+        XCTAssertEqual(originX(.right, viewWidth: 1500), 650)    // right margin stays exactly 50
+        XCTAssertEqual(1500 - (originX(.right, viewWidth: 1500) + 800), 50)
+    }
+
+    func testNarrowPaneCollapsesEveryAlignmentToTheLeftMargin() {
+        // No free space (split panes, Focus Mode's 720pt column): the column must never be
+        // pushed off-screen or lose its leading margin, whatever the setting.
+        for width in [300, 720, 899, 900] as [CGFloat] {
+            for alignment in SettingsManager.ContentAlignment.allCases {
+                XCTAssertEqual(originX(alignment, viewWidth: width), 50, "\(alignment) at \(width)")
+            }
+        }
+    }
+
+    func testCenteringIsContinuousAsThePaneGrows() {
+        // Just past the threshold the column should nudge, not jump.
+        XCTAssertEqual(originX(.center, viewWidth: 902), 51)
+        XCTAssertEqual(originX(.right, viewWidth: 902), 52)
+    }
+}
