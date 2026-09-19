@@ -126,6 +126,7 @@ enum DefaultsKeys {
     static let colorScheme = "colorScheme"
     static let fontStyle = "fontStyle"
     static let contentAlignment = "contentAlignment"
+    static let contentWidth = "contentWidth"
     static let zoomLevel = "zoomLevel"
     static let tabWidth = "tabWidth"
     static let autoCloseBrackets = "autoCloseBrackets"
@@ -167,6 +168,13 @@ class SettingsManager: ObservableObject {
     @Published var contentAlignment: ContentAlignment {
         didSet {
             UserDefaults.standard.set(contentAlignment.rawValue, forKey: DefaultsKeys.contentAlignment)
+        }
+    }
+
+    /// Maximum width of the preview's text column (it always shrinks to fit a narrower pane).
+    @Published var contentWidth: ContentWidth {
+        didSet {
+            UserDefaults.standard.set(contentWidth.rawValue, forKey: DefaultsKeys.contentWidth)
         }
     }
 
@@ -259,6 +267,37 @@ class SettingsManager: ObservableObject {
         }
     }
 
+    /// Maximum width of the preview's text column. A MAXIMUM, not a fixed size: the column
+    /// always shrinks to fit a narrower pane (split view, Focus Mode) — before this existed
+    /// the column was a hard 800pt and any pane under 900pt silently clipped the right edge
+    /// of every line. `.full` tracks the pane, which also makes content alignment moot.
+    enum ContentWidth: String, CaseIterable {
+        case narrow = "Narrow"
+        case medium = "Medium"
+        case wide = "Wide"
+        case full = "Full"
+
+        var displayName: String {
+            return self.rawValue
+        }
+
+        /// Column width in points; nil = fill the pane.
+        var points: CGFloat? {
+            switch self {
+            case .narrow: return 640
+            case .medium: return 800
+            case .wide: return 1000
+            case .full: return nil
+            }
+        }
+
+        /// Cap for images and rendered diagrams, which are sized once at build time (unlike
+        /// text, they don't reflow). Medium keeps the long-standing 700pt cap.
+        var attachmentMaxWidth: CGFloat {
+            return (points ?? 1000) - 100
+        }
+    }
+
     init() {
         // Load saved preferences
         let savedFont = UserDefaults.standard.string(forKey: DefaultsKeys.fontStyle) ?? FontStyle.system.rawValue
@@ -266,6 +305,9 @@ class SettingsManager: ObservableObject {
 
         let savedAlignment = UserDefaults.standard.string(forKey: DefaultsKeys.contentAlignment) ?? ContentAlignment.left.rawValue
         self.contentAlignment = ContentAlignment(rawValue: savedAlignment) ?? .left
+
+        let savedWidth = UserDefaults.standard.string(forKey: DefaultsKeys.contentWidth) ?? ContentWidth.medium.rawValue
+        self.contentWidth = ContentWidth(rawValue: savedWidth) ?? .medium
 
         let savedZoom = UserDefaults.standard.double(forKey: DefaultsKeys.zoomLevel)
         self.zoomLevel = savedZoom > 0 ? CGFloat(savedZoom) : 1.0

@@ -21,7 +21,9 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 480, height: 480)
+        // Height fits the tallest tab (Appearance: Theme, Font, Layout, Zoom). The tabs are
+        // non-scrolling forms, so an undersized window silently cuts rows off.
+        .frame(width: 480, height: 580)
         .background(EscapeKeyHandler())
     }
 }
@@ -150,7 +152,14 @@ struct AppearanceSettingsTab: View {
                 }
                 .pickerStyle(.segmented)
 
-                Text("Where the preview's text column sits when the window is wider than the text.")
+                Picker("Content width", selection: $settings.contentWidth) {
+                    ForEach(SettingsManager.ContentWidth.allCases, id: \.self) { width in
+                        Text(width.displayName).tag(width)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("The preview's text column: how wide it may grow, and where it sits when the window is wider than that. It always shrinks to fit a narrow window.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

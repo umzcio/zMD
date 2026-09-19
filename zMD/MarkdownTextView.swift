@@ -30,8 +30,11 @@ struct MarkdownTextView: NSViewRepresentable {
     /// status bar). Pure positioning — it never touches the attributed string, so changing it
     /// costs a redraw, not a rebuild.
     let contentAlignment: SettingsManager.ContentAlignment
+    /// Maximum width of the text column. Unlike alignment this DOES affect the build: images
+    /// and diagrams are sized once at build time, so it is part of the element-cache key.
+    let contentWidth: SettingsManager.ContentWidth
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left, contentWidth: SettingsManager.ContentWidth = .medium) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
@@ -49,7 +52,11 @@ struct MarkdownTextView: NSViewRepresentable {
         self.isRegexSearch = isRegexSearch
         self.isCaseSensitive = isCaseSensitive
         self.contentAlignment = contentAlignment
+        self.contentWidth = contentWidth
     }
+
+    /// Everything besides content + zoom that changes what gets built.
+    private var styleKey: String { "\(fontStyle.rawValue)-\(contentWidth.rawValue)" }
 
     func makeNSView(context: Context) -> NSScrollView {
         // PreviewTextView (bottom of this file) so the text column can be positioned
@@ -67,9 +74,13 @@ struct MarkdownTextView: NSViewRepresentable {
         textView.isRichText = true
         textView.allowsUndo = false
 
-        // Set max width for content
-        textView.textContainer?.containerSize = NSSize(width: 800, height: CGFloat.greatestFiniteMagnitude)
+        // Column width is owned by PreviewTextView: a maximum (Content Width setting) that
+        // shrinks to fit narrower panes. widthTracksTextView stays false — the view computes
+        // the width itself so it can cap it. (This used to be a hard 800pt, which clipped the
+        // right edge of every line in any pane under 900pt: split view, Focus Mode.)
         textView.textContainer?.widthTracksTextView = false
+        (textView as? PreviewTextView)?.preferredColumnWidth = contentWidth.points
+        context.coordinator.lastStyleKey = styleKey
 
         // Enable link clicking
         textView.isAutomaticLinkDetectionEnabled = false
@@ -114,6 +125,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // Cheap: the setter no-ops when unchanged, and a change only invalidates the container
         // origin + redraws (no rebuild — alignment isn't part of the attributed string).
         (textView as? PreviewTextView)?.contentAlignment = contentAlignment
+        (textView as? PreviewTextView)?.preferredColumnWidth = contentWidth.points
 
         // Captured BEFORE the reassignment below so we can tell a tab/document switch apart
         // from a same-document content edit (Plan 009) — the coordinator is reused across
@@ -135,6 +147,10 @@ struct MarkdownTextView: NSViewRepresentable {
             || context.coordinator.lastIsCaseSensitive != isCaseSensitive
         let matchIndexChanged = context.coordinator.lastMatchIndex != currentMatchIndex
         let zoomChanged = context.coordinator.lastZoomLevel != zoomLevel
+        // Font style and content width both change what gets BUILT (fonts; image/diagram
+        // caps) without changing content or zoom. Font style previously had no trigger at
+        // all — switching it in Settings left the preview stale until the next edit or zoom.
+        let styleChanged = context.coordinator.lastStyleKey != styleKey
         let documentSwitched = previousDocumentId != documentId
         // `lastContent == nil` covers both "first render of a fresh/reused Coordinator" and
         // "diagram-render-forced rebuild" (diagramDidRender resets `lastContent` to nil to force
@@ -149,9 +165,10 @@ struct MarkdownTextView: NSViewRepresentable {
         // Full rebuild when content or zoom changes. Debounce ONLY a same-document content edit
         // (live typing) with no zoom change — everything else (zoom, tab/document switch, first
         // render, diagram-render-forced rebuild) rebuilds with zero delay (Plan 009).
-        if contentChanged || zoomChanged {
+        if contentChanged || zoomChanged || styleChanged {
             context.coordinator.lastZoomLevel = zoomLevel
-            let isPureContentEdit = contentChanged && !zoomChanged && !documentSwitched && !isFreshOrForcedRebuild
+            context.coordinator.lastStyleKey = styleKey
+            let isPureContentEdit = contentChanged && !zoomChanged && !styleChanged && !documentSwitched && !isFreshOrForcedRebuild
             context.coordinator.scheduleRebuild(
                 for: self,
                 textView: textView,
@@ -229,6 +246,7 @@ struct MarkdownTextView: NSViewRepresentable {
         var lastContent: String?
         var lastSearchText: String?
         var lastZoomLevel: CGFloat = 1.0
+        var lastStyleKey: String = ""
         var lastMatchIndex: Int = -1
         /// Track the search-mode flags so toggling regex/case is treated like a search change and
         /// the stale highlight backgrounds get cleared + re-applied.
@@ -775,7 +793,7 @@ struct MarkdownTextView: NSViewRepresentable {
         // theme without an edit served stale colors from the cache. Including the resolved
         // appearance in the cache key forces a rebuild on theme flip.
         let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let zoomKey = "\(zoomLevel)-\(fontStyle.rawValue)-\(isDark ? "d" : "l")"
+        let zoomKey = "\(zoomLevel)-\(styleKey)-\(isDark ? "d" : "l")"
         let cacheValid = coordinator.lastZoomKey == zoomKey
         if !cacheValid {
             coordinator.elementCache.removeAll()
@@ -1247,7 +1265,7 @@ struct MarkdownTextView: NSViewRepresentable {
     private func appendImage(alt: String, path: String, to result: NSMutableAttributedString) {
         if let image = loadImage(path: path) {
             let attachment = NSTextAttachment()
-            let maxWidth: CGFloat = 700
+            let maxWidth = contentWidth.attachmentMaxWidth
             let scale = min(1.0, maxWidth / image.size.width)
             let newSize = NSSize(width: image.size.width * scale, height: image.size.height * scale)
 
@@ -1364,7 +1382,7 @@ struct MarkdownTextView: NSViewRepresentable {
         if let cached = Coordinator.diagramCache.object(forKey: cacheKey as NSString) {
             // Embed cached image
             let attachment = NSTextAttachment()
-            let maxWidth: CGFloat = 700
+            let maxWidth = contentWidth.attachmentMaxWidth
             let scale = min(1.0, maxWidth / cached.size.width)
             let newSize = NSSize(width: cached.size.width * scale, height: cached.size.height * scale)
             let resized = NSImage(size: newSize)
@@ -1732,6 +1750,70 @@ final class PreviewTextView: NSTextView {
         }
     }
 
+    /// Maximum column width from the Content Width setting; nil = fill the pane.
+    var preferredColumnWidth: CGFloat? = 800 {
+        didSet {
+            guard oldValue != preferredColumnWidth else { return }
+            // A settings change reflows every line, so a raw scroll offset would land on
+            // different text. Pin the first visible character instead. (Resizes skip this —
+            // they take the cheap path and behave like any wrapping text view.)
+            let anchor = firstVisibleCharacterIndex()
+            updateColumnWidth()
+            if let anchor { scrollCharacterToTop(anchor) }
+        }
+    }
+
+    private static let minimumColumnWidth: CGFloat = 200
+
+    /// Pure width math (unit-tested). Not yet sized (width 0 during construction) → use the
+    /// preferred width so the first layout isn't done at a throwaway size.
+    nonisolated static func columnWidth(preferred: CGFloat?, viewWidth: CGFloat, inset: CGFloat) -> CGFloat {
+        guard viewWidth > 0 else { return preferred ?? 800 }
+        let available = max(minimumColumnWidth, viewWidth - inset * 2)
+        guard let preferred else { return available }
+        return min(preferred, available)
+    }
+
+    private func updateColumnWidth() {
+        guard let container = textContainer else { return }
+        let width = Self.columnWidth(
+            preferred: preferredColumnWidth,
+            viewWidth: bounds.width,
+            inset: textContainerInset.width
+        )
+        // Equality guard: setting containerSize relayouts, relayout changes our height, and
+        // a height change re-enters setFrameSize → here. Same width must be a no-op.
+        if abs(container.containerSize.width - width) > 0.5 {
+            container.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        }
+        invalidateTextContainerOrigin()
+        needsDisplay = true
+    }
+
+    private func firstVisibleCharacterIndex() -> Int? {
+        guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0,
+              enclosingScrollView != nil else { return nil }
+        let origin = textContainerOrigin
+        let point = NSPoint(x: 1, y: max(0, visibleRect.minY - origin.y) + 1)
+        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        return layoutManager.characterIndexForGlyph(at: glyph)
+    }
+
+    private func scrollCharacterToTop(_ index: Int) {
+        guard let layoutManager, let textContainer, let scrollView = enclosingScrollView,
+              let storage = textStorage, index < storage.length else { return }
+        // One-off full layout (settings change only): the view's height is stale until the
+        // reflow completes, and the clamp below needs the real one.
+        layoutManager.ensureLayout(for: textContainer)
+        sizeToFit()
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let maxY = max(0, frame.height - scrollView.contentView.bounds.height)
+        let y = min(max(0, rect.minY + textContainerOrigin.y), maxY)
+        scrollView.contentView.setBoundsOrigin(NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     override var textContainerOrigin: NSPoint {
         let base = super.textContainerOrigin
         guard let container = textContainer else { return base }
@@ -1744,10 +1826,11 @@ final class PreviewTextView: NSTextView {
         return NSPoint(x: x, y: base.y)
     }
 
-    /// AppKit caches the origin; a resize changes the free space the column floats in.
+    /// A resize changes both how wide the column may be and the free space it floats in
+    /// (AppKit caches the origin, so it must be invalidated).
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        invalidateTextContainerOrigin()
+        updateColumnWidth()
     }
 
     /// Pure placement math (unit-tested). The inset is a MINIMUM margin on both sides: when

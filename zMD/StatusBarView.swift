@@ -32,6 +32,13 @@ struct StatusBarView: View {
                                 }
                             }
                             .pickerStyle(.inline)
+
+                            Picker("Content Width", selection: $settings.contentWidth) {
+                                ForEach(SettingsManager.ContentWidth.allCases, id: \.self) { width in
+                                    Text(width.displayName).tag(width)
+                                }
+                            }
+                            .pickerStyle(.inline)
                         } label: {
                             Image(systemName: settings.contentAlignment.icon)
                                 .font(.system(size: 11))
@@ -39,9 +46,9 @@ struct StatusBarView: View {
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
-                        .help("Content Alignment")
-                        .accessibilityLabel("Content Alignment")
-                        .accessibilityValue(settings.contentAlignment.displayName)
+                        .help("Content Alignment & Width")
+                        .accessibilityLabel("Content Layout")
+                        .accessibilityValue("\(settings.contentAlignment.displayName) aligned, \(settings.contentWidth.displayName) width")
                     }
 
                     Menu {

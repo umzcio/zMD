@@ -796,3 +796,53 @@ nonisolated final class ContentAlignmentTests: XCTestCase {
         XCTAssertEqual(originX(.right, viewWidth: 902), 52)
     }
 }
+
+/// Column-width math for the Content Width setting (`PreviewTextView.columnWidth`).
+nonisolated final class ContentWidthTests: XCTestCase {
+    func testColumnNeverExceedsThePane() {
+        // Regression: the column was a hard 800pt, so a 720pt pane (Focus Mode) laid text out
+        // to x=847 and silently clipped ~127pt off the right edge of every line.
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: 800, viewWidth: 720, inset: 50), 620)
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: 1000, viewWidth: 600, inset: 50), 500)
+    }
+
+    func testColumnStopsGrowingAtTheSetting() {
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: 640, viewWidth: 2000, inset: 50), 640)
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: 800, viewWidth: 900, inset: 50), 800)
+    }
+
+    func testFullTracksThePane() {
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: nil, viewWidth: 1500, inset: 50), 1400)
+    }
+
+    func testUnsizedViewUsesThePreferredWidthAndTinyPanesKeepAFloor() {
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: 800, viewWidth: 0, inset: 50), 800)
+        XCTAssertEqual(PreviewTextView.columnWidth(preferred: 800, viewWidth: 120, inset: 50), 200)
+    }
+
+    /// End-to-end against the real view, reproducing the original bug's exact geometry.
+    @MainActor
+    func testTextIsNotClippedInAFocusModeWidthPane() throws {
+        let scrollView = PreviewTextView.scrollableTextView()
+        let textView = try XCTUnwrap(scrollView.documentView as? PreviewTextView)
+        textView.textContainerInset = NSSize(width: 50, height: 40)
+        textView.textContainer?.widthTracksTextView = false
+        scrollView.frame = NSRect(x: 0, y: 0, width: 720, height: 600)
+        scrollView.layoutSubtreeIfNeeded()
+        textView.string = String(repeating: "The quick brown fox jumps over the lazy dog. ", count: 40)
+
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        layoutManager.ensureLayout(for: container)
+        let textRightEdge = textView.textContainerOrigin.x + layoutManager.usedRect(for: container).maxX
+
+        XCTAssertLessThanOrEqual(textRightEdge, textView.frame.width, "text runs past the pane's right edge")
+        XCTAssertGreaterThan(textRightEdge, 500, "sanity: text should still use most of the column")
+    }
+
+    @MainActor
+    func testMediumKeepsTheLongStandingImageCap() {
+        XCTAssertEqual(SettingsManager.ContentWidth.medium.points, 800)
+        XCTAssertEqual(SettingsManager.ContentWidth.medium.attachmentMaxWidth, 700)
+    }
+}

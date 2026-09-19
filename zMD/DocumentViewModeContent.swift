@@ -123,7 +123,8 @@ struct DocumentViewModeContent: View {
                 : nil,
             isRegexSearch: searchEnabled && documentManager.isRegexSearch,
             isCaseSensitive: searchEnabled && documentManager.isCaseSensitive,
-            contentAlignment: settings.contentAlignment
+            contentAlignment: settings.contentAlignment,
+            contentWidth: settings.contentWidth
         )
     }
 }
