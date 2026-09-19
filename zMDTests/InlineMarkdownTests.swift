@@ -846,3 +846,59 @@ nonisolated final class ContentWidthTests: XCTestCase {
         XCTAssertEqual(SettingsManager.ContentWidth.medium.attachmentMaxWidth, 700)
     }
 }
+
+/// Code-block copy: drives PreviewTextView's real hit-testing through an off-screen window.
+nonisolated final class CodeBlockCopyTests: XCTestCase {
+    @MainActor
+    func testRightClickInsideACodeBlockCopiesTheRawSourceNotTheRenderedBorders() throws {
+        let scrollView = PreviewTextView.scrollableTextView()
+        let textView = try XCTUnwrap(scrollView.documentView as? PreviewTextView)
+        // Never ordered front, so nothing appears on screen.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: .borderless, backing: .buffered, defer: true)
+        window.contentView = scrollView
+        scrollView.layoutSubtreeIfNeeded()
+
+        // Rendered form carries the "│ " prefixes; the payload is the clean source.
+        let text = NSMutableAttributedString(string: "Intro paragraph\n")
+        let blockStart = text.length
+        text.append(NSAttributedString(string: "  │ let x = 1\n  │ let y = 2\n"))
+        text.addAttribute(PreviewTextView.codeBlockKey,
+                          value: CodeBlockPayload(code: "let x = 1\nlet y = 2"),
+                          range: NSRange(location: blockStart, length: text.length - blockStart))
+        text.append(NSAttributedString(string: "Outro paragraph\n"))
+        textView.textStorage?.setAttributedString(text)
+
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        layoutManager.ensureLayout(for: container)
+
+        // Private pasteboard: the suite must never clobber the user's real clipboard.
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("zMD.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        textView.pasteboard = pasteboard
+
+        func rightClick(atCharacter index: Int, xOffset: CGFloat) throws -> NSMenu? {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+            let origin = textView.textContainerOrigin
+            let pointInView = NSPoint(x: origin.x + xOffset, y: origin.y + rect.midY)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: textView.convert(pointInView, to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            return textView.menu(for: event)
+        }
+
+        // Far to the right of a short code line still counts as "in the block".
+        let blockMenu = try XCTUnwrap(try rightClick(atCharacter: blockStart + 4, xOffset: 400))
+        let copyItem = try XCTUnwrap(blockMenu.items.first)
+        XCTAssertEqual(copyItem.title, "Copy Code Block")
+        _ = textView.perform(try XCTUnwrap(copyItem.action), with: copyItem)
+        XCTAssertEqual(pasteboard.string(forType: .string), "let x = 1\nlet y = 2")
+
+        // Outside any block: no code item offered.
+        let proseMenu = try rightClick(atCharacter: 2, xOffset: 10)
+        XCTAssertNotEqual(proseMenu?.items.first?.title, "Copy Code Block")
+    }
+}

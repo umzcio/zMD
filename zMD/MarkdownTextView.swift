@@ -1068,6 +1068,7 @@ struct MarkdownTextView: NSViewRepresentable {
 
     private func appendCodeBlock(code: String, language: String? = nil, to result: NSMutableAttributedString) {
         // Warp-style code block: dark background, rounded corners feel, language label
+        let blockStart = result.length
 
         // Code block background color - adapt to current appearance
         let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -1119,6 +1120,17 @@ struct MarkdownTextView: NSViewRepresentable {
             .font: NSFont.monospacedSystemFont(ofSize: 11 * zoomLevel, weight: .regular),
             .foregroundColor: NSColor.tertiaryLabelColor
         ]))
+
+        // Tag the whole block (borders included) with its RAW source so PreviewTextView can
+        // offer a copy button. Selecting a rendered block by hand copies the box-drawing
+        // borders and the "│ " line prefixes along with the code — the payload is the only
+        // clean copy. A fresh object per block keeps adjacent blocks from merging into one
+        // effective range (attribute runs coalesce on value equality; NSObject = identity).
+        result.addAttribute(
+            PreviewTextView.codeBlockKey,
+            value: CodeBlockPayload(code: code),
+            range: NSRange(location: blockStart, length: result.length - blockStart)
+        )
 
         // Add spacing after code block
         result.append(NSAttributedString(string: "\n"))
@@ -1763,7 +1775,7 @@ final class PreviewTextView: NSTextView {
         }
     }
 
-    private static let minimumColumnWidth: CGFloat = 200
+    nonisolated private static let minimumColumnWidth: CGFloat = 200
 
     /// Pure width math (unit-tested). Not yet sized (width 0 during construction) → use the
     /// preferred width so the first layout isn't done at a throwaway size.
@@ -1814,6 +1826,164 @@ final class PreviewTextView: NSTextView {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
+    // MARK: Code-block copy button
+
+    static let codeBlockKey = NSAttributedString.Key("zMD.codeBlock")
+
+    private var hoverTrackingArea: NSTrackingArea?
+    private var hoveredCodeBlock: CodeBlockPayload?
+    private lazy var codeCopyButton: CodeCopyButton = {
+        let button = CodeCopyButton(target: self, action: #selector(copyHoveredCodeBlock))
+        button.isHidden = true
+        addSubview(button)
+        return button
+    }()
+    // nonisolated(unsafe): main-actor only in practice; annotated solely so nonisolated
+    // deinit can invalidate it (deinit has exclusive access).
+    nonisolated(unsafe) private var copyConfirmationTimer: Timer?
+
+    deinit {
+        copyConfirmationTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // A rebuild replaces the storage wholesale; the hovered block's geometry is then
+        // meaningless, so drop the button until the mouse next moves.
+        NotificationCenter.default.removeObserver(self, name: NSTextStorage.didProcessEditingNotification, object: nil)
+        if window != nil, let textStorage {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(previewStorageDidEdit(_:)),
+                name: NSTextStorage.didProcessEditingNotification,
+                object: textStorage
+            )
+        }
+    }
+
+    @objc private func previewStorageDidEdit(_ note: Notification) {
+        guard let storage = note.object as? NSTextStorage,
+              storage.editedMask.contains(.editedCharacters) else { return }
+        hideCodeCopyButton()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        guard let (payload, rect) = codeBlock(at: point) else {
+            hideCodeCopyButton()
+            return
+        }
+        if payload !== hoveredCodeBlock {
+            hoveredCodeBlock = payload
+            codeCopyButton.showCopyState()
+        }
+        // Top-right corner, just inside the block's border.
+        let size = CodeCopyButton.size
+        codeCopyButton.frame = NSRect(x: rect.maxX - size.width - 10, y: rect.minY + 8, width: size.width, height: size.height)
+        codeCopyButton.isHidden = false
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        // Exiting INTO the button (a subview) also fires this; only hide when the pointer
+        // has really left the text view.
+        let point = convert(event.locationInWindow, from: nil)
+        if !bounds.contains(point) { hideCodeCopyButton() }
+    }
+
+    private func hideCodeCopyButton() {
+        guard hoveredCodeBlock != nil || !codeCopyButton.isHidden else { return }
+        hoveredCodeBlock = nil
+        codeCopyButton.isHidden = true
+    }
+
+    /// The code block whose vertical band contains `point` (view coordinates), if any.
+    /// Vertical-only containment is deliberate: hovering to the right of a short line should
+    /// still count as "in the block".
+    private func codeBlock(at point: NSPoint) -> (CodeBlockPayload, NSRect)? {
+        guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let origin = textContainerOrigin
+        let probe = NSPoint(
+            x: min(max(point.x - origin.x, 1), max(1, textContainer.containerSize.width - 1)),
+            y: point.y - origin.y
+        )
+        let glyph = layoutManager.glyphIndex(for: probe, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyph)
+        guard charIndex < storage.length else { return nil }
+        var range = NSRange()
+        guard let payload = storage.attribute(
+            Self.codeBlockKey, at: charIndex,
+            longestEffectiveRange: &range,
+            in: NSRange(location: 0, length: storage.length)
+        ) as? CodeBlockPayload else { return nil }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+        // glyphIndex(for:) returns the NEAREST glyph even for points outside all text.
+        guard point.y >= rect.minY, point.y <= rect.maxY else { return nil }
+        return (payload, rect)
+    }
+
+    @objc private func copyHoveredCodeBlock() {
+        guard let payload = hoveredCodeBlock else { return }
+        copyToPasteboard(payload.code)
+        // Confirm at the point of action (the button itself), not with a distant toast.
+        codeCopyButton.showCopiedState()
+        copyConfirmationTimer?.invalidate()
+        copyConfirmationTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.codeCopyButton.showCopyState()
+            }
+        }
+    }
+
+    /// Test seam: the suite substitutes a private named pasteboard so running tests never
+    /// clobbers the user's real clipboard.
+    var pasteboard: NSPasteboard = .general
+
+    private func copyToPasteboard(_ string: String) {
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
+    }
+
+    /// Right-click → "Copy Code Block": the hover button is unreachable by keyboard and
+    /// VoiceOver, so the same action must exist somewhere that isn't hover-gated.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let baseMenu = super.menu(for: event)
+        let point = convert(event.locationInWindow, from: nil)
+        guard let (payload, _) = codeBlock(at: point) else { return baseMenu }
+        let menu = baseMenu ?? NSMenu()
+        let item = NSMenuItem(title: "Copy Code Block", action: #selector(copyCodeBlockFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = payload
+        menu.insertItem(item, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        return menu
+    }
+
+    @objc private func copyCodeBlockFromMenu(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? CodeBlockPayload else { return }
+        copyToPasteboard(payload.code)
+    }
+
+    // MARK: Column geometry
+
     override var textContainerOrigin: NSPoint {
         let base = super.textContainerOrigin
         guard let container = textContainer else { return base }
@@ -1849,5 +2019,59 @@ final class PreviewTextView: NSTextView {
         case .center: return inset + freeSpace / 2
         case .right: return inset + freeSpace
         }
+    }
+}
+
+/// Raw source of one rendered code block, attached to its attributed range under
+/// `PreviewTextView.codeBlockKey`. A class (identity equality) on purpose — see appendCodeBlock.
+final class CodeBlockPayload: NSObject {
+    let code: String
+    init(code: String) {
+        self.code = code
+        super.init()
+    }
+}
+
+/// The small hover button in a code block's top-right corner.
+final class CodeCopyButton: NSButton {
+    static let size = NSSize(width: 26, height: 22)
+
+    convenience init(target: AnyObject, action: Selector) {
+        self.init(frame: NSRect(origin: .zero, size: Self.size))
+        self.target = target
+        self.action = action
+        isBordered = false
+        imagePosition = .imageOnly
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        // Opaque-ish backing so the glyph stays legible if a long code line runs under it.
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
+        layer?.borderWidth = 0.5
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        toolTip = "Copy code"
+        setAccessibilityLabel("Copy code")
+        showCopyState()
+    }
+
+    func showCopyState() {
+        image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy code")
+        contentTintColor = .secondaryLabelColor
+    }
+
+    func showCopiedState() {
+        image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+        contentTintColor = .systemGreen
+    }
+
+    /// The text view underneath sets an I-beam; a button should read as clickable.
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        // CGColors don't track appearance; re-resolve on a light/dark flip.
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
     }
 }
