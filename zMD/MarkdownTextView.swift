@@ -33,8 +33,11 @@ struct MarkdownTextView: NSViewRepresentable {
     /// Maximum width of the text column. Unlike alignment this DOES affect the build: images
     /// and diagrams are sized once at build time, so it is part of the element-cache key.
     let contentWidth: SettingsManager.ContentWidth
+    /// Click on a rendered task checkbox: (ordinal among rendered checkboxes, rendered checked
+    /// state, rendered item text) → whether the source was changed.
+    let onToggleTask: ((Int, Bool, String) -> Bool)?
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left, contentWidth: SettingsManager.ContentWidth = .medium) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left, contentWidth: SettingsManager.ContentWidth = .medium, onToggleTask: ((Int, Bool, String) -> Bool)? = nil) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
@@ -53,6 +56,7 @@ struct MarkdownTextView: NSViewRepresentable {
         self.isCaseSensitive = isCaseSensitive
         self.contentAlignment = contentAlignment
         self.contentWidth = contentWidth
+        self.onToggleTask = onToggleTask
     }
 
     /// Everything besides content + zoom that changes what gets built.
@@ -126,6 +130,11 @@ struct MarkdownTextView: NSViewRepresentable {
         // origin + redraws (no rebuild — alignment isn't part of the attributed string).
         (textView as? PreviewTextView)?.contentAlignment = contentAlignment
         (textView as? PreviewTextView)?.preferredColumnWidth = contentWidth.points
+        // Reassigned EVERY pass: the text view outlives document switches, and this closure
+        // captures a document id at the call site. A closure kept from an earlier render would
+        // toggle a checkbox in the wrong document (same stale-closure class as the editor's
+        // onContentChange data-loss bug).
+        (textView as? PreviewTextView)?.onToggleTask = onToggleTask
 
         // Captured BEFORE the reassignment below so we can tell a tab/document switch apart
         // from a same-document content edit (Plan 009) — the coordinator is reused across
@@ -995,11 +1004,20 @@ struct MarkdownTextView: NSViewRepresentable {
             }
 
             let bulletColor = NSColor.controlAccentColor.withAlphaComponent(0.7)
-            let bulletAttr = NSAttributedString(string: bulletPrefix, attributes: [
+            let bulletAttr = NSMutableAttributedString(string: bulletPrefix, attributes: [
                 .font: font,
                 .foregroundColor: bulletColor,
                 .paragraphStyle: paragraphStyle
             ])
+            if let isChecked = MarkdownParser.taskState(ofItemText: text) {
+                // Make the box glyph clickable. The payload carries what was RENDERED so the
+                // toggle can verify the source still matches; a fresh object per box keeps
+                // each checkbox its own attribute run (runs merge on value equality).
+                bulletAttr.addAttributes([
+                    PreviewTextView.taskItemKey: TaskItemPayload(isChecked: isChecked, text: itemText),
+                    .cursor: NSCursor.pointingHand
+                ], range: NSRange(location: 0, length: 1))
+            }
             result.append(bulletAttr)
 
             let formatted = formatInlineMarkdown(itemText, attributes: attributes)
@@ -2053,6 +2071,59 @@ final class PreviewTextView: NSTextView {
         copyToPasteboard(payload.code)
     }
 
+    // MARK: Clickable task checkboxes
+
+    static let taskItemKey = NSAttributedString.Key("zMD.taskItem")
+
+    /// (ordinal among rendered checkboxes, rendered checked state, rendered text) → changed?
+    var onToggleTask: ((Int, Bool, String) -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount == 1, let hit = taskItem(at: point) {
+            if onToggleTask?(hit.ordinal, hit.payload.isChecked, hit.payload.text) == true {
+                // Flip the glyph NOW. The real rebuild rides the typing debounce (~150ms), a
+                // perceptible lag for direct manipulation; the rebuild then lands on the same
+                // result. Only on success — a refused toggle must leave the box untouched.
+                flipRenderedCheckbox(at: hit.characterIndex, to: !hit.payload.isChecked, text: hit.payload.text)
+            }
+            // A click on a checkbox is consumed either way: it must never fall through and
+            // start a text selection.
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    private func taskItem(at point: NSPoint) -> (ordinal: Int, characterIndex: Int, payload: TaskItemPayload)? {
+        guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let origin = textContainerOrigin
+        let containerPoint = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        let glyph = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyph)
+        guard charIndex < storage.length,
+              let payload = storage.attribute(Self.taskItemKey, at: charIndex, effectiveRange: nil) as? TaskItemPayload
+        else { return nil }
+        // glyphIndex(for:) snaps to the NEAREST glyph; require the click to actually be on the
+        // box (small slop for a comfortable target) so margin clicks still place the caret.
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        guard glyphRect.insetBy(dx: -4, dy: -2).contains(containerPoint) else { return nil }
+        // Ordinal = checkboxes rendered before this one (each box is its own attribute run).
+        var ordinal = 0
+        storage.enumerateAttribute(Self.taskItemKey, in: NSRange(location: 0, length: charIndex), options: []) { value, _, _ in
+            if value != nil { ordinal += 1 }
+        }
+        return (ordinal, charIndex, payload)
+    }
+
+    private func flipRenderedCheckbox(at index: Int, to isChecked: Bool, text: String) {
+        guard let storage = textStorage, index < storage.length else { return }
+        let range = NSRange(location: index, length: 1)
+        storage.beginEditing()
+        storage.replaceCharacters(in: range, with: isChecked ? "☑" : "☐")
+        storage.addAttribute(Self.taskItemKey, value: TaskItemPayload(isChecked: isChecked, text: text), range: range)
+        storage.endEditing()
+    }
+
     // MARK: Column geometry
 
     override var textContainerOrigin: NSPoint {
@@ -2144,5 +2215,17 @@ final class CodeCopyButton: NSButton {
         // CGColors don't track appearance; re-resolve on a light/dark flip.
         layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
         layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+}
+
+/// What a rendered task checkbox showed, attached under `PreviewTextView.taskItemKey`. A class
+/// for identity equality, so neighbouring checkboxes never merge into one attribute run.
+final class TaskItemPayload: NSObject {
+    let isChecked: Bool
+    let text: String
+    init(isChecked: Bool, text: String) {
+        self.isChecked = isChecked
+        self.text = text
+        super.init()
     }
 }

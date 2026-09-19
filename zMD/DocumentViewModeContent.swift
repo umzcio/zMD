@@ -124,7 +124,15 @@ struct DocumentViewModeContent: View {
             isRegexSearch: searchEnabled && documentManager.isRegexSearch,
             isCaseSensitive: searchEnabled && documentManager.isCaseSensitive,
             contentAlignment: settings.contentAlignment,
-            contentWidth: settings.contentWidth
+            contentWidth: settings.contentWidth,
+            onToggleTask: { ordinal, renderedChecked, renderedText in
+                documentManager.toggleTaskItem(
+                    documentId: document.id,
+                    ordinal: ordinal,
+                    renderedChecked: renderedChecked,
+                    renderedText: renderedText
+                )
+            }
         )
     }
 }

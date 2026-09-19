@@ -157,6 +157,89 @@ nonisolated final class MarkdownParser: Sendable {
 
     /// Parse markdown string into array of elements
     func parse(_ markdown: String) -> [Element] {
+        var taskLines: [Int] = []
+        return parse(markdown, taskLines: &taskLines)
+    }
+
+    // MARK: Task items (clickable checkboxes)
+
+    /// Checked state of a list item's text if it is a task item, else nil. The single
+    /// definition of "is a task item" for the click-to-toggle path.
+    static func taskState(ofItemText text: String) -> Bool? {
+        if text.hasPrefix("[ ] ") { return false }
+        if text.hasPrefix("[x] ") || text.hasPrefix("[X] ") { return true }
+        return nil
+    }
+
+    /// Source line (0-based, in `splitLines`' segmentation) of every task-list item, in
+    /// document order — i.e. entry N is the line behind the Nth rendered checkbox. Produced by
+    /// the SAME loop that creates the list items, so it cannot disagree with `parse` about
+    /// what is a task item (fenced code, HTML blocks, frontmatter are excluded for free).
+    func taskItemLines(_ markdown: String) -> [Int] {
+        var taskLines: [Int] = []
+        _ = parse(markdown, taskLines: &taskLines)
+        return taskLines
+    }
+
+    /// `markdown` with the task marker on `line` flipped — or nil unless that line really is a
+    /// task item whose state and text match what the user saw rendered. The preview can lag
+    /// the source (rebuilds are debounced while typing), so a click may arrive against a stale
+    /// render; refusing is recoverable, silently flipping the WRONG box is not. Line endings
+    /// and all other bytes are preserved exactly.
+    static func togglingTask(onLine line: Int, in markdown: String, expectChecked: Bool, expectText: String) -> String? {
+        // Locate line `line` using splitLines' segmentation ("\r\n", "\r", "\n" each end a
+        // line; Swift treats "\r\n" as one Character, so this walk matches it exactly).
+        var lineStart = markdown.startIndex
+        var current = 0
+        var index = markdown.startIndex
+        var lineEnd: String.Index?
+        while index < markdown.endIndex {
+            let ch = markdown[index]
+            if ch == "\n" || ch == "\r" || ch == "\r\n" {
+                if current == line { lineEnd = index; break }
+                current += 1
+                lineStart = markdown.index(after: index)
+            }
+            index = markdown.index(after: index)
+        }
+        guard current == line else { return nil }
+        let range = lineStart..<(lineEnd ?? markdown.endIndex)
+        let source = String(markdown[range])
+
+        guard let regex = taskLineRegex,
+              let match = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+              let markRange = Range(match.range(at: 2), in: source),
+              let textRange = Range(match.range(at: 3), in: source) else { return nil }
+        let isChecked = source[markRange] != " "
+        guard isChecked == expectChecked,
+              source[textRange].trimmingCharacters(in: .whitespaces) == expectText.trimmingCharacters(in: .whitespaces)
+        else { return nil }
+
+        var toggled = source
+        toggled.replaceSubrange(markRange, with: isChecked ? " " : "x")
+        return markdown.replacingCharacters(in: range, with: toggled)
+    }
+
+    /// The full click-to-toggle decision, pure so it can be tested exhaustively: try the line
+    /// behind the clicked checkbox's ordinal; if that no longer matches what was rendered
+    /// (stale preview), accept only an UNAMBIGUOUS match elsewhere in the document; otherwise
+    /// nil — refuse rather than guess.
+    func togglingTask(ordinal: Int, in markdown: String, renderedChecked: Bool, renderedText: String) -> String? {
+        let lines = taskItemLines(markdown)
+        func toggled(_ line: Int) -> String? {
+            Self.togglingTask(onLine: line, in: markdown, expectChecked: renderedChecked, expectText: renderedText)
+        }
+        if ordinal >= 0, ordinal < lines.count, let result = toggled(lines[ordinal]) {
+            return result
+        }
+        let candidates = lines.compactMap(toggled)
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    /// group 1 = indent + list marker + "[", group 2 = the mark, group 3 = item text.
+    private static let taskLineRegex = try? NSRegularExpression(pattern: #"^([ \t]*(?:[-*+]|\d+\.)[ \t]+\[)([ xX])\][ \t]+(.*)$"#)
+
+    private func parse(_ markdown: String, taskLines: inout [Int]) -> [Element] {
         var elements: [Element] = []
         let lines = splitLines(markdown)
         var i = 0
@@ -271,6 +354,7 @@ nonisolated final class MarkdownParser: Sendable {
             // List items (supports nesting via indentation)
             else if isListLine(line) {
                 let item = extractListItemText(line)
+                if Self.taskState(ofItemText: item.text) != nil { taskLines.append(i) }
                 listItems.append(item)
             }
             // Display math $$...$$

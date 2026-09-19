@@ -902,3 +902,73 @@ nonisolated final class CodeBlockCopyTests: XCTestCase {
         XCTAssertNotEqual(proseMenu?.items.first?.title, "Copy Code Block")
     }
 }
+
+/// Clicking rendered task checkboxes: the real PreviewTextView hit-testing and ordinal counting.
+nonisolated final class TaskCheckboxClickTests: XCTestCase {
+    @MainActor
+    func testClickReportsTheCheckboxOrdinalAndFlipsOnlyOnSuccess() throws {
+        let scrollView = PreviewTextView.scrollableTextView()
+        let textView = try XCTUnwrap(scrollView.documentView as? PreviewTextView)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: .borderless, backing: .buffered, defer: true)
+        window.contentView = scrollView
+        scrollView.layoutSubtreeIfNeeded()
+
+        // Three rendered task rows, as appendList builds them: tagged box glyph, then text.
+        let font = NSFont.systemFont(ofSize: 16)
+        let text = NSMutableAttributedString(string: "Heading\n", attributes: [.font: font])
+        var boxIndexes: [Int] = []
+        for (label, checked) in [("alpha", false), ("beta", true), ("gamma", false)] {
+            boxIndexes.append(text.length)
+            let row = NSMutableAttributedString(string: (checked ? "☑" : "☐") + "  \(label)\n", attributes: [.font: font])
+            row.addAttribute(PreviewTextView.taskItemKey, value: TaskItemPayload(isChecked: checked, text: label),
+                             range: NSRange(location: 0, length: 1))
+            text.append(row)
+        }
+        textView.textStorage?.setAttributedString(text)
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        layoutManager.ensureLayout(for: container)
+
+        func click(characterIndex: Int, dx: CGFloat = 0) throws {
+            let glyph = layoutManager.glyphIndexForCharacter(at: characterIndex)
+            let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+            let origin = textView.textContainerOrigin
+            let pointInView = NSPoint(x: origin.x + rect.midX + dx, y: origin.y + rect.midY)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .leftMouseDown, location: textView.convert(pointInView, to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            textView.mouseDown(with: event)
+        }
+
+        var received: [(Int, Bool, String)] = []
+        var accept = true
+        textView.onToggleTask = { ordinal, checked, label in
+            received.append((ordinal, checked, label))
+            return accept
+        }
+
+        // Third box → ordinal 2, and the glyph flips immediately on success.
+        try click(characterIndex: boxIndexes[2])
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.last?.0, 2)
+        XCTAssertEqual(received.last?.1, false)
+        XCTAssertEqual(received.last?.2, "gamma")
+        XCTAssertEqual((textView.string as NSString).substring(with: NSRange(location: boxIndexes[2], length: 1)), "☑")
+
+        // Second box (checked) → ordinal 1; REFUSED toggle must leave the glyph untouched.
+        accept = false
+        try click(characterIndex: boxIndexes[1])
+        XCTAssertEqual(received.last?.0, 1)
+        XCTAssertEqual(received.last?.1, true)
+        XCTAssertEqual((textView.string as NSString).substring(with: NSRange(location: boxIndexes[1], length: 1)), "☑")
+
+        // The flipped box now reports its NEW state on the next click (payload was swapped).
+        accept = true
+        try click(characterIndex: boxIndexes[2])
+        XCTAssertEqual(received.last?.0, 2)
+        XCTAssertEqual(received.last?.1, true)
+        XCTAssertEqual((textView.string as NSString).substring(with: NSRange(location: boxIndexes[2], length: 1)), "☐")
+    }
+}

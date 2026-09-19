@@ -492,6 +492,25 @@ class DocumentManager: ObservableObject {
 
     // MARK: - Content Editing & Save
 
+    /// Flip the task checkbox the user clicked in the preview. `ordinal` is its position among
+    /// the RENDERED checkboxes; the rendered state/text come along so the parser can verify the
+    /// source line still matches (the preview may lag the source mid-typing). If the ordinal
+    /// no longer lines up, accept only an unambiguous match elsewhere; otherwise refuse.
+    /// Returns whether the document changed.
+    @discardableResult
+    func toggleTaskItem(documentId: UUID, ordinal: Int, renderedChecked: Bool, renderedText: String) -> Bool {
+        guard let document = openDocuments.first(where: { $0.id == documentId }) else { return false }
+        guard let newContent = MarkdownParser.shared.togglingTask(
+            ordinal: ordinal, in: document.content,
+            renderedChecked: renderedChecked, renderedText: renderedText
+        ) else {
+            NSSound.beep()
+            return false
+        }
+        updateContent(for: documentId, newContent: newContent)
+        return true
+    }
+
     func updateContent(for documentId: UUID, newContent: String) {
         guard let index = openDocuments.firstIndex(where: { $0.id == documentId }) else { return }
         openDocuments[index].content = newContent

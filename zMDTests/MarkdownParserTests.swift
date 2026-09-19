@@ -326,4 +326,74 @@ nonisolated final class MarkdownParserTests: XCTestCase {
         XCTAssertEqual(elements.count, 3)
         if case .heading2(let text) = elements[1] { XCTAssertEqual(text, "After") } else { XCTFail("expected heading") }
     }
+
+    // MARK: - 13. Clickable task checkboxes (this code edits the user's document — be strict)
+
+    private let taskDoc = "# Plan\n\n- [ ] alpha\n- [x] beta\n  - [ ] nested gamma\n\n```md\n- [ ] inside a code fence\n```\n\n1. [ ] ordered delta\n- plain bullet\n"
+
+    @MainActor
+    func testTaskItemLinesFollowTheParserAndSkipCodeFences() {
+        // Lines: 0 "# Plan", 2 alpha, 3 beta, 4 nested, 7 fenced (must be skipped), 10 ordered.
+        XCTAssertEqual(MarkdownParser.shared.taskItemLines(taskDoc), [2, 3, 4, 10])
+    }
+
+    @MainActor
+    func testToggleFlipsOnlyTheMarkInBothDirections() {
+        let checked = MarkdownParser.shared.togglingTask(ordinal: 0, in: taskDoc, renderedChecked: false, renderedText: "alpha")
+        XCTAssertEqual(checked, taskDoc.replacingOccurrences(of: "- [ ] alpha", with: "- [x] alpha"))
+
+        let unchecked = MarkdownParser.shared.togglingTask(ordinal: 1, in: taskDoc, renderedChecked: true, renderedText: "beta")
+        XCTAssertEqual(unchecked, taskDoc.replacingOccurrences(of: "- [x] beta", with: "- [ ] beta"))
+
+        let nested = MarkdownParser.shared.togglingTask(ordinal: 2, in: taskDoc, renderedChecked: false, renderedText: "nested gamma")
+        XCTAssertEqual(nested, taskDoc.replacingOccurrences(of: "  - [ ] nested gamma", with: "  - [x] nested gamma"))
+
+        let ordered = MarkdownParser.shared.togglingTask(ordinal: 3, in: taskDoc, renderedChecked: false, renderedText: "ordered delta")
+        XCTAssertEqual(ordered, taskDoc.replacingOccurrences(of: "1. [ ] ordered delta", with: "1. [x] ordered delta"))
+    }
+
+    @MainActor
+    func testTogglePreservesCRLFAndEveryOtherByte() {
+        let crlf = "- [ ] one\r\n- [ ] two\r\ntrailing\r\n"
+        let result = MarkdownParser.shared.togglingTask(ordinal: 1, in: crlf, renderedChecked: false, renderedText: "two")
+        XCTAssertEqual(result, "- [ ] one\r\n- [x] two\r\ntrailing\r\n")
+    }
+
+    @MainActor
+    func testTheFencedLookalikeIsNeverTouched() {
+        // Ordinal 3 is "ordered delta"; nothing may ever resolve to the line inside the fence.
+        for ordinal in 0..<6 {
+            let result = MarkdownParser.shared.togglingTask(ordinal: ordinal, in: taskDoc, renderedChecked: false, renderedText: "inside a code fence")
+            XCTAssertNil(result, "ordinal \(ordinal) toggled a checkbox inside a code fence")
+        }
+    }
+
+    /// Stale preview: the source changed under the rendered checkbox.
+    @MainActor
+    func testStaleRenderFallsBackOnlyWhenUnambiguousOtherwiseRefuses() {
+        // A task was inserted above, so ordinal 0 now points at "new" — but "alpha" is unique.
+        let shifted = "- [ ] new\n- [ ] alpha\n- [x] beta\n"
+        XCTAssertEqual(
+            MarkdownParser.shared.togglingTask(ordinal: 0, in: shifted, renderedChecked: false, renderedText: "alpha"),
+            "- [ ] new\n- [x] alpha\n- [x] beta\n")
+
+        // Two identical candidates and the ordinal matches neither → refuse, change nothing.
+        let ambiguous = "- [ ] other\n- [ ] same\n- [ ] same\n"
+        XCTAssertNil(MarkdownParser.shared.togglingTask(ordinal: 0, in: ambiguous, renderedChecked: false, renderedText: "same"))
+
+        // Wrong rendered state (already toggled elsewhere) → refuse.
+        XCTAssertNil(MarkdownParser.shared.togglingTask(ordinal: 0, in: "- [x] alpha\n", renderedChecked: false, renderedText: "alpha"))
+
+        // Identical duplicates ARE fine when the ordinal is right: only that one flips.
+        XCTAssertEqual(
+            MarkdownParser.shared.togglingTask(ordinal: 2, in: ambiguous, renderedChecked: false, renderedText: "same"),
+            "- [ ] other\n- [ ] same\n- [x] same\n")
+    }
+
+    @MainActor
+    func testToggleRejectsNonTaskAndOutOfRangeLines() {
+        XCTAssertNil(MarkdownParser.togglingTask(onLine: 0, in: "plain text [ ] here", expectChecked: false, expectText: "here"))
+        XCTAssertNil(MarkdownParser.togglingTask(onLine: 5, in: "- [ ] only line", expectChecked: false, expectText: "only line"))
+        XCTAssertNil(MarkdownParser.togglingTask(onLine: -1, in: "- [ ] only line", expectChecked: false, expectText: "only line"))
+    }
 }
