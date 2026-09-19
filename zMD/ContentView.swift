@@ -6,6 +6,8 @@ struct ContentView: View {
     @AppStorage(DefaultsKeys.showOutline) private var showOutline = false
     @State private var selectedHeadingId: String?
     @State private var showQuickOpen = false
+    /// Text Quick Open opens with: "" normally, ">" for Search in Folder.
+    @State private var quickOpenInitialQuery = ""
     @State private var showCommandPalette = false
     @State private var showFocusExitPill = false
     @State private var magnifyMonitor: Any?
@@ -149,7 +151,7 @@ struct ContentView: View {
             }
         }
         .overlay {
-            QuickOpenOverlay(isPresented: $showQuickOpen, selectedHeadingId: $selectedHeadingId)
+            QuickOpenOverlay(isPresented: $showQuickOpen, selectedHeadingId: $selectedHeadingId, initialQuery: quickOpenInitialQuery)
                 .environmentObject(documentManager)
         }
         .overlay {
@@ -181,6 +183,12 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickOpen)) { _ in
             showCommandPalette = false
+            quickOpenInitialQuery = ""
+            showQuickOpen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showFolderSearch)) { _ in
+            showCommandPalette = false
+            quickOpenInitialQuery = ">"
             showQuickOpen = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
@@ -238,6 +246,7 @@ struct ContentView: View {
 
 extension Notification.Name {
     static let showQuickOpen = Notification.Name("showQuickOpen")
+    static let showFolderSearch = Notification.Name("showFolderSearch")
     static let showCommandPalette = Notification.Name("showCommandPalette")
     static let toggleFocusMode = Notification.Name("toggleFocusMode")
 }

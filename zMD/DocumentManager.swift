@@ -1124,6 +1124,21 @@ extension DocumentManager {
     ///
     /// Pass `immediate: true` to bypass debouncing (used for explicit user actions like clicking
     /// Next/Previous after a programmatic edit).
+    /// After opening a folder-search hit: put the find bar on that exact occurrence. The folder
+    /// search is literal + case-insensitive, so the find bar is set to match before searching.
+    func revealSearchHit(query: String, occurrenceInFile: Int) {
+        isRegexSearch = false
+        isCaseSensitive = false
+        searchText = query
+        isSearching = true
+        performSearch(immediate: true)
+        // Source/split count source matches (exact). Preview counts RENDERED matches, which
+        // arrive asynchronously and can differ slightly (markup characters); setRenderedMatchCount
+        // clamps an out-of-range index, so this is safe either way.
+        let count = searchMatches.count
+        currentMatchIndex = count > 0 ? min(occurrenceInFile, count - 1) : 0
+    }
+
     func performSearch(immediate: Bool = false) {
         searchDebounceTimer?.invalidate()
         if immediate {

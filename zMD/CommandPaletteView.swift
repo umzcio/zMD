@@ -181,6 +181,9 @@ class CommandRegistry {
             CommandAction(name: "Quick Open", category: .navigation, shortcut: "\u{2318}\u{21E7}O", icon: "magnifyingglass", isEnabled: { true }) {
                 NotificationCenter.default.post(name: .showQuickOpen, object: nil)
             },
+            CommandAction(name: "Search in Folder", category: .navigation, shortcut: "\u{2303}\u{21E7}F", icon: "doc.text.magnifyingglass", isEnabled: { true }) {
+                NotificationCenter.default.post(name: .showFolderSearch, object: nil)
+            },
             CommandAction(name: "Next Tab", category: .navigation, shortcut: "\u{2303}\u{21E5}", icon: "arrow.right", isEnabled: hasDoc) {
                 documentManager.selectNextTab()
             },

@@ -113,6 +113,12 @@ struct zMDApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
+                // ⌘⇧F is Focus Mode and ⌥⌘F is Find & Replace, so folder search takes ⌃⇧F.
+                Button("Search in Folder...") {
+                    NotificationCenter.default.post(name: .showFolderSearch, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.control, .shift])
+
                 Button("Open Folder...") {
                     folderManager.openFolder()
                 }

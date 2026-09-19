@@ -262,3 +262,101 @@ class FolderManager: ObservableObject {
         }
     }
 }
+
+// MARK: - Folder-wide content search
+
+/// One matching line from a folder-wide content search (Quick Open's `>` mode).
+nonisolated struct FolderSearchHit: Sendable, Equatable {
+    let url: URL
+    /// 1-based line number in the file.
+    let lineNumber: Int
+    /// The matching line, trimmed and windowed around the match for display.
+    let snippet: String
+    /// Match position within `snippet`, in Characters (what the Quick Open highlighter takes).
+    let matchStart: Int
+    let matchLength: Int
+    /// 0-based index of this match among ALL of the file's matches, counted the way the find
+    /// bar counts them — so opening a hit can land the find bar on this exact occurrence.
+    let occurrenceInFile: Int
+}
+
+/// Literal, case-insensitive search across files. Pure and nonisolated: it does blocking file
+/// I/O, so callers run it off the main actor.
+nonisolated enum FolderSearch {
+    static let maxHits = 200
+    static let maxFileBytes = 2_000_000
+    static let minimumQueryLength = 2
+    private static let snippetRadius = 60
+
+    /// One hit per matching LINE (first occurrence on it). Stops at `maxHits`, or as soon as
+    /// `isCancelled` reports true (a newer keystroke superseded this search).
+    static func search(query: String, in urls: [URL], isCancelled: () -> Bool = { false }) -> [FolderSearchHit] {
+        guard query.count >= minimumQueryLength else { return [] }
+        var hits: [FolderSearchHit] = []
+        for url in urls {
+            if isCancelled() { return [] }
+            guard let text = readText(url) else { continue }
+            // Cheap whole-file reject before walking lines.
+            guard text.range(of: query, options: .caseInsensitive) != nil else { continue }
+            hits.append(contentsOf: self.hits(for: query, in: text, url: url, limit: maxHits - hits.count))
+            if hits.count >= maxHits { break }
+        }
+        return hits
+    }
+
+    /// Line-level matching for one document's text (separated out so it's testable without files).
+    static func hits(for query: String, in text: String, url: URL, limit: Int) -> [FolderSearchHit] {
+        var hits: [FolderSearchHit] = []
+        var occurrence = 0
+        let lines = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() {
+            var searchStart = line.startIndex
+            var firstOnLine: Range<String.Index>?
+            var firstOccurrenceOnLine = occurrence
+            while searchStart < line.endIndex,
+                  let range = line.range(of: query, options: .caseInsensitive, range: searchStart..<line.endIndex) {
+                if firstOnLine == nil {
+                    firstOnLine = range
+                    firstOccurrenceOnLine = occurrence
+                }
+                occurrence += 1
+                // Advance past the match (at least one character), as the find bar does.
+                searchStart = range.upperBound > range.lowerBound ? range.upperBound : line.index(after: range.lowerBound)
+            }
+            guard let match = firstOnLine, hits.count < limit else { continue }
+            let (snippet, start) = makeSnippet(line: line, match: match)
+            hits.append(FolderSearchHit(
+                url: url, lineNumber: index + 1, snippet: snippet,
+                matchStart: start, matchLength: line.distance(from: match.lowerBound, to: match.upperBound),
+                occurrenceInFile: firstOccurrenceOnLine
+            ))
+        }
+        return hits
+    }
+
+    /// Trim leading whitespace and window long lines around the match so it stays visible in
+    /// a single truncating row. Returns the snippet and the match's Character offset within it.
+    private static func makeSnippet(line: String, match: Range<String.Index>) -> (String, Int) {
+        let matchOffset = line.distance(from: line.startIndex, to: match.lowerBound)
+        let leadingWhitespace = line.prefix { $0 == " " || $0 == "\t" }.count
+        var windowStart = min(leadingWhitespace, matchOffset)
+        var prefix = ""
+        if matchOffset - windowStart > snippetRadius {
+            windowStart = matchOffset - snippetRadius
+            prefix = "…"
+        }
+        let startIndex = line.index(line.startIndex, offsetBy: windowStart)
+        let body = line[startIndex...].prefix(snippetRadius * 4)
+        return (prefix + body, prefix.count + (matchOffset - windowStart))
+    }
+
+    private static func readText(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maxFileBytes), !data.isEmpty else { return nil }
+        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252)
+    }
+}

@@ -5,9 +5,12 @@ struct QuickOpenView: NSViewRepresentable {
     @EnvironmentObject var folderManager: FolderManager
     @Binding var isPresented: Bool
     @Binding var selectedHeadingId: String?
+    /// Text the field opens with — ">" for "Search in Folder…", empty for plain Quick Open.
+    var initialQuery: String = ""
 
     func makeNSView(context: Context) -> QuickOpenNSView {
         let view = QuickOpenNSView()
+        view.initialQuery = initialQuery
         view.documentManager = documentManager
         view.folderManager = folderManager
         view.dismissHandler = { isPresented = false }
@@ -18,6 +21,14 @@ struct QuickOpenView: NSViewRepresentable {
         view.headingSelectedHandler = { headingId in
             selectedHeadingId = headingId
             isPresented = false
+        }
+        view.searchHitHandler = { hit, query in
+            documentManager.loadDocument(from: hit.url)
+            isPresented = false
+            // Next turn: let the newly selected document settle before the find bar searches it.
+            DispatchQueue.main.async {
+                documentManager.revealSearchHit(query: query, occurrenceInFile: hit.occurrenceInFile)
+            }
         }
         return view
     }
@@ -40,6 +51,7 @@ struct QuickOpenItem {
     let url: URL?
     let headingId: String?
     let headingLevel: Int?
+    var searchHit: FolderSearchHit? = nil
 }
 
 class QuickOpenNSView: NSView {
@@ -48,6 +60,19 @@ class QuickOpenNSView: NSView {
     var dismissHandler: (() -> Void)?
     var openFileHandler: ((URL) -> Void)?
     var headingSelectedHandler: ((String) -> Void)?
+    var searchHitHandler: ((FolderSearchHit, String) -> Void)?
+    var initialQuery = ""
+
+    // Folder content search (">" mode). File I/O runs off the main actor; a generation token
+    // drops results from superseded keystrokes, and the task is cancelled so a stale search
+    // stops reading files instead of finishing a walk nobody wants.
+    private var contentSearchGeneration = 0
+    private var contentSearchTask: Task<Void, Never>?
+    // nonisolated(unsafe): main-actor only in practice; annotated solely so nonisolated deinit
+    // can invalidate it (deinit has exclusive access).
+    nonisolated(unsafe) private var contentSearchDebounce: Timer?
+    private var contentSearchResults: [QuickOpenItem] = []
+    private var contentSearchResultsQuery = ""
 
     private var searchField: NSTextField!
     private var tableView: NSTableView!
@@ -87,7 +112,7 @@ class QuickOpenNSView: NSView {
         searchContainer.addSubview(searchIcon)
 
         searchField = NSTextField()
-        searchField.placeholderString = "Search files... (@ or # for headings)"
+        searchField.placeholderString = "Search files... (@ headings, > text in files)"
         searchField.isBordered = false
         searchField.backgroundColor = .clear
         searchField.focusRingType = .none
@@ -156,7 +181,7 @@ class QuickOpenNSView: NSView {
         hint2.textColor = .secondaryLabelColor
         hint2.font = .systemFont(ofSize: 11)
 
-        let hint3 = NSTextField(labelWithString: "@ or # Headings")
+        let hint3 = NSTextField(labelWithString: "@ Headings   > In Files")
         hint3.textColor = .secondaryLabelColor
         hint3.font = .systemFont(ofSize: 11)
 
@@ -218,7 +243,11 @@ class QuickOpenNSView: NSView {
 
         // Determine mode from search text prefix
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("@") || trimmed.hasPrefix("#") {
+        if trimmed.hasPrefix(">") {
+            modeLabel.stringValue = "IN FILES"
+            modeLabel.isHidden = false
+            updateContentSearchResults(query: String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces))
+        } else if trimmed.hasPrefix("@") || trimmed.hasPrefix("#") {
             modeLabel.stringValue = "HEADINGS"
             modeLabel.isHidden = false
             updateHeadingResults(query: String(trimmed.dropFirst()))
@@ -228,27 +257,93 @@ class QuickOpenNSView: NSView {
         }
     }
 
-    private func updateFileResults(query: String) {
-        guard let documentManager = documentManager else {
-            filteredItems = []
-            return
-        }
-
-        // Merge recent files with folder files (deduped)
+    /// Every file Quick Open knows about: recent files, then the open folder's files (deduped).
+    private func candidateFileURLs() -> [URL] {
         var seenPaths = Set<String>()
         var urls: [URL] = []
-        for url in documentManager.recentFileURLs {
+        for url in documentManager?.recentFileURLs ?? [] {
             if seenPaths.insert(url.path).inserted {
                 urls.append(url)
             }
         }
-        if let folderFiles = folderManager?.allMarkdownFiles {
-            for url in folderFiles {
-                if seenPaths.insert(url.path).inserted {
-                    urls.append(url)
-                }
+        for url in folderManager?.allMarkdownFiles ?? [] {
+            if seenPaths.insert(url.path).inserted {
+                urls.append(url)
             }
         }
+        return urls
+    }
+
+    /// ">" mode. Synchronous part only decides what to SHOW right now; the search itself is
+    /// debounced and asynchronous, and re-enters via `reloadData` when results land.
+    private func updateContentSearchResults(query: String) {
+        guard query.count >= FolderSearch.minimumQueryLength else {
+            contentSearchDebounce?.invalidate()
+            contentSearchTask?.cancel()
+            contentSearchGeneration += 1
+            contentSearchResults = []
+            contentSearchResultsQuery = ""
+            filteredItems = []
+            return
+        }
+        // Results already in hand for this exact query (this is the post-search reload, or an
+        // unrelated manager publish) — show them, don't search again.
+        if query == contentSearchResultsQuery {
+            filteredItems = contentSearchResults
+            return
+        }
+        // Keep the previous results on screen while the new search runs: blanking the list on
+        // every keystroke makes it strobe.
+        filteredItems = contentSearchResults
+
+        contentSearchDebounce?.invalidate()
+        contentSearchDebounce = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.startContentSearch(query: query)
+            }
+        }
+    }
+
+    private func startContentSearch(query: String) {
+        contentSearchTask?.cancel()
+        contentSearchGeneration += 1
+        let generation = contentSearchGeneration
+        let urls = candidateFileURLs()
+
+        contentSearchTask = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) {
+                FolderSearch.search(query: query, in: urls, isCancelled: { Task.isCancelled })
+            }
+            let hits = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard let self, !Task.isCancelled, generation == self.contentSearchGeneration else { return }
+            self.contentSearchResults = hits.map { hit in
+                QuickOpenItem(
+                    title: hit.snippet,
+                    subtitle: "\(hit.url.lastPathComponent):\(hit.lineNumber)  —  \(hit.url.deletingLastPathComponent().path)",
+                    icon: nil,
+                    matchResult: FuzzyMatchResult(score: 0, matchedIndices: Array(hit.matchStart..<(hit.matchStart + hit.matchLength))),
+                    url: hit.url,
+                    headingId: nil,
+                    headingLevel: nil,
+                    searchHit: hit
+                )
+            }
+            self.contentSearchResultsQuery = query
+            self.reloadData()
+        }
+    }
+
+    private func updateFileResults(query: String) {
+        guard documentManager != nil else {
+            filteredItems = []
+            return
+        }
+
+        let urls = candidateFileURLs()
 
         if query.isEmpty {
             filteredItems = urls.map { url in
@@ -329,9 +424,26 @@ class QuickOpenNSView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
+            if !initialQuery.isEmpty, searchField.stringValue.isEmpty {
+                searchField.stringValue = initialQuery
+                searchText = initialQuery
+            }
             reloadData()
             window?.makeFirstResponder(searchField)
+            // Becoming first responder selects the field's whole text; with a prefilled ">"
+            // the user's first keystroke would replace the prefix. Park the caret at the end.
+            if let editor = searchField.currentEditor() {
+                editor.selectedRange = NSRange(location: (searchField.stringValue as NSString).length, length: 0)
+            }
+        } else {
+            // Overlay dismissed mid-search: stop reading files nobody is waiting for.
+            contentSearchDebounce?.invalidate()
+            contentSearchTask?.cancel()
         }
+    }
+
+    deinit {
+        contentSearchDebounce?.invalidate()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -370,7 +482,9 @@ class QuickOpenNSView: NSView {
         guard row >= 0 && row < filteredItems.count else { return }
         let item = filteredItems[row]
 
-        if let headingId = item.headingId {
+        if let hit = item.searchHit {
+            searchHitHandler?(hit, contentSearchResultsQuery)
+        } else if let headingId = item.headingId {
             headingSelectedHandler?(headingId)
         } else if let url = item.url {
             openFileHandler?(url)
@@ -523,6 +637,7 @@ extension QuickOpenNSView: NSTableViewDelegate, NSTableViewDataSource {
 struct QuickOpenOverlay: View {
     @Binding var isPresented: Bool
     @Binding var selectedHeadingId: String?
+    var initialQuery: String = ""
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var folderManager: FolderManager
 
@@ -538,7 +653,7 @@ struct QuickOpenOverlay: View {
                     .accessibilityAddTraits(.isButton)
 
                 VStack {
-                    QuickOpenView(isPresented: $isPresented, selectedHeadingId: $selectedHeadingId)
+                    QuickOpenView(isPresented: $isPresented, selectedHeadingId: $selectedHeadingId, initialQuery: initialQuery)
                         .environmentObject(documentManager)
                         .environmentObject(folderManager)
                         .frame(width: 500, height: 350)

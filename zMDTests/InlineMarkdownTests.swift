@@ -972,3 +972,61 @@ nonisolated final class TaskCheckboxClickTests: XCTestCase {
         XCTAssertEqual((textView.string as NSString).substring(with: NSRange(location: boxIndexes[2], length: 1)), "☐")
     }
 }
+
+/// Folder-wide content search (Quick Open's ">" mode).
+nonisolated final class FolderSearchTests: XCTestCase {
+    private let url = URL(fileURLWithPath: "/tmp/doc.md")
+
+    func testOneHitPerLineWithFindBarCompatibleOccurrenceIndexes() {
+        // Occurrences of "cat": line1 ×2 (#0,#1), line3 ×1 (#2), line4 ×1 (#3, different case).
+        let text = "cat and cat\nno match here\n  indented cat\nCAT shouting"
+        let hits = FolderSearch.hits(for: "cat", in: text, url: url, limit: 50)
+
+        XCTAssertEqual(hits.map(\.lineNumber), [1, 3, 4])
+        // The find bar counts EVERY occurrence; a hit must carry the index of its own first
+        // occurrence so opening it lands on that exact match, not merely "the Nth line".
+        XCTAssertEqual(hits.map(\.occurrenceInFile), [0, 2, 3])
+        XCTAssertEqual(hits[1].snippet, "indented cat", "leading whitespace trimmed for display")
+    }
+
+    func testHighlightRangeAlwaysCoversTheMatchInsideTheSnippet() {
+        let long = String(repeating: "lorem ipsum ", count: 40) + "NEEDLE" + String(repeating: " dolor sit", count: 40)
+        for text in ["needle at start", "   padded needle", long] {
+            let hit = try? XCTUnwrap(FolderSearch.hits(for: "needle", in: text, url: url, limit: 5).first)
+            guard let hit else { return XCTFail("no hit in: \(text.prefix(30))") }
+            let chars = Array(hit.snippet)
+            XCTAssertLessThanOrEqual(hit.matchStart + hit.matchLength, chars.count)
+            let highlighted = String(chars[hit.matchStart..<(hit.matchStart + hit.matchLength)])
+            XCTAssertEqual(highlighted.lowercased(), "needle", "highlight drifted off the match")
+        }
+        // A long line is windowed (ellipsis) rather than shown from column 0.
+        XCTAssertTrue(FolderSearch.hits(for: "needle", in: long, url: url, limit: 5)[0].snippet.hasPrefix("…"))
+    }
+
+    func testCRLFLineNumbersAndMinimumQueryLength() {
+        let hits = FolderSearch.hits(for: "two", in: "one\r\ntwo\r\nthree", url: url, limit: 5)
+        XCTAssertEqual(hits.map(\.lineNumber), [2])
+        XCTAssertTrue(FolderSearch.search(query: "a", in: [url]).isEmpty, "1-char queries must not walk the folder")
+    }
+
+    func testSearchAcrossFilesHonorsTheHitCapAndCancellation() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("zmd-foldersearch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let matching = dir.appendingPathComponent("a.md")
+        let other = dir.appendingPathComponent("b.md")
+        let flood = dir.appendingPathComponent("c.md")
+        try "alpha\nfind me here\n".write(to: matching, atomically: true, encoding: .utf8)
+        try "nothing relevant\n".write(to: other, atomically: true, encoding: .utf8)
+        try String(repeating: "find me\n", count: 500).write(to: flood, atomically: true, encoding: .utf8)
+        let missing = dir.appendingPathComponent("deleted.md")
+
+        let hits = FolderSearch.search(query: "FIND ME", in: [missing, matching, other])
+        XCTAssertEqual(hits.map(\.url), [matching])
+        XCTAssertEqual(hits.first?.lineNumber, 2)
+
+        XCTAssertEqual(FolderSearch.search(query: "find me", in: [matching, flood]).count, FolderSearch.maxHits)
+        XCTAssertTrue(FolderSearch.search(query: "find me", in: [matching, flood], isCancelled: { true }).isEmpty)
+    }
+}
