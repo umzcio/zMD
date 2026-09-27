@@ -40,7 +40,8 @@ class DocumentManager: ObservableObject {
     /// the user closes the last window while keeping the app running.
     private var openMainWindowAction: (() -> Void)?
     private var isClosingAllDocuments = false
-    var isCloseAllInProgress: Bool { isClosingAllDocuments }
+    private var closingDocumentIds: Set<UUID> = []
+    var isCloseOperationInProgress: Bool { isClosingAllDocuments || !closingDocumentIds.isEmpty }
 
     func registerMainWindowOpener(_ action: @escaping () -> Void) {
         openMainWindowAction = action
@@ -765,13 +766,18 @@ class DocumentManager: ObservableObject {
     }
 
     func closeDocument(_ document: MarkdownDocument) {
-        guard !isClosingAllDocuments else { return }
+        guard !isCloseOperationInProgress else { return }
 
         switch resolveDirtyClose(document, onSaveFinished: { [weak self] success in
+            guard let self else { return }
+            self.closingDocumentIds.remove(document.id)
             guard success else { return }
-            self?.closeDocumentWithoutPrompt(id: document.id)
+            self.closeDocumentWithoutPrompt(id: document.id)
         }) {
-        case .cancel, .deferToSave:
+        case .cancel:
+            return
+        case .deferToSave:
+            closingDocumentIds.insert(document.id)
             return
         case .proceed, .discard:
             closeDocumentWithoutPrompt(id: document.id)
@@ -833,7 +839,7 @@ class DocumentManager: ObservableObject {
     /// the window delegate whether AppKit may finish this close request immediately; saves
     /// can defer it while their panels or writes complete.
     func closeAllDocuments(completion: @escaping (Bool) -> Void) -> TerminationPreparation {
-        guard !isClosingAllDocuments else { return .cancel }
+        guard !isCloseOperationInProgress else { return .cancel }
         isClosingAllDocuments = true
 
         let preparation = prepareForTermination { [weak self] success in
@@ -908,6 +914,8 @@ class DocumentManager: ObservableObject {
     }
 
     func closeOtherDocuments(except document: MarkdownDocument) {
+        guard !isCloseOperationInProgress else { return }
+
         // If any of the others are dirty, require one confirmation instead of N nagging dialogs.
         let dirtyOthers = openDocuments.filter { $0.id != document.id && $0.isDirty }
         if !dirtyOthers.isEmpty {

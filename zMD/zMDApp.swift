@@ -475,7 +475,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !DocumentManager.shared.isCloseAllInProgress else { return .terminateCancel }
+        guard !DocumentManager.shared.isCloseOperationInProgress else { return .terminateCancel }
         switch DocumentManager.shared.prepareForTermination(completion: { shouldTerminate in
             sender.reply(toApplicationShouldTerminate: shouldTerminate)
         }) {

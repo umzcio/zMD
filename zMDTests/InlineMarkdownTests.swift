@@ -682,7 +682,7 @@ nonisolated final class DocumentManagerTerminationTests: XCTestCase {
         XCTAssertTrue(manager.openDocuments.isEmpty)
         XCTAssertNil(manager.selectedDocumentId)
         XCTAssertFalse(completionCalled, "synchronous close uses the return value, not the deferred completion")
-        XCTAssertFalse(manager.isCloseAllInProgress)
+        XCTAssertFalse(manager.isCloseOperationInProgress)
     }
 
     @MainActor
@@ -705,7 +705,7 @@ nonisolated final class DocumentManagerTerminationTests: XCTestCase {
 
         if case .cancel = result {} else { XCTFail("expected cancelled close, got \(result)") }
         XCTAssertEqual(manager.openDocuments.map(\.id), [docA.id, docB.id])
-        XCTAssertFalse(manager.isCloseAllInProgress)
+        XCTAssertFalse(manager.isCloseOperationInProgress)
     }
 
     @MainActor
@@ -745,13 +745,59 @@ nonisolated final class DocumentManagerTerminationTests: XCTestCase {
         }
 
         if case .terminateLater = result {} else { XCTFail("expected deferred close, got \(result)") }
+        XCTAssertTrue(manager.isCloseOperationInProgress)
         XCTAssertEqual(manager.openDocuments.count, 2, "tabs remain until the deferred save completes")
         wait(for: [completed], timeout: 4.0)
 
         XCTAssertEqual(completionResult, true)
         XCTAssertTrue(manager.openDocuments.isEmpty)
-        XCTAssertFalse(manager.isCloseAllInProgress)
+        XCTAssertFalse(manager.isCloseOperationInProgress)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "unsaved edits")
+    }
+
+    @MainActor
+    func testWindowCloseDoesNotOverlapAnInProgressTabSave() throws {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-tab-close-save-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("doc.md")
+        try "initial".write(to: url, atomically: true, encoding: .utf8)
+
+        let document = MarkdownDocument(url: url, content: "saved before close", isDirty: true)
+        manager.openDocuments = [document]
+        manager.selectedDocumentId = document.id
+        manager.dirtyCloseConfirmer = FakeDirtyCloseConfirmer(responses: [.save])
+
+        manager.closeDocument(document)
+        XCTAssertTrue(manager.isCloseOperationInProgress)
+
+        let result = manager.closeAllDocuments { _ in XCTFail("window close must be rejected while the tab save is active") }
+        if case .cancel = result {} else { XCTFail("expected overlapping close to be rejected, got \(result)") }
+        XCTAssertEqual(manager.openDocuments.map(\.id), [document.id])
+
+        let finished = expectation(description: "tab save finishes and closes the tab")
+        func pollForCompletion() {
+            if manager.openDocuments.isEmpty && !manager.isCloseOperationInProgress {
+                finished.fulfill()
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: pollForCompletion)
+            }
+        }
+        pollForCompletion()
+        wait(for: [finished], timeout: 4.0)
+
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved before close")
     }
 
     @MainActor
