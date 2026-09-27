@@ -36,6 +36,31 @@ final class NSAlertDirtyCloseConfirmer: DirtyCloseConfirming {
 class DocumentManager: ObservableObject {
     static let shared = DocumentManager()
 
+    /// Supplied by the main SwiftUI window so file-opening events can recreate it after
+    /// the user closes the last window while keeping the app running.
+    private var openMainWindowAction: (() -> Void)?
+    private var closeMainWindowAction: (() -> Void)?
+    private var isClosingAllDocuments = false
+    private var closingDocumentIds: Set<UUID> = []
+    var isCloseOperationInProgress: Bool { isClosingAllDocuments || !closingDocumentIds.isEmpty }
+
+    func registerMainWindowOpener(_ action: @escaping () -> Void) {
+        openMainWindowAction = action
+    }
+
+    func registerMainWindowCloser(_ action: @escaping () -> Void) {
+        closeMainWindowAction = action
+    }
+
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        openMainWindowAction?()
+    }
+
+    func closeMainWindow() {
+        closeMainWindowAction?()
+    }
+
     @Published var openDocuments: [MarkdownDocument] = []
     @Published var selectedDocumentId: UUID?
     @Published var recentFileURLs: [URL] = []
@@ -223,6 +248,7 @@ class DocumentManager: ObservableObject {
         openDocuments.append(document)
         selectedDocumentId = document.id
         viewMode = .source
+        showMainWindow()
     }
 
     func openFile() {
@@ -251,6 +277,7 @@ class DocumentManager: ObservableObject {
         // standardized paths, and case variants focus the existing tab instead of duplicating it.
         if let doc = openDocuments.first(where: { Self.canonicalKey(for: $0.url) == key }) {
             selectedDocumentId = doc.id
+            showMainWindow()
             return
         }
 
@@ -270,6 +297,7 @@ class DocumentManager: ObservableObject {
 
             // Add to recent files
             addToRecentFiles(url: url)
+            showMainWindow()
         } catch {
             alertManager.showFileLoadError(url: url, error: error)
         }
@@ -747,18 +775,25 @@ class DocumentManager: ObservableObject {
     }
 
     func closeDocument(_ document: MarkdownDocument) {
+        guard !isCloseOperationInProgress else { return }
+
         switch resolveDirtyClose(document, onSaveFinished: { [weak self] success in
+            guard let self else { return }
+            self.closingDocumentIds.remove(document.id)
             guard success else { return }
-            self?.closeDocumentWithoutPrompt(id: document.id)
+            self.closeDocumentWithoutPrompt(id: document.id)
         }) {
-        case .cancel, .deferToSave:
+        case .cancel:
+            return
+        case .deferToSave:
+            closingDocumentIds.insert(document.id)
             return
         case .proceed, .discard:
             closeDocumentWithoutPrompt(id: document.id)
         }
     }
 
-    private func closeDocumentWithoutPrompt(id documentId: UUID) {
+    private func closeDocumentWithoutPrompt(id documentId: UUID, closeWindowWhenEmpty: Bool = true) {
         if let index = openDocuments.firstIndex(where: { $0.id == documentId }) {
             let document = openDocuments[index]
 
@@ -798,11 +833,58 @@ class DocumentManager: ObservableObject {
             } else if openDocuments.isEmpty {
                 selectedDocumentId = nil
             }
+
+            if closeWindowWhenEmpty && openDocuments.isEmpty {
+                WindowCloseDelegate.shared.closeWindowWhenEmpty()
+            }
         }
     }
 
     func prepareForTermination(completion: @escaping (Bool) -> Void) -> TerminationPreparation {
         prepareForTermination(discardedDirtyDocuments: [], completion: completion)
+    }
+
+    /// Resolve every dirty tab and then close them together. The synchronous result tells
+    /// the window delegate whether AppKit may finish this close request immediately; saves
+    /// can defer it while their panels or writes complete.
+    func closeAllDocuments(completion: @escaping (Bool) -> Void) -> TerminationPreparation {
+        guard !isCloseOperationInProgress else { return .cancel }
+        isClosingAllDocuments = true
+
+        let preparation = prepareForTermination { [weak self] success in
+            guard let self else {
+                completion(false)
+                return
+            }
+            guard success else {
+                self.isClosingAllDocuments = false
+                completion(false)
+                return
+            }
+
+            self.removeAllDocumentsForWindowClose()
+            self.isClosingAllDocuments = false
+            completion(true)
+        }
+
+        switch preparation {
+        case .terminateNow:
+            removeAllDocumentsForWindowClose()
+            isClosingAllDocuments = false
+            return .terminateNow
+        case .terminateLater:
+            return .terminateLater
+        case .cancel:
+            isClosingAllDocuments = false
+            return .cancel
+        }
+    }
+
+    private func removeAllDocumentsForWindowClose() {
+        let documentIds = openDocuments.map(\.id)
+        for id in documentIds {
+            closeDocumentWithoutPrompt(id: id, closeWindowWhenEmpty: false)
+        }
     }
 
     private func prepareForTermination(discardedDirtyDocuments: Set<UUID>, completion: @escaping (Bool) -> Void) -> TerminationPreparation {
@@ -841,6 +923,8 @@ class DocumentManager: ObservableObject {
     }
 
     func closeOtherDocuments(except document: MarkdownDocument) {
+        guard !isCloseOperationInProgress else { return }
+
         // If any of the others are dirty, require one confirmation instead of N nagging dialogs.
         let dirtyOthers = openDocuments.filter { $0.id != document.id && $0.isDirty }
         if !dirtyOthers.isEmpty {
