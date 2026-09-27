@@ -605,13 +605,13 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Last-tab closure uses the same native window close path after its dirty decision has
-    /// succeeded. Red-button closure suppresses this during its own all-tabs cleanup.
+    /// Last-tab closure dismisses the SwiftUI window after its dirty decision has succeeded.
+    /// Red-button closure suppresses this during its own all-tabs cleanup.
     func closeWindowWhenEmpty() {
         guard documentManager?.openDocuments.isEmpty == true,
               pendingWindowClose == nil,
-              let window = chromeWindow else { return }
-        window.performClose(nil)
+              chromeWindow != nil else { return }
+        documentManager?.closeMainWindow()
     }
 }
 

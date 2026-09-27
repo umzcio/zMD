@@ -39,6 +39,7 @@ class DocumentManager: ObservableObject {
     /// Supplied by the main SwiftUI window so file-opening events can recreate it after
     /// the user closes the last window while keeping the app running.
     private var openMainWindowAction: (() -> Void)?
+    private var closeMainWindowAction: (() -> Void)?
     private var isClosingAllDocuments = false
     private var closingDocumentIds: Set<UUID> = []
     var isCloseOperationInProgress: Bool { isClosingAllDocuments || !closingDocumentIds.isEmpty }
@@ -47,9 +48,17 @@ class DocumentManager: ObservableObject {
         openMainWindowAction = action
     }
 
+    func registerMainWindowCloser(_ action: @escaping () -> Void) {
+        closeMainWindowAction = action
+    }
+
     func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
         openMainWindowAction?()
+    }
+
+    func closeMainWindow() {
+        closeMainWindowAction?()
     }
 
     @Published var openDocuments: [MarkdownDocument] = []
