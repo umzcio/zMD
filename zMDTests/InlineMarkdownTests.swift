@@ -657,6 +657,104 @@ private final class FakeDirtyCloseConfirmer: DirtyCloseConfirming {
 
 nonisolated final class DocumentManagerTerminationTests: XCTestCase {
     @MainActor
+    func testClosingWindowDiscardsAllTabsOnlyAfterEveryDirtyDocumentIsResolved() {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        let tmp = FileManager.default.temporaryDirectory
+        let docA = MarkdownDocument(url: tmp.appendingPathComponent("window-a-\(UUID().uuidString).md"), content: "a", isDirty: true)
+        let docB = MarkdownDocument(url: tmp.appendingPathComponent("window-b-\(UUID().uuidString).md"), content: "b", isDirty: true)
+        manager.openDocuments = [docA, docB]
+        manager.selectedDocumentId = docA.id
+        manager.dirtyCloseConfirmer = FakeDirtyCloseConfirmer(responses: [.discard, .discard])
+
+        var completionCalled = false
+        let result = manager.closeAllDocuments { _ in completionCalled = true }
+
+        if case .terminateNow = result {} else { XCTFail("expected synchronous close, got \(result)") }
+        XCTAssertTrue(manager.openDocuments.isEmpty)
+        XCTAssertNil(manager.selectedDocumentId)
+        XCTAssertFalse(completionCalled, "synchronous close uses the return value, not the deferred completion")
+        XCTAssertFalse(manager.isCloseAllInProgress)
+    }
+
+    @MainActor
+    func testCancellingWindowClosePreservesEveryTab() {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        let tmp = FileManager.default.temporaryDirectory
+        let docA = MarkdownDocument(url: tmp.appendingPathComponent("window-cancel-a-\(UUID().uuidString).md"), content: "a", isDirty: true)
+        let docB = MarkdownDocument(url: tmp.appendingPathComponent("window-cancel-b-\(UUID().uuidString).md"), content: "b", isDirty: true)
+        manager.openDocuments = [docA, docB]
+        manager.dirtyCloseConfirmer = FakeDirtyCloseConfirmer(responses: [.cancel])
+
+        let result = manager.closeAllDocuments { _ in XCTFail("cancel is synchronous") }
+
+        if case .cancel = result {} else { XCTFail("expected cancelled close, got \(result)") }
+        XCTAssertEqual(manager.openDocuments.map(\.id), [docA.id, docB.id])
+        XCTAssertFalse(manager.isCloseAllInProgress)
+    }
+
+    @MainActor
+    func testWindowCloseWaitsForSaveThenClosesEveryTab() throws {
+        let manager = DocumentManager.shared
+        let previousDocuments = manager.openDocuments
+        let previousSelectedId = manager.selectedDocumentId
+        let previousConfirmer = manager.dirtyCloseConfirmer
+        defer {
+            manager.openDocuments = previousDocuments
+            manager.selectedDocumentId = previousSelectedId
+            manager.dirtyCloseConfirmer = previousConfirmer
+        }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zmd-window-close-save-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("doc.md")
+        try "initial".write(to: url, atomically: true, encoding: .utf8)
+
+        let savedDocument = MarkdownDocument(url: url, content: "unsaved edits", isDirty: true)
+        let cleanDocument = MarkdownDocument(
+            url: directory.appendingPathComponent("clean.md"),
+            content: "clean",
+            isDirty: false
+        )
+        manager.openDocuments = [savedDocument, cleanDocument]
+        manager.selectedDocumentId = savedDocument.id
+        manager.dirtyCloseConfirmer = FakeDirtyCloseConfirmer(responses: [.save])
+
+        let completed = expectation(description: "all tabs close after save succeeds")
+        var completionResult: Bool?
+        let result = manager.closeAllDocuments { success in
+            completionResult = success
+            completed.fulfill()
+        }
+
+        if case .terminateLater = result {} else { XCTFail("expected deferred close, got \(result)") }
+        XCTAssertEqual(manager.openDocuments.count, 2, "tabs remain until the deferred save completes")
+        wait(for: [completed], timeout: 4.0)
+
+        XCTAssertEqual(completionResult, true)
+        XCTAssertTrue(manager.openDocuments.isEmpty)
+        XCTAssertFalse(manager.isCloseAllInProgress)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "unsaved edits")
+    }
+
+    @MainActor
     func testDiscardingAllDirtyDocumentsTerminatesNowWithoutCallingCompletion() {
         let manager = DocumentManager.shared
         let previousDocuments = manager.openDocuments

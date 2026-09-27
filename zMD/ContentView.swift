@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var folderManager: FolderManager
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(DefaultsKeys.showOutline) private var showOutline = false
     @State private var selectedHeadingId: String?
     @State private var showQuickOpen = false
@@ -201,6 +202,9 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            documentManager.registerMainWindowOpener {
+                openWindow(id: "main")
+            }
             magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { event in
                 if event.phase == .began {
                     baseZoomForGesture = SettingsManager.shared.zoomLevel

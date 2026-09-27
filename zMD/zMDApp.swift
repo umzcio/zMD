@@ -15,7 +15,7 @@ struct zMDApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("zMD", id: "main") {
             ContentView()
                 .environmentObject(documentManager)
                 .environmentObject(folderManager)
@@ -89,7 +89,17 @@ struct zMDApp: App {
                 .disabled(updateManager.isChecking)
             }
 
-            // Remove the default Close Window command to prevent ⌘W from closing the window
+            // Keep ⌘W reserved for Close Tab. SwiftUI places the native Close command in
+            // `saveItem`; replacing that group removes its duplicate ⌘W binding while the
+            // red titlebar button continues to use the NSWindow close delegate below.
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    documentManager.saveCurrentDocument()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(documentManager.openDocuments.isEmpty)
+            }
+
             CommandGroup(replacing: .appTermination) {
                 Button("Quit zMD") {
                     NSApplication.shared.terminate(nil)
@@ -247,14 +257,6 @@ struct zMDApp: App {
                     }
                     .disabled(documentManager.openDocuments.isEmpty)
                 }
-            }
-
-            CommandGroup(after: .saveItem) {
-                Button("Save") {
-                    documentManager.saveCurrentDocument()
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(documentManager.openDocuments.isEmpty)
             }
 
             CommandMenu("View") {
@@ -473,6 +475,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !DocumentManager.shared.isCloseAllInProgress else { return .terminateCancel }
         switch DocumentManager.shared.prepareForTermination(completion: { shouldTerminate in
             sender.reply(toApplicationShouldTerminate: shouldTerminate)
         }) {
@@ -483,6 +486,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .cancel:
             return .terminateCancel
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            DocumentManager.shared.showMainWindow()
+        }
+        return true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -531,6 +541,7 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
     static let shared = WindowCloseDelegate()
     weak var documentManager: DocumentManager?
     private weak var chromeWindow: NSWindow?
+    private weak var pendingWindowClose: NSWindow?
     private var chromeCancellable: AnyCancellable?
 
     /// Mirror the selected document into the window's titlebar: title, proxy icon
@@ -568,18 +579,39 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
             return true
         }
 
-        // If there are open documents, close the current one but keep window open
-        if !documentManager.openDocuments.isEmpty {
-            if let selectedId = documentManager.selectedDocumentId,
-               let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
-                documentManager.closeDocument(document)
+        // Ignore a second titlebar close while dirty-tab decisions or an asynchronous save
+        // are already in progress. The original request will either close or be cancelled.
+        if pendingWindowClose === sender { return false }
+
+        // With no tabs, the welcome window closes normally and the app remains running.
+        guard !documentManager.openDocuments.isEmpty else { return true }
+
+        pendingWindowClose = sender
+        switch documentManager.closeAllDocuments(completion: { [weak self, weak sender] success in
+            guard let self, let sender else { return }
+            self.pendingWindowClose = nil
+            if success {
+                sender.performClose(nil)
             }
-            // Don't close the window, just closed the document
+        }) {
+        case .terminateNow:
+            pendingWindowClose = nil
+            return true
+        case .terminateLater:
+            return false
+        case .cancel:
+            pendingWindowClose = nil
             return false
         }
+    }
 
-        // If no documents are open, also don't close (show welcome screen)
-        return false
+    /// Last-tab closure uses the same native window close path after its dirty decision has
+    /// succeeded. Red-button closure suppresses this during its own all-tabs cleanup.
+    func closeWindowWhenEmpty() {
+        guard documentManager?.openDocuments.isEmpty == true,
+              pendingWindowClose == nil,
+              let window = chromeWindow else { return }
+        window.performClose(nil)
     }
 }
 
