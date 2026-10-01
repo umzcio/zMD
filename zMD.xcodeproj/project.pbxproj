@@ -71,6 +71,9 @@
 		51AA00000000000000000062 /* EmailMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000060 /* EmailMessage.swift */; };
 		51AA00000000000000000063 /* EmailMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000060 /* EmailMessage.swift */; };
 		51AA00000000000000000065 /* EmailMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000064 /* EmailMessageTests.swift */; };
+		51AA00000000000000000071 /* OutlookMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000070 /* OutlookMessage.swift */; };
+		51AA00000000000000000072 /* OutlookMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000070 /* OutlookMessage.swift */; };
+		51AA00000000000000000073 /* OutlookMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000070 /* OutlookMessage.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -167,6 +170,7 @@
 		51AA00000000000000000007 /* QuickLookHTMLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookHTMLTests.swift; sourceTree = "<group>"; };
 		51AA00000000000000000060 /* EmailMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailMessage.swift; sourceTree = "<group>"; };
 		51AA00000000000000000064 /* EmailMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailMessageTests.swift; sourceTree = "<group>"; };
+		51AA00000000000000000070 /* OutlookMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlookMessage.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -234,6 +238,7 @@
 				E77A00000000000000000100 /* InlineMarkdown.swift */,
 				51AA00000000000000000001 /* SharedConstants.swift */,
 				51AA00000000000000000060 /* EmailMessage.swift */,
+				51AA00000000000000000070 /* OutlookMessage.swift */,
 				F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */,
 				F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */,
 				F1A2B3C4D5E6F708A /* QuickOpenView.swift */,
@@ -420,6 +425,7 @@ A1111111 /* zMD.app */,
 			files = (
 				F60000000000000000000001 /* AccessibilityCopy.swift in Sources */,
 				51AA00000000000000000061 /* EmailMessage.swift in Sources */,
+				51AA00000000000000000071 /* OutlookMessage.swift in Sources */,
 				F60000000000000000000003 /* HelpHTML.swift in Sources */,
 				F60000000000000000000011 /* DropHandler.swift in Sources */,
 				F60000000000000000000013 /* WelcomeView.swift in Sources */,
@@ -479,6 +485,7 @@ A1111111 /* zMD.app */,
 				51AA00000000000000000018 /* QuickLookHTML.swift in Sources */,
 				51AA00000000000000000019 /* QuickLookHTMLTests.swift in Sources */,
 				51AA00000000000000000063 /* EmailMessage.swift in Sources */,
+				51AA00000000000000000073 /* OutlookMessage.swift in Sources */,
 				51AA00000000000000000065 /* EmailMessageTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -490,6 +497,7 @@ A1111111 /* zMD.app */,
 				51AA00000000000000000015 /* PreviewProvider.swift in Sources */,
 				51AA00000000000000000016 /* QuickLookHTML.swift in Sources */,
 				51AA00000000000000000062 /* EmailMessage.swift in Sources */,
+				51AA00000000000000000072 /* OutlookMessage.swift in Sources */,
 				51AA00000000000000000013 /* MarkdownParser.swift in Sources */,
 				51AA00000000000000000014 /* InlineMarkdown.swift in Sources */,
 				51AA00000000000000000012 /* SharedConstants.swift in Sources */,

@@ -15,8 +15,14 @@ nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingControll
 
         // .eml: parse as MIME and render to markdown; everything else IS markdown.
         let markdown: String
-        if url.pathExtension.lowercased() == "eml" {
+        let ext = url.pathExtension.lowercased()
+        if ext == "eml" {
             markdown = EmailMessage.parse(data).markdownRepresentation()
+        } else if ext == "msg" {
+            // Not truncated for .msg: the compound file's directory must be intact. The 2 MB
+            // cap would corrupt it, so read the whole file (bounded by what Finder hands us).
+            let whole = try Data(contentsOf: url)
+            markdown = OutlookMessage.parse(whole)?.markdownRepresentation() ?? "# Unreadable message\n"
         } else {
             markdown = QuickLookHTML.decode(data, truncated: truncated)
         }

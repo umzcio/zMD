@@ -154,14 +154,24 @@ class DocumentManager: ObservableObject {
     private let recentFilesKey = DefaultsKeys.recentFiles
     private let alertManager = AlertManager.shared
 
-    /// File extensions opened as email (RFC 5322 / MIME) rather than markdown.
-    nonisolated static let emailExtensions: Set<String> = ["eml"]
+    /// File extensions opened as email rather than markdown: .eml (RFC 5322 / MIME) and
+    /// .msg (Outlook compound file).
+    nonisolated static let emailExtensions: Set<String> = ["eml", "msg"]
 
     /// Decode a file into displayable markdown plus its kind. Emails are parsed as MIME and
     /// rendered to markdown (EmailMessage.markdownRepresentation); everything else is text.
     private func decodeDocumentData(_ data: Data, url: URL) -> (content: String, encoding: String, kind: MarkdownDocument.Kind) {
-        if Self.emailExtensions.contains(url.pathExtension.lowercased()) {
-            let message = EmailMessage.parse(data)
+        let ext = url.pathExtension.lowercased()
+        if Self.emailExtensions.contains(ext) {
+            let message: EmailMessage
+            if ext == "msg" {
+                guard let parsed = OutlookMessage.parse(data) else {
+                    return ("# Unreadable message\n\nThis file is not an Outlook message zMD can read.\n", "Email", .email)
+                }
+                message = parsed
+            } else {
+                message = EmailMessage.parse(data)
+            }
             return (message.markdownRepresentation(), "Email", .email)
         }
         let (content, encoding) = decodeFileData(data)
@@ -244,7 +254,7 @@ class DocumentManager: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown"), UTType(filenameExtension: "eml")].compactMap { $0 }
+        panel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown"), UTType(filenameExtension: "eml"), UTType(filenameExtension: "msg")].compactMap { $0 }
 
         panel.begin { response in
             if response == .OK {

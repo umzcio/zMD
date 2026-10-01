@@ -32,6 +32,7 @@
 			<array>
 				<string>net.daringfireball.markdown</string>
 				<string>com.apple.mail.email</string>
+				<string>com.microsoft.outlook.msg</string>
 			</array>
 			<key>QLSupportsSearchableItems</key>
 			<false/>
