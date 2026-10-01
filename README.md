@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <strong>Native macOS markdown editor and viewer</strong><br/>
+  <strong>Native macOS markdown editor and viewer — and a reader for <code>.eml</code> / <code>.msg</code> email files</strong><br/>
   A lightweight, Typora-inspired app with live rendering, tabs, an outline sidebar, and full export support.<br/><br/>
   <a href="https://github.com/umzcio/zMD/releases/latest">Download</a> · <a href="https://github.com/umzcio/zMD/issues">Issues</a> · <a href="https://github.com/umzcio/zMD/blob/master/CLAUDE.md">Developer Guide</a>
 </p>
@@ -29,15 +29,18 @@ It's a native SwiftUI app built around Apple's `NSTextView` rather than a web vi
 
 If you read markdown, occasionally edit it, or hand markdown to other humans as PDFs and Word docs, this is for you.
 
+Since v2.10 it also fills a gap macOS leaves open: there is no built-in way to look at a saved `.eml` or Outlook `.msg` file without importing it into a mail client. zMD opens both read-only — headers, body, attachment list — and Quick Look previews them in Finder.
+
 ---
 
 ## How It Works
 
 ```
-Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
+Open .md  --> Live Preview + Source Editor --> Export PDF/HTML/Word
+Open .eml / .msg --> Rendered email (read-only) --> Export PDF/HTML/Word
 ```
 
-1. **Open a file**: `⌘O`, drag-drop, or create a new untitled doc with `⌘N`
+1. **Open a file**: `⌘O`, drag-drop, or create a new untitled doc with `⌘N` — `.md`, `.markdown`, `.eml`, and `.msg` are all accepted
 2. **Choose a view mode**: Preview (rendered), Source (editor with syntax highlighting), or Split (side-by-side with scroll sync)
 3. **Edit with assistance**: line numbers, autocomplete, auto-indent, list continuation, Cmd+B/I/K shortcuts, find & replace with regex
 4. **Preview everything**: headings, code blocks with syntax highlighting, tables, Mermaid diagrams, LaTeX math, clickable links
@@ -73,15 +76,23 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 
 ### Navigation & Search
 - **Multi-tab interface** — drag to reorder, right-click for tab options
-- **Folder sidebar** — open a directory and browse all markdown files with FSEvents watching
+- **Folder sidebar** — open a directory and browse all markdown and email files with FSEvents watching
 - **Outline sidebar** — hierarchical heading navigation with click-to-scroll
 - **Quick switcher** (`⌘⇧O`) — fuzzy search across open files, or `@file` / `#heading` targeted search
 - **Command palette** (`⌘K`) — every app action, searchable
 - **Find in document** (`⌘F`) — match highlighting with next/previous navigation
 - **Search in folder** (`⌃⇧F`, or type `>` in the quick switcher) — search file contents across the open folder; Enter opens the file on that exact match
 - **Quick Look** — press Space on a `.md`, `.eml`, or `.msg` file in Finder for a rendered preview
-- **Email viewer** — open `.eml` and Outlook `.msg` files (drag in, File → Open, or from the folder sidebar): headers, body, attachment list, and Export to PDF. Read-only; remote images are blocked by default
 - **Reading position memory** — automatically remembers scroll position per document
+
+### Email Files (`.eml` / `.msg`)
+- **Open like any document** — drag in, File → Open, double-click in Finder, or pick from the folder sidebar; each email gets a tab
+- **`.eml`** — RFC 5322 / MIME: encoded headers, multipart bodies (HTML preferred, plain text fallback), inline `cid:` images, forwarded messages
+- **`.msg`** — Outlook's binary format: MAPI properties, recipients, attachments, and the compressed-RTF body de-encapsulated back to its original HTML
+- **What you see** — Subject, From, To, Cc, Reply-To, Date, an attachment list with sizes, then the body
+- **Read-only** — the file on disk is never written; use Export to save a PDF, HTML, or Word copy
+- **Private by default** — remote images, tracking pixels, and scripts are stripped before rendering; a notice shows how many remote images were blocked
+- **Quick Look** — Space in Finder previews both formats offline
 
 ### Export & Print
 - **PDF export** — paginated, formatted, with syntax-highlighted code blocks
@@ -95,7 +106,7 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 - **Multi-encoding detection** — auto-decodes UTF-8, Windows CP1252, ISO Latin-1, Mac Roman, UTF-16
 - **File operations** — Duplicate, Rename, Move To, Reveal in Finder
 - **Open Recent** — last 10 files with bookmarks for sandboxed access
-- **Drag-and-drop** — drop `.md` files onto the window to open
+- **Drag-and-drop** — drop `.md`, `.eml`, or `.msg` files (or a folder of them) onto the window to open
 - **Security-scoped bookmarks** — persistent save access across launches
 
 ### UX Polish
