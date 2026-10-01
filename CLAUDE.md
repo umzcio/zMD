@@ -89,6 +89,16 @@ zMDApp (App entry point)
 
 All exports use `NSSavePanel` and run on main thread. HTML conversion routes through `MarkdownParser.shared.toHTML()` for consistent, safe output.
 
+### Email (.eml) Viewing
+
+`EmailMessage.swift` (Foundation-only; member of the app, the Quick Look extension, and the tests) parses RFC 5322 / MIME and renders an email to markdown that the normal pipeline displays and exports. Key rules:
+
+- **Read-only.** `MarkdownDocument.kind == .email` ⇒ `isReadOnly`. `content` is a *rendering* of the file; `updateContent` refuses edits and `saveDocument` is a no-op, so the `.eml` on disk can never be overwritten with markdown. `DocumentViewModeContent` always shows the preview for read-only documents regardless of view mode.
+- **Privacy.** `EmailHTMLSanitizer` blocks remote images / CSS `url()` / `background=` (tracking pixels) and strips script-like elements before the HTML reaches AppKit's importer, which would otherwise fetch them. `cid:` images are inlined as `data:` URIs.
+- **Body is last.** The HTML body is the final block in the generated markdown because unbalanced email HTML runs to end-of-document in the parser.
+- Add new email extensions to `DocumentManager.emailExtensions`; every entry point (open panel, drag-drop, Finder open, folder sidebar, Quick Look's `QLSupportedContentTypes`) keys off it or the matching UTI (`com.apple.mail.email`).
+- Not supported: `.msg` (Outlook binary) — see the plan in the project discussion; folder content search skips `.eml` (MIME-encoded bodies).
+
 ### Quick Look Extension
 
 `zMDQuickLook/` is a separate app-extension target (`zMDQuickLook.appex`, bundle id `com.zmd.app.QuickLook`) embedded in `zMD.app/Contents/PlugIns`. It previews `net.daringfireball.markdown` files in Finder (Space) as HTML.
@@ -158,6 +168,7 @@ The app currently ships **un-sandboxed** (direct `.dmg` distribution, not Mac Ap
 ### Known Limitations
 
 - Quick Look previews (sandboxed, no network): Mermaid/KaTeX show as source text; relative and remote images do not load
+- Email viewing: remote images are blocked with no "load remote content" action yet; attachments are listed but cannot be saved; `.msg` is not supported
 - Images/diagrams are sized once at build time, so one wider than a very narrow pane still overflows (text reflows; attachments don't)
 - Text selection implementation is incomplete (partially works)
 - Table rendering may overflow on very wide tables

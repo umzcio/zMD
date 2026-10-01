@@ -79,7 +79,8 @@ Open .md --> Live Preview + Source Editor --> Export PDF/HTML/Word
 - **Command palette** (`⌘K`) — every app action, searchable
 - **Find in document** (`⌘F`) — match highlighting with next/previous navigation
 - **Search in folder** (`⌃⇧F`, or type `>` in the quick switcher) — search file contents across the open folder; Enter opens the file on that exact match
-- **Quick Look** — press Space on a `.md` file in Finder for a rendered preview
+- **Quick Look** — press Space on a `.md` or `.eml` file in Finder for a rendered preview
+- **Email viewer** — open `.eml` files (drag in, File → Open, or from the folder sidebar): headers, body, attachment list, and Export to PDF. Read-only; remote images are blocked by default
 - **Reading position memory** — automatically remembers scroll position per document
 
 ### Export & Print

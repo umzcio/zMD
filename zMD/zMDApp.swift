@@ -503,7 +503,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Case-insensitive: Finder happily hands us README.MD; the case-sensitive compare
             // silently ignored it (DropHandler already lowercases — keep the paths consistent).
             let ext = url.pathExtension.lowercased()
-            if ext == "md" || ext == "markdown" {
+            if ext == "md" || ext == "markdown" || DocumentManager.emailExtensions.contains(ext) {
                 documentManager.loadDocument(from: url)
             }
         }
@@ -517,7 +517,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if let urlString = urlList.atIndex(i)?.stringValue,
                    let url = URL(string: urlString) {
                     let ext = url.pathExtension.lowercased()
-                    if ext == "md" || ext == "markdown" {
+                    if ext == "md" || ext == "markdown" || DocumentManager.emailExtensions.contains(ext) {
                         documentManager.loadDocument(from: url)
                     }
                 }

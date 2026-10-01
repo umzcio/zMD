@@ -324,7 +324,9 @@ class QuickOpenNSView: NSView {
         contentSearchTask?.cancel()
         contentSearchGeneration += 1
         let generation = contentSearchGeneration
-        let urls = candidateFileURLs()
+        // Markdown only: .eml files are MIME-encoded (base64 / quoted-printable bodies), so a
+        // raw text search through them produces garbage hits or misses everything.
+        let urls = candidateFileURLs().filter { !DocumentManager.emailExtensions.contains($0.pathExtension.lowercased()) }
 
         contentSearchTask = Task { [weak self] in
             let worker = Task.detached(priority: .userInitiated) {

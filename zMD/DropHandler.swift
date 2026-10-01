@@ -85,5 +85,6 @@ enum DropHandler {
 
     private static func isMarkdown(_ url: URL) -> Bool {
         ["md", "markdown"].contains(url.pathExtension.lowercased())
+            || DocumentManager.emailExtensions.contains(url.pathExtension.lowercased())
     }
 }

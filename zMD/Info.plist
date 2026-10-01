@@ -29,6 +29,22 @@
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>
+				<string>eml</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Email Message</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.apple.mail.email</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>md</string>
 				<string>markdown</string>
 			</array>

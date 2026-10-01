@@ -154,6 +154,20 @@ class DocumentManager: ObservableObject {
     private let recentFilesKey = DefaultsKeys.recentFiles
     private let alertManager = AlertManager.shared
 
+    /// File extensions opened as email (RFC 5322 / MIME) rather than markdown.
+    nonisolated static let emailExtensions: Set<String> = ["eml"]
+
+    /// Decode a file into displayable markdown plus its kind. Emails are parsed as MIME and
+    /// rendered to markdown (EmailMessage.markdownRepresentation); everything else is text.
+    private func decodeDocumentData(_ data: Data, url: URL) -> (content: String, encoding: String, kind: MarkdownDocument.Kind) {
+        if Self.emailExtensions.contains(url.pathExtension.lowercased()) {
+            let message = EmailMessage.parse(data)
+            return (message.markdownRepresentation(), "Email", .email)
+        }
+        let (content, encoding) = decodeFileData(data)
+        return (content, encoding, .markdown)
+    }
+
     /// Decode file data trying multiple encodings, returns content and encoding name.
     /// Order: BOM sniff → strict UTF-8 → CP1252 heuristic → Mac Roman → ISO-8859-1 catch-all.
     /// L5 note: CP1252 *almost* decodes any byte sequence — Foundation rejects 5 undefined
@@ -230,7 +244,7 @@ class DocumentManager: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
+        panel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown"), UTType(filenameExtension: "eml")].compactMap { $0 }
 
         panel.begin { response in
             if response == .OK {
@@ -256,9 +270,10 @@ class DocumentManager: ObservableObject {
 
         do {
             let data = try Data(contentsOf: url)
-            let (fileContent, encoding) = decodeFileData(data)
+            let (fileContent, encoding, kind) = decodeDocumentData(data, url: url)
 
             var document = MarkdownDocument(url: url, content: fileContent)
+            document.kind = kind
             document.detectedEncoding = encoding
             document.bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
             document.directoryBookmarkData = directoryBookmark
@@ -295,7 +310,7 @@ class DocumentManager: ObservableObject {
             return
         }
 
-        let (fileContent, encoding) = decodeFileData(data)
+        let (fileContent, encoding, _) = decodeDocumentData(data, url: document.url)
 
         if let index = openDocuments.firstIndex(where: { $0.id == document.id }) {
             // Deliberately NOT arming fileWatchers[...]?.ignoreNextChange here: reload only READS
@@ -519,6 +534,9 @@ class DocumentManager: ObservableObject {
 
     func updateContent(for documentId: UUID, newContent: String) {
         guard let index = openDocuments.firstIndex(where: { $0.id == documentId }) else { return }
+        // Read-only kinds (email): content is a rendering of the file, not the file. Accepting
+        // an edit would mark it dirty and auto-save would overwrite the .eml with markdown.
+        guard !openDocuments[index].isReadOnly else { return }
         openDocuments[index].content = newContent
         openDocuments[index].isDirty = true
 
@@ -557,6 +575,12 @@ class DocumentManager: ObservableObject {
 
     private func saveDocument(id: UUID, completion: ((Bool) -> Void)?) {
         guard let index = openDocuments.firstIndex(where: { $0.id == id }) else {
+            completion?(false)
+            return
+        }
+        if openDocuments[index].isReadOnly {
+            // Nothing to save and nothing that may be written. Export offers a copy.
+            ToastManager.shared.show("Emails are read-only — use Export to save a copy", style: .info)
             completion?(false)
             return
         }
@@ -1011,9 +1035,22 @@ class DocumentManager: ObservableObject {
 }
 
 struct MarkdownDocument: Identifiable {
+    /// What the file on disk is. `content` is always markdown for display; for non-markdown
+    /// kinds it is DERIVED from the file (an email rendered to markdown) and must never be
+    /// written back — see `isReadOnly`.
+    enum Kind: Sendable {
+        case markdown
+        case email
+    }
+
     let id: UUID
     var url: URL
     var content: String
+    var kind: Kind = .markdown
+    /// True for documents whose `content` is a rendering of the file rather than the file
+    /// itself. Editing, saving, and auto-save are disabled: saving would overwrite the original
+    /// (e.g. a .eml) with markdown.
+    var isReadOnly: Bool { kind != .markdown }
     var isDirty: Bool = false
     var isUntitled: Bool = false
     var bookmarkData: Data?

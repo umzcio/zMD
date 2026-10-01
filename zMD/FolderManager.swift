@@ -217,7 +217,7 @@ class FolderManager: ObservableObject {
                 }
             } else {
                 let ext = item.pathExtension.lowercased()
-                if ext == "md" || ext == "markdown" {
+                if ext == "md" || ext == "markdown" || DocumentManager.emailExtensions.contains(ext) {
                     files.append(FileTreeItem(
                         id: relativePath,
                         url: item,

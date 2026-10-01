@@ -12,7 +12,12 @@ struct DocumentViewModeContent: View {
 
     @ViewBuilder
     var body: some View {
-        if let paneMode {
+        if document.isReadOnly {
+            // Emails have no editable source: always the rendered view, whatever the global
+            // view mode or split-pane mode says. (The source editor would show the derived
+            // markdown and any keystroke would try to write it back over the .eml.)
+            preview(searchEnabled: previewSupportsSearch, scrollSyncEnabled: false)
+        } else if let paneMode {
             switch paneMode {
             case .rendered:
                 preview(searchEnabled: previewSupportsSearch, scrollSyncEnabled: false)

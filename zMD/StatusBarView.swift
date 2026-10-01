@@ -15,7 +15,7 @@ struct StatusBarView: View {
 
                 // Right: cursor position, zoom, view mode, encoding
                 HStack(spacing: 8) {
-                    if documentManager.viewMode != .preview {
+                    if documentManager.viewMode != .preview && !document.isReadOnly {
                         // Real cursor position published by SourceEditorView.Coordinator.
                         Text("Ln \(documentManager.currentCursorLine), Col \(documentManager.currentCursorColumn)")
                             .font(.system(size: 11))
@@ -78,7 +78,7 @@ struct StatusBarView: View {
                     .menuStyle(.borderlessButton)
                     .fixedSize()
 
-                    Text(documentManager.viewMode.rawValue)
+                    Text(document.isReadOnly ? "Email" : documentManager.viewMode.rawValue)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
 

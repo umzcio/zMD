@@ -13,7 +13,13 @@ nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingControll
         let url = request.fileURL
         let (data, truncated) = try QuickLookHTML.readPrefix(of: url)
 
-        let markdown = QuickLookHTML.decode(data, truncated: truncated)
+        // .eml: parse as MIME and render to markdown; everything else IS markdown.
+        let markdown: String
+        if url.pathExtension.lowercased() == "eml" {
+            markdown = EmailMessage.parse(data).markdownRepresentation()
+        } else {
+            markdown = QuickLookHTML.decode(data, truncated: truncated)
+        }
 
         var html = QuickLookHTML.makeOfflineSafe(
             MarkdownParser.shared.toHTML(markdown, includeStyles: true)

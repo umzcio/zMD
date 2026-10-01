@@ -67,6 +67,10 @@
 		51AA00000000000000000017 /* zMDQuickLook.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000006 /* zMDQuickLook.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		51AA00000000000000000018 /* QuickLookHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000003 /* QuickLookHTML.swift */; };
 		51AA00000000000000000019 /* QuickLookHTMLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000007 /* QuickLookHTMLTests.swift */; };
+		51AA00000000000000000061 /* EmailMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000060 /* EmailMessage.swift */; };
+		51AA00000000000000000062 /* EmailMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000060 /* EmailMessage.swift */; };
+		51AA00000000000000000063 /* EmailMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000060 /* EmailMessage.swift */; };
+		51AA00000000000000000065 /* EmailMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AA00000000000000000064 /* EmailMessageTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -161,6 +165,8 @@
 		51AA00000000000000000005 /* zMDQuickLook.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = zMDQuickLook.entitlements; sourceTree = "<group>"; };
 		51AA00000000000000000006 /* zMDQuickLook.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = zMDQuickLook.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		51AA00000000000000000007 /* QuickLookHTMLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookHTMLTests.swift; sourceTree = "<group>"; };
+		51AA00000000000000000060 /* EmailMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailMessage.swift; sourceTree = "<group>"; };
+		51AA00000000000000000064 /* EmailMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailMessageTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -227,6 +233,7 @@
 				F1A2B3C4D5E6F7084 /* MarkdownParser.swift */,
 				E77A00000000000000000100 /* InlineMarkdown.swift */,
 				51AA00000000000000000001 /* SharedConstants.swift */,
+				51AA00000000000000000060 /* EmailMessage.swift */,
 				F1A2B3C4D5E6F7086 /* MarkdownTextView.swift */,
 				F1A2B3C4D5E6F7088 /* SyntaxHighlighter.swift */,
 				F1A2B3C4D5E6F708A /* QuickOpenView.swift */,
@@ -272,6 +279,7 @@ A1111111 /* zMD.app */,
 				E77A00000000000000000201 /* InlineMarkdownTests.swift */,
 				6242B8DCAEB7EAC8A2896FC8 /* MarkdownParserTests.swift */,
 				51AA00000000000000000007 /* QuickLookHTMLTests.swift */,
+				51AA00000000000000000064 /* EmailMessageTests.swift */,
 			);
 			path = zMDTests;
 			sourceTree = "<group>";
@@ -411,6 +419,7 @@ A1111111 /* zMD.app */,
 			buildActionMask = 2147483647;
 			files = (
 				F60000000000000000000001 /* AccessibilityCopy.swift in Sources */,
+				51AA00000000000000000061 /* EmailMessage.swift in Sources */,
 				F60000000000000000000003 /* HelpHTML.swift in Sources */,
 				F60000000000000000000011 /* DropHandler.swift in Sources */,
 				F60000000000000000000013 /* WelcomeView.swift in Sources */,
@@ -469,6 +478,8 @@ A1111111 /* zMD.app */,
 				84B9A8D6DB385775F9778A9E /* MarkdownParserTests.swift in Sources */,
 				51AA00000000000000000018 /* QuickLookHTML.swift in Sources */,
 				51AA00000000000000000019 /* QuickLookHTMLTests.swift in Sources */,
+				51AA00000000000000000063 /* EmailMessage.swift in Sources */,
+				51AA00000000000000000065 /* EmailMessageTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -478,6 +489,7 @@ A1111111 /* zMD.app */,
 			files = (
 				51AA00000000000000000015 /* PreviewProvider.swift in Sources */,
 				51AA00000000000000000016 /* QuickLookHTML.swift in Sources */,
+				51AA00000000000000000062 /* EmailMessage.swift in Sources */,
 				51AA00000000000000000013 /* MarkdownParser.swift in Sources */,
 				51AA00000000000000000014 /* InlineMarkdown.swift in Sources */,
 				51AA00000000000000000012 /* SharedConstants.swift in Sources */,
