@@ -162,10 +162,11 @@ Press `⌘R` in Xcode to build and run.
 ### Build a Release DMG
 
 ```bash
-./scripts/build-dmg.sh
+brew install create-dmg   # once
+./scripts/build-dmg.sh    # NOTARIZE=0 ./scripts/build-dmg.sh to skip notarization
 ```
 
-Produces `build/zMD.dmg` with the drag-to-Applications installer layout.
+Produces `build/zMD.dmg`: a branded "Install zMD" window (background rendered by `scripts/render-dmg-background.swift`) with the app on the left, an Applications link on the right, and the bundle notarized and stapled.
 
 ---
 

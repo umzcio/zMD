@@ -42,6 +42,10 @@ cp -r build/Release/zMD.app /Applications/
 
 **Note:** First launch on unsigned builds requires right-click → Open to bypass macOS Gatekeeper.
 
+### Release DMG
+
+`scripts/build-dmg.sh` builds Release, renders the installer background with `scripts/render-dmg-background.swift` (720×440 points at 2×), packages with `create-dmg` (`brew install create-dmg`), then notarizes, staples the .app, re-packages, re-notarizes, and staples the DMG. The icon positions in the `create-dmg` call and the pill/arrow positions in the renderer are the same numbers used by zStats and zWhisper — change them together. The output path `build/zMD.dmg` is what `gh release create` uploads and what `UpdateManager` downloads, so keep the name.
+
 ## Architecture
 
 ### State Management Pattern
