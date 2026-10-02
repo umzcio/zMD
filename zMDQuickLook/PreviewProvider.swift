@@ -11,20 +11,28 @@ import UniformTypeIdentifiers
 nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
     func providePreview(for request: QLFilePreviewRequest) async throws -> QLPreviewReply {
         let url = request.fileURL
-        let (data, truncated) = try QuickLookHTML.readPrefix(of: url)
-
-        // .eml: parse as MIME and render to markdown; everything else IS markdown.
-        let markdown: String
         let ext = url.pathExtension.lowercased()
-        if ext == "eml" {
-            markdown = EmailMessage.parse(data).markdownRepresentation()
-        } else if ext == "msg" {
-            // Not truncated for .msg: the compound file's directory must be intact. The 2 MB
-            // cap would corrupt it, so read the whole file (bounded by what Finder hands us).
-            let whole = try Data(contentsOf: url)
-            markdown = OutlookMessage.parse(whole)?.markdownRepresentation() ?? "# Unreadable message\n"
+
+        // .eml: parse as MIME and render to markdown; .msg: compound file; everything else IS
+        // markdown.
+        let markdown: String
+        var truncated = false
+        if ext == "msg" {
+            // A compound file cannot be previewed from a prefix (its directory and FAT are
+            // scattered through the file), so it is read whole under its own, larger cap and is
+            // never "truncated": either it fits and the preview is complete, or it does not.
+            let (whole, overCap) = try QuickLookHTML.readPrefix(of: url, maxBytes: QuickLookHTML.maxCompoundFileBytes)
+            if overCap {
+                markdown = "# Message too large to preview\n\nOpen the file in zMD to view it.\n"
+            } else {
+                markdown = OutlookMessage.parse(whole)?.markdownRepresentation() ?? "# Unreadable message\n"
+            }
         } else {
-            markdown = QuickLookHTML.decode(data, truncated: truncated)
+            let (data, wasTruncated) = try QuickLookHTML.readPrefix(of: url)
+            truncated = wasTruncated
+            markdown = ext == "eml"
+                ? EmailMessage.parse(data).markdownRepresentation()
+                : QuickLookHTML.decode(data, truncated: truncated)
         }
 
         var html = QuickLookHTML.makeOfflineSafe(

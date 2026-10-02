@@ -515,3 +515,169 @@ nonisolated final class OutlookMessageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), file, "the .msg must never be written")
     }
 }
+
+// MARK: - Code-review regressions (v2.10.0)
+
+nonisolated final class EmailReviewRegressionTests: XCTestCase {
+    typealias B = TestCompoundFileBuilder
+
+    private func eml(_ s: String) -> Data { Data(s.replacingOccurrences(of: "\n", with: "\r\n").utf8) }
+
+    func testDuplicateContentIDsDoNotTrap() {
+        let png = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
+        let m = EmailMessage.parse(eml("""
+        From: a@example.com
+        Subject: dup
+        Content-Type: multipart/related; boundary="r"
+
+        --r
+        Content-Type: text/html
+
+        <p>x</p><img src="cid:logo">
+        --r
+        Content-Type: image/png
+        Content-ID: <logo>
+        Content-Transfer-Encoding: base64
+
+        \(png)
+        --r
+        Content-Type: image/png
+        Content-ID: <logo>
+        Content-Transfer-Encoding: base64
+
+        \(png)
+        --r--
+        """))
+        XCTAssertEqual(m.attachments.count, 2)
+        let (html, _) = m.renderedBodyHTML()
+        XCTAssertTrue(html.contains("data:image/png;base64,"), "first duplicate wins and still resolves")
+    }
+
+    func testCSSImportIsStrippedLikeRemoteURL() {
+        let r = EmailHTMLSanitizer.sanitize("""
+        <html><head><style>@import "https://tracker.example/p.css"; @import url(https://t.example/x.css); p { color: red }</style></head>
+        <body><p style="background:url(https://t.example/b.png)">hi</p></body></html>
+        """, inlineParts: [:])
+        XCTAssertFalse(r.html.contains("@import"))
+        XCTAssertFalse(r.html.lowercased().contains("https://"))
+        XCTAssertTrue(r.html.contains("color: red"), "the rest of the stylesheet survives")
+    }
+
+    func testRawUTF8HeadersDecodeAndLatin1StillFallsBack() {
+        let utf8 = EmailMessage.parse(eml("Subject: Café plans — ok\nFrom: a@example.com\n\nbody"))
+        XCTAssertEqual(utf8.subject, "Café plans — ok")
+        var latin = Data("Subject: Caf".utf8); latin.append(0xE9); latin.append(Data(" plans\r\n\r\nbody".utf8))
+        XCTAssertEqual(EmailMessage.parse(latin).subject, "Café plans")
+        XCTAssertEqual(EmailMessage.parse(eml("Subject: =?utf-8?Q?Caf=C3=A9?=\n\nb")).subject, "Café", "encoded words unaffected")
+    }
+
+    func testBoundaryThatPrefixesANestedBoundaryDoesNotSplitTheInnerPart() {
+        let m = EmailMessage.parse(eml("""
+        Subject: nested
+        Content-Type: multipart/mixed; boundary="part"
+
+        --part
+        Content-Type: multipart/alternative; boundary="part1"
+
+        --part1
+        Content-Type: text/plain
+
+        plain
+        --part1
+        Content-Type: text/html
+
+        <p>HTML BODY</p>
+        --part1--
+        --part
+        Content-Type: application/pdf; name="a.pdf"
+        Content-Disposition: attachment; filename="a.pdf"
+
+        %PDF
+        --part--
+        """))
+        XCTAssertEqual(m.htmlBody?.contains("HTML BODY"), true)
+        XCTAssertEqual(m.textBody, "plain")
+        XCTAssertEqual(m.fileAttachments.map(\.filename), ["a.pdf"])
+    }
+
+    func testLaterHTMLOutsideAnAlternativeIsAppendedNotSubstituted() {
+        let m = EmailMessage.parse(eml("""
+        Subject: mixed
+        Content-Type: multipart/mixed; boundary="m"
+
+        --m
+        Content-Type: multipart/alternative; boundary="a"
+
+        --a
+        Content-Type: text/plain
+
+        plain
+        --a
+        Content-Type: text/html
+
+        <p>MAIN</p>
+        --a--
+        --m
+        Content-Type: text/html
+
+        <p>TRAILING FRAGMENT</p>
+        --m--
+        """))
+        let html = m.htmlBody ?? ""
+        XCTAssertTrue(html.contains("MAIN"), "the alternative's HTML must not be replaced by a trailing leaf")
+        XCTAssertTrue(html.contains("TRAILING FRAGMENT"))
+        XCTAssertLessThan(html.range(of: "MAIN")!.lowerBound, html.range(of: "TRAILING")!.lowerBound)
+    }
+
+    func testAlternativeStillPrefersTheLastHTMLAndKeepsPlainFallback() {
+        let m = EmailMessage.parse(eml("""
+        Subject: alt
+        Content-Type: multipart/alternative; boundary="a"
+
+        --a
+        Content-Type: text/plain
+
+        plain
+        --a
+        Content-Type: text/html
+
+        <p>FIRST</p>
+        --a
+        Content-Type: text/html
+
+        <p>SECOND</p>
+        --a--
+        """))
+        XCTAssertEqual(m.htmlBody?.contains("SECOND"), true)
+        XCTAssertEqual(m.htmlBody?.contains("FIRST"), false)
+        XCTAssertEqual(m.textBody, "plain")
+    }
+
+    func testCodepageOutOfRangeIsRejectedNotTrapped() {
+        XCTAssertNil(Charsets.encoding(forCodepage: -1))
+        XCTAssertNil(Charsets.encoding(forCodepage: Int32.min))
+        XCTAssertNil(Charsets.encoding(forCodepage: 99_999_999_999))
+        XCTAssertEqual(Charsets.encoding(forCodepage: 1252), .windowsCP1252)
+        let doc = RTFDocument(rtf: Data(#"{\rtf1\ansi\ansicpg99999999999 hi}"#.utf8), defaultEncoding: .windowsCP1252)
+        XCTAssertEqual(doc.plainText(), "hi")
+    }
+
+    func testLoopingFATAndMiniFATAreBoundedByFileSize() {
+        var file = B.build(root: [B.properties(topLevel: true), B.unicode(0x0037, "s"), B.unicode(0x1000, "b")])
+        // Sector 0 is the FAT: entry for the directory sector (1) points back to itself.
+        file.replaceSubrange((512 + 4)..<(512 + 8), with: B.le32(1))
+        // Mini FAT lives at sector 2: make the first mini stream loop on itself as well.
+        file.replaceSubrange(1024..<1028, with: B.le32(0))
+        let start = Date()
+        let cf = CompoundFile(data: file)
+        let root = cf.map { MAPIPropertySet(file: $0, storage: $0.root, isTopLevel: true) }
+        _ = root?.string(0x0037, ansi: .windowsCP1252)
+        _ = OutlookMessage.parse(file)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2, "a 2 KB file must not expand into gigabytes before the guard trips")
+    }
+
+    func testTruncationNoticeNeverAppliesToCompoundFiles() {
+        XCTAssertGreaterThan(QuickLookHTML.maxCompoundFileBytes, QuickLookHTML.maxInputBytes,
+                             "a .msg must be read whole, under a cap larger than the prefix cap used for text")
+    }
+}

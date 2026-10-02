@@ -105,14 +105,34 @@ nonisolated extension EmailMessage {
         var html: String?
         var attachments: [Attachment] = []
 
+        private mutating func appendHTML(_ s: String) { html = html.map { $0 + "\n" + s } ?? s }
+        private mutating func appendText(_ s: String) { text = text.map { $0 + "\n\n" + s } ?? s }
+
         mutating func collect(_ entity: MIMEEntity, inRelated: Bool) {
             let type = entity.contentType
             if type.type == "multipart" {
+                if type.subtype == "alternative" {
+                    // Alternatives are ordered by increasing fidelity: keep the richest one (the
+                    // last that yields HTML, else the last with text) but register every
+                    // alternative's resources so cid: references still resolve.
+                    var bestHTML: String?
+                    var bestText: String?
+                    for part in entity.parts {
+                        var candidate = BodyCollector()
+                        candidate.collect(part, inRelated: inRelated)
+                        attachments.append(contentsOf: candidate.attachments)
+                        if let h = candidate.html { bestHTML = h }
+                        if let t = candidate.text { bestText = t }   // kept as the plain-text fallback
+                    }
+                    if let bestHTML { appendHTML(bestHTML) }
+                    if let bestText { appendText(bestText) }
+                    return
+                }
                 let related = inRelated || type.subtype == "related"
                 for (index, part) in entity.parts.enumerated() {
                     // In multipart/related only the root (first) part may be body; siblings
                     // are resources even when they are text/html.
-                    collect(part, inRelated: related && index > 0 ? true : related && index == 0 ? false : inRelated)
+                    collect(part, inRelated: related && index > 0)
                 }
                 return
             }
@@ -124,9 +144,9 @@ nonisolated extension EmailMessage {
             if type.type == "text", !isAttachmentDisposition, !inRelated {
                 let string = entity.decodedText()
                 if type.subtype == "html" {
-                    if html == nil || true { html = string }   // later alternatives are preferred
+                    appendHTML(string)            // outside an alternative, later HTML parts are more body, not a replacement
                 } else if type.subtype == "plain" {
-                    if text == nil { text = string } else { text! += "\n\n" + string }
+                    appendText(string)
                 } else if text == nil {
                     text = string
                 }
@@ -336,10 +356,12 @@ nonisolated struct MIMEEntity: Sendable {
         return (data, Data())
     }
 
-    /// Unfold continuation lines and split `Name: value`. Header bytes are decoded as Latin-1
-    /// so nothing is lost before RFC 2047 decoding.
+    /// Unfold continuation lines and split `Name: value`. Headers are tried as UTF-8 first
+    /// (SMTPUTF8 / 8BITMIME mail carries raw UTF-8 subjects) and fall back to Latin-1, which
+    /// never fails, so no byte is lost before RFC 2047 decoding. Encoded words are pure ASCII
+    /// and decode identically either way.
     static func parseHeaders(_ data: Data) -> [(name: String, value: String)] {
-        let text = String(data: data, encoding: .isoLatin1) ?? String(decoding: data, as: UTF8.self)
+        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? String(decoding: data, as: UTF8.self)
         var logical: [String] = []
         for rawLine in text.components(separatedBy: "\n") {
             let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
@@ -368,12 +390,14 @@ nonisolated struct MIMEEntity: Sendable {
         var partStart: Int?
         var i = 0
         func isDelimiter(at index: Int) -> (Bool, closing: Bool, next: Int)? {
-            guard index + delimiter.count <= bytes.count, Array(bytes[index..<index + delimiter.count]) == delimiter else { return nil }
+            guard index + delimiter.count <= bytes.count, bytes[index..<index + delimiter.count].elementsEqual(delimiter) else { return nil }
             var j = index + delimiter.count
             var closing = false
             if j + 1 < bytes.count, bytes[j] == 0x2D, bytes[j + 1] == 0x2D { closing = true; j += 2 }
-            // Skip transport padding and the line end.
+            // Skip transport padding, then require the line to END here: `--part` must not match
+            // a nested `--part1` (RFC 2046 boundaries are distinct, not prefix-free).
             while j < bytes.count, bytes[j] == 0x20 || bytes[j] == 0x09 { j += 1 }
+            guard j == bytes.count || bytes[j] == 0x0D || bytes[j] == 0x0A else { return nil }
             if j < bytes.count, bytes[j] == 0x0D { j += 1 }
             if j < bytes.count, bytes[j] == 0x0A { j += 1 }
             return (true, closing, j)
@@ -648,10 +672,10 @@ nonisolated extension EmailMessage {
     /// email is never reinterpreted.
     func renderedBodyHTML() -> (html: String, blockedRemoteImages: Int) {
         if let htmlBody, !htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let inline = Dictionary(uniqueKeysWithValues: attachments.compactMap { a -> (String, Attachment)? in
+            let inline = Dictionary(attachments.compactMap { a -> (String, Attachment)? in
                 guard let cid = a.contentId else { return nil }
                 return (cid.lowercased(), a)
-            })
+            }, uniquingKeysWith: { first, _ in first })   // duplicate Content-IDs happen in forwarded mail; never trap
             let result = EmailHTMLSanitizer.sanitize(htmlBody, inlineParts: inline)
             return ("<div class=\"email-body\">\n\(result.html)\n</div>", result.blockedRemoteImages)
         }
@@ -765,11 +789,19 @@ nonisolated enum EmailHTMLSanitizer {
         }
         // Other remote fetches: background attributes and CSS url().
         html = removing(#"\s+background\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, from: html)
-        html = replacing(#"url\(\s*["']?\s*(?:https?:|//)[^)]*\)"#, in: html, with: "none")
+        html = stripRemoteCSS(html)
 
-        let cleanedStyles = styles.map { replacing(#"url\(\s*["']?\s*(?:https?:|//)[^)]*\)"#, in: $0, with: "none") }
+        let cleanedStyles = styles.map(stripRemoteCSS)
         let combined = (cleanedStyles.joined(separator: "\n") + "\n" + html).trimmingCharacters(in: .whitespacesAndNewlines)
         return Result(html: combined, blockedRemoteImages: blocked)
+    }
+
+    /// `url(http…)` and `@import` are the two ways a stylesheet can make the HTML importer fetch
+    /// a remote resource (`@import "https://…"` needs no `url(`), so both go.
+    private static func stripRemoteCSS(_ css: String) -> String {
+        var out = replacing(#"url\(\s*["']?\s*(?:https?:|//)[^)]*\)"#, in: css, with: "none")
+        out = removing(#"@import\b[^;{]*;?"#, from: out)
+        return out
     }
 
     private static func placeholder(_ text: String) -> String {

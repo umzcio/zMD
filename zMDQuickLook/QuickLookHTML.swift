@@ -10,6 +10,9 @@ nonisolated enum QuickLookHTML {
     /// Upper bound on how much of a file is read for a preview. Quick Look runs while the user is
     /// arrowing through Finder; a multi-hundred-MB log file renamed `.md` must not stall it.
     static let maxInputBytes = 2 * 1024 * 1024
+    /// Cap for `.msg` files, which must be read whole. Big enough for any ordinary mailbox export
+    /// with attachments; a sandboxed extension should not try to hold more than this.
+    static let maxCompoundFileBytes = 64 * 1024 * 1024
 
     /// Notice shown when the file was cut at `maxInputBytes`. HTML, inserted AFTER rendering:
     /// the cut lands at an arbitrary byte, often inside a fenced code / `$$` / HTML block, and

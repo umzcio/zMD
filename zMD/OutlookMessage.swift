@@ -229,7 +229,11 @@ nonisolated final class CompoundFile: @unchecked Sendable {
 
     private static let endOfChain: UInt32 = 0xFFFF_FFFE
     private static let freeSector: UInt32 = 0xFFFF_FFFF
-    private static let maxChain = 1 << 22   // defensive bound against FAT loops
+    /// A chain can never legitimately hold more sectors than the file (or mini stream) has, so
+    /// a looping FAT is cut off after at most one pass over the data instead of after millions
+    /// of appends.
+    private var maxChainLength: Int { data.count / sectorSize + 1 }
+    private var maxMiniChainLength: Int { miniStream.count / miniSectorSize + 1 }
 
     init?(data: Data) {
         guard data.count >= 512,
@@ -339,7 +343,7 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         var out = Data()
         var sector = UInt32(truncatingIfNeeded: startSector)
         var guardCount = 0
-        while sector < Self.endOfChain - 1, guardCount < Self.maxChain {   // < 0xFFFF_FFFD
+        while sector < Self.endOfChain - 1, guardCount < maxChainLength {   // < 0xFFFF_FFFD
             guard let chunk = sectorData(Int(sector)) else { break }
             out.append(chunk)
             guard Int(sector) < fat.count else { break }
@@ -353,7 +357,7 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         var out = Data()
         var sector = UInt32(truncatingIfNeeded: startSector)
         var guardCount = 0
-        while sector < Self.endOfChain - 1, guardCount < Self.maxChain {
+        while sector < Self.endOfChain - 1, guardCount < maxMiniChainLength {
             let start = Int(sector) * miniSectorSize
             guard start + miniSectorSize <= miniStream.count else {
                 if start < miniStream.count { out.append(miniStream.suffix(from: miniStream.startIndex + start)) }
@@ -650,6 +654,8 @@ nonisolated extension Charsets {
         case 10000: return .macOSRoman
         case 20127: return .ascii
         default:
+            // Code pages are 16-bit; anything else is corrupt input, not a lookup.
+            guard (0...65535).contains(cp) else { return nil }
             let cf = CFStringConvertWindowsCodepageToEncoding(UInt32(cp))
             guard cf != kCFStringEncodingInvalidId else { return nil }
             return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))

@@ -945,11 +945,22 @@ class DocumentManager: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([document.url])
     }
 
+    /// The save-panel types for file operations on `document`. A read-only document (an email)
+    /// must keep its own extension: letting the panel force `.md` onto raw MIME/OLE bytes would
+    /// make Finder, Quick Look, and the next reload all treat the file as markdown.
+    private func fileOperationContentTypes(for document: MarkdownDocument) -> [UTType] {
+        if document.isReadOnly {
+            return [UTType(filenameExtension: document.url.pathExtension.lowercased())].compactMap { $0 }
+        }
+        return [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
+    }
+
     func duplicateDocument(document: MarkdownDocument) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
+        savePanel.allowedContentTypes = fileOperationContentTypes(for: document)
         savePanel.directoryURL = document.url.deletingLastPathComponent()
-        savePanel.nameFieldStringValue = document.url.deletingPathExtension().lastPathComponent + " copy.md"
+        let copyExtension = document.isReadOnly ? document.url.pathExtension : "md"
+        savePanel.nameFieldStringValue = document.url.deletingPathExtension().lastPathComponent + " copy." + copyExtension
         savePanel.title = "Duplicate File"
         savePanel.message = "Choose where to save the duplicate file"
 
@@ -957,8 +968,14 @@ class DocumentManager: ObservableObject {
             guard response == .OK, let newURL = savePanel.url else { return }
 
             do {
-                let enc = DocumentManager.encoding(for: document.detectedEncoding)
-                try document.content.write(to: newURL, atomically: true, encoding: enc)
+                if document.isReadOnly {
+                    // `content` is a rendering, not the file: duplicate the bytes on disk.
+                    if FileManager.default.fileExists(atPath: newURL.path) { try FileManager.default.removeItem(at: newURL) }
+                    try FileManager.default.copyItem(at: document.url, to: newURL)
+                } else {
+                    let enc = DocumentManager.encoding(for: document.detectedEncoding)
+                    try document.content.write(to: newURL, atomically: true, encoding: enc)
+                }
                 // Open the duplicated file
                 self.loadDocument(from: newURL)
             } catch {
@@ -969,7 +986,7 @@ class DocumentManager: ObservableObject {
 
     func renameDocument(document: MarkdownDocument) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
+        savePanel.allowedContentTypes = fileOperationContentTypes(for: document)
         savePanel.directoryURL = document.url.deletingLastPathComponent()
         savePanel.nameFieldStringValue = document.url.lastPathComponent
         savePanel.title = "Rename File"
@@ -1005,7 +1022,7 @@ class DocumentManager: ObservableObject {
 
     func moveDocument(document: MarkdownDocument) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown")].compactMap { $0 }
+        savePanel.allowedContentTypes = fileOperationContentTypes(for: document)
         savePanel.nameFieldStringValue = document.url.lastPathComponent
         savePanel.title = "Move File"
         savePanel.message = "Choose a new location for the file"
