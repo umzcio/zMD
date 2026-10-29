@@ -1152,3 +1152,115 @@ nonisolated final class ReviewFixTests: XCTestCase {
         XCTAssertFalse(manager.isSearching, "must not start a search in whatever document happened to be selected")
     }
 }
+
+// MARK: - Window close (GitHub issue #5)
+
+/// The main window must close like any document window: the red button / File → Close /
+/// ⇧⌘W run the unsaved-changes flow for every tab, close all tabs, and hide the window; the
+/// app stays running and the window comes back when a document arrives or the Dock is clicked.
+nonisolated final class WindowCloseTests: XCTestCase {
+    @MainActor
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 400, height: 300),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        return window
+    }
+
+    @MainActor
+    private func withManager(_ body: (DocumentManager, WindowCloseDelegate, NSWindow) -> Void) {
+        let manager = DocumentManager.shared
+        let saved = (manager.openDocuments, manager.selectedDocumentId, manager.dirtyCloseConfirmer)
+        defer {
+            manager.openDocuments = saved.0
+            manager.selectedDocumentId = saved.1
+            manager.dirtyCloseConfirmer = saved.2
+        }
+        let delegate = WindowCloseDelegate.shared
+        delegate.documentManager = manager
+        let window = makeWindow()
+        window.delegate = delegate
+        delegate.attachWindowChrome(to: window)
+        body(manager, delegate, window)
+        window.delegate = nil
+    }
+
+    @MainActor
+    private func doc(_ name: String, dirty: Bool) -> MarkdownDocument {
+        MarkdownDocument(url: FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).md"),
+                         content: name, isDirty: dirty)
+    }
+
+    @MainActor
+    func testCloseWithCleanTabsClosesEveryTabAndHidesTheWindow() {
+        withManager { manager, delegate, window in
+            manager.openDocuments = [doc("a", dirty: false), doc("b", dirty: false)]
+            manager.selectedDocumentId = manager.openDocuments.first?.id
+            XCTAssertFalse(delegate.windowShouldClose(window), "the delegate performs the close itself")
+            XCTAssertTrue(manager.openDocuments.isEmpty, "closing the window closes all tabs, not just the selected one")
+            XCTAssertFalse(window.isVisible)
+        }
+    }
+
+    @MainActor
+    func testCloseOnTheWelcomeScreenHidesTheWindow() {
+        withManager { manager, delegate, window in
+            manager.openDocuments = []
+            delegate.closeMainWindow()          // what ⌘W / Close Window do with no tabs
+            XCTAssertFalse(window.isVisible, "previously the close was vetoed and nothing happened")
+        }
+    }
+
+    @MainActor
+    func testCancelInTheUnsavedChangesPromptKeepsTabsAndWindow() {
+        withManager { manager, delegate, window in
+            manager.openDocuments = [doc("a", dirty: true)]
+            manager.dirtyCloseConfirmer = FakeDirtyCloseConfirmer(responses: [.cancel])
+            XCTAssertFalse(delegate.windowShouldClose(window))
+            XCTAssertEqual(manager.openDocuments.count, 1)
+            XCTAssertTrue(window.isVisible)
+        }
+    }
+
+    @MainActor
+    func testDiscardingDirtyTabsClosesThemWithoutAskingTwice() {
+        withManager { manager, delegate, window in
+            manager.openDocuments = [doc("a", dirty: true), doc("b", dirty: true), doc("c", dirty: false)]
+            let fake = FakeDirtyCloseConfirmer(responses: [.discard, .discard])
+            manager.dirtyCloseConfirmer = fake
+            XCTAssertFalse(delegate.windowShouldClose(window))
+            XCTAssertEqual(fake.callIndex, 2, "each dirty tab is asked about exactly once")
+            XCTAssertTrue(manager.openDocuments.isEmpty)
+            XCTAssertFalse(window.isVisible)
+        }
+    }
+
+    @MainActor
+    func testADocumentArrivingWhileHiddenBringsTheWindowBack() {
+        withManager { manager, delegate, window in
+            manager.openDocuments = []
+            delegate.closeMainWindow()
+            XCTAssertFalse(window.isVisible)
+            manager.openDocuments = [doc("later", dirty: false)]   // Finder open / ⌘N / Open Recent all end here
+            let shown = expectation(description: "window reappears on the next main-queue turn")
+            DispatchQueue.main.async { shown.fulfill() }
+            wait(for: [shown], timeout: 2)
+            XCTAssertTrue(window.isVisible)
+        }
+    }
+
+    @MainActor
+    func testDockReopenRestoresTheHiddenWindow() {
+        withManager { manager, delegate, window in
+            manager.openDocuments = []
+            delegate.closeMainWindow()
+            XCTAssertFalse(window.isVisible)
+            let handled = AppDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false)
+            XCTAssertFalse(handled, "we restored our own window, so SwiftUI must not open a second one")
+            XCTAssertTrue(window.isVisible)
+            XCTAssertTrue(AppDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true),
+                          "with a visible window the default behaviour stands")
+        }
+    }
+}

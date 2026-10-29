@@ -89,7 +89,6 @@ struct zMDApp: App {
                 .disabled(updateManager.isChecking)
             }
 
-            // Remove the default Close Window command to prevent ⌘W from closing the window
             CommandGroup(replacing: .appTermination) {
                 Button("Quit zMD") {
                     NSApplication.shared.terminate(nil)
@@ -109,6 +108,7 @@ struct zMDApp: App {
                 .keyboardShortcut("o", modifiers: .command)
 
                 Button("Quick Open...") {
+                    WindowCloseDelegate.shared.showMainWindow()
                     NotificationCenter.default.post(name: .showQuickOpen, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -255,6 +255,15 @@ struct zMDApp: App {
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(documentManager.openDocuments.isEmpty)
+
+                Divider()
+
+                // Closes the whole window (every tab, after the unsaved-changes prompts), as
+                // Safari, Finder and Xcode do. ⌘W stays "Close Tab" while tabs are open.
+                Button("Close Window") {
+                    WindowCloseDelegate.shared.closeMainWindow()
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
             }
 
             CommandMenu("View") {
@@ -303,6 +312,7 @@ struct zMDApp: App {
                 Divider()
 
                 Button("Command Palette...") {
+                    WindowCloseDelegate.shared.showMainWindow()
                     NotificationCenter.default.post(name: .showCommandPalette, object: nil)
                 }
                 .keyboardShortcut("k", modifiers: .command)
@@ -339,14 +349,17 @@ struct zMDApp: App {
             }
 
             CommandMenu("Tab") {
-                Button("Close Tab") {
+                // ⌘W closes the current tab; on the welcome screen (no tabs) it closes the
+                // window instead, the way Safari's ⌘W behaves (GitHub issue #5).
+                Button(documentManager.openDocuments.isEmpty ? "Close Window" : "Close Tab") {
                     if let selectedId = documentManager.selectedDocumentId,
                        let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
                         documentManager.closeDocument(document)
+                    } else {
+                        WindowCloseDelegate.shared.closeMainWindow()
                     }
                 }
                 .keyboardShortcut("w", modifiers: .command)
-                .disabled(documentManager.openDocuments.isEmpty)
 
                 // Refresh Tab is reachable via this menu for discoverability, but the ⌘R
                 // keyboard shortcut lives solely on View → Refresh to avoid duplicate binding.
@@ -472,6 +485,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Dock icon click (or `open -a zMD`) after the window was closed: show our hidden main
+    /// window again instead of letting SwiftUI create a second one. Returning true falls
+    /// through to the default behaviour when there is no hidden window to restore.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag, WindowCloseDelegate.shared.showMainWindow() {
+            return false
+        }
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         switch DocumentManager.shared.prepareForTermination(completion: { shouldTerminate in
             sender.reply(toApplicationShouldTerminate: shouldTerminate)
@@ -561,25 +584,65 @@ class WindowCloseDelegate: NSObject, NSWindowDelegate {
         if window.title != title { window.title = title }
         if window.representedURL != url { window.representedURL = url }
         if window.isDocumentEdited != edited { window.isDocumentEdited = edited }
+        // A document arrived while the window was closed (Finder open, Open Recent, ⌘N, ⌘O):
+        // bring the window back. Every entry point funnels through DocumentManager, so this
+        // one hook covers them all.
+        if !window.isVisible, !documentManager.openDocuments.isEmpty {
+            showMainWindow()
+        }
     }
 
+    /// The red close button, File → Close, Close All, and our Close Window commands all land
+    /// here. The window closes the way a document window should (GitHub issue #5): every tab
+    /// goes through the same save / don't save / cancel flow quitting uses, then all tabs close
+    /// and the window goes away. The app keeps running (see AppDelegate), and the Dock icon,
+    /// ⌘N, or opening a file brings the window back.
+    ///
+    /// The window is hidden (`orderOut`) rather than destroyed: SwiftUI deallocates a closed
+    /// WindowGroup window, and recreating one from AppKit-side code (Finder "open", the Dock)
+    /// is not reliable across macOS versions. Hiding keeps the frame and makes reopen trivial.
+    /// Always returns false because the delegate performs the close itself once prompts resolve.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard let documentManager = documentManager else {
-            return true
-        }
-
-        // If there are open documents, close the current one but keep window open
-        if !documentManager.openDocuments.isEmpty {
-            if let selectedId = documentManager.selectedDocumentId,
-               let document = documentManager.openDocuments.first(where: { $0.id == selectedId }) {
-                documentManager.closeDocument(document)
-            }
-            // Don't close the window, just closed the document
+            sender.orderOut(nil)
             return false
         }
-
-        // If no documents are open, also don't close (show welcome screen)
+        switch documentManager.prepareForTermination(completion: { [weak self, weak sender] proceed in
+            guard proceed, let sender else { return }
+            self?.finishClosing(sender)
+        }) {
+        case .terminateNow:
+            finishClosing(sender)
+        case .terminateLater, .cancel:
+            break   // a save is in flight (completion closes later), or the user cancelled
+        }
         return false
+    }
+
+    private func finishClosing(_ window: NSWindow) {
+        documentManager?.closeAllDocumentsWithoutPrompt()
+        window.orderOut(nil)
+    }
+
+    /// Menu entry point for Close Window / ⌘W on the welcome screen. Routes through
+    /// `performClose` so it behaves exactly like the red button, including the prompts.
+    func closeMainWindow() {
+        guard let window = chromeWindow else { return }
+        if window.isVisible {
+            window.performClose(nil)
+        }
+    }
+
+    /// Bring the main window back after it was closed. Returns false when there is no window
+    /// to show (the caller may then fall back to SwiftUI creating one).
+    @discardableResult
+    func showMainWindow() -> Bool {
+        guard let window = chromeWindow else { return false }
+        if !window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 }
 

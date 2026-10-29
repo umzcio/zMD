@@ -180,7 +180,8 @@ Produces `build/zMD.dmg`: a branded "Install zMD" window (background rendered by
 | `⌘⇧O` | Quick switcher (fuzzy search files + headings) |
 | `⌘K` | Command palette |
 | `⌘S` | Save |
-| `⌘W` | Close tab |
+| `⌘W` | Close tab (closes the window when no tabs are open) |
+| `⇧⌘W` | Close window |
 | `⌘F` | Find in document |
 | `⌘⌥F` | Find and Replace (source/split mode) |
 | `⌘G` / `⌘⇧G` | Next / previous match |

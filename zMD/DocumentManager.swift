@@ -835,6 +835,16 @@ class DocumentManager: ObservableObject {
         }
     }
 
+    /// Close every tab with no prompts. Only valid after `prepareForTermination` has resolved
+    /// the unsaved-changes flow (each dirty document was saved or explicitly discarded), which
+    /// is how the window close path uses it. `closeDocument` would otherwise re-ask about
+    /// documents the user already chose to discard.
+    func closeAllDocumentsWithoutPrompt() {
+        for document in openDocuments {
+            closeDocumentWithoutPrompt(id: document.id)
+        }
+    }
+
     func prepareForTermination(completion: @escaping (Bool) -> Void) -> TerminationPreparation {
         prepareForTermination(discardedDirtyDocuments: [], completion: completion)
     }

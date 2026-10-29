@@ -120,7 +120,8 @@ Defined in `zMDApp.swift` using SwiftUI's `.commands` modifier:
 
 - File menu: Open (⌘O)
 - Export submenu: PDF, HTML (with/without styles), Word/RTF
-- Tab menu: Close (⌘W), Next (⌃Tab), Previous (⌃⇧Tab)
+- Tab menu: Close Tab (⌘W; closes the window on the welcome screen), Next (⌃Tab), Previous (⌃⇧Tab)
+- File → Close Window (⇧⌘W), File → Close, and the red close button all go through `WindowCloseDelegate.windowShouldClose`: unsaved-changes prompts for every tab, close all tabs, then the window is *hidden* (`orderOut`) rather than destroyed, so the Dock icon (`applicationShouldHandleReopen`), ⌘N, or opening a file can bring the same window back. Never veto the close again (GitHub issue #5).
 - Right-click context menu: Close Tab, Close Other Tabs
 
 ## File Organization
