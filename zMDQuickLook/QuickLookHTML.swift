@@ -13,6 +13,16 @@ nonisolated enum QuickLookHTML {
     /// Cap for `.msg` files, which must be read whole. Big enough for any ordinary mailbox export
     /// with attachments; a sandboxed extension should not try to hold more than this.
     static let maxCompoundFileBytes = 64 * 1024 * 1024
+    /// Cap on the markdown an email renders to before it is parsed. A compact .msg or .eml can
+    /// expand (recipient lists, decoded bodies); the preview shows the first part, not all of it.
+    static let maxRenderedMarkdownBytes = 4 * 1024 * 1024
+
+    /// `markdown` cut to `maxRenderedMarkdownBytes`, and whether it was cut.
+    static func cappedMarkdown(_ markdown: String) -> (markdown: String, truncated: Bool) {
+        guard markdown.utf8.count > maxRenderedMarkdownBytes else { return (markdown, false) }
+        // A scalar cut in half decodes as U+FFFD at the very end; harmless in a preview.
+        return (String(decoding: markdown.utf8.prefix(maxRenderedMarkdownBytes), as: UTF8.self), true)
+    }
 
     /// Notice shown when the file was cut at `maxInputBytes`. HTML, inserted AFTER rendering:
     /// the cut lands at an arbitrary byte, often inside a fenced code / `$$` / HTML block, and
@@ -135,16 +145,16 @@ nonisolated enum QuickLookHTML {
             guard let whole = Range(match.range, in: result),
                   let body = Range(match.range(at: 1), in: result) else { continue }
             // Undo the parser's `</` → `<\/` script-breakout guard, then escape for element context.
-            let latex = result[body].replacingOccurrences(of: "<\\/", with: "</")
+            let latex = result[body].replacingOccurrences(of: "<\\/", with: "</", options: .literal)
             result.replaceSubrange(whole, with: "<pre class=\"math-source\"><code>\(escapeHTML(latex))</code></pre>")
         }
         return result
     }
 
     static func escapeHTML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+        text.replacingOccurrences(of: "&", with: "&amp;", options: .literal)
+            .replacingOccurrences(of: "<", with: "&lt;", options: .literal)
+            .replacingOccurrences(of: ">", with: "&gt;", options: .literal)
     }
 
     /// Injected after the parser's own `<style>` so these rules win the cascade.

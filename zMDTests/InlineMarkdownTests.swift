@@ -1,4 +1,5 @@
 import XCTest
+import JavaScriptCore
 @testable import zMD
 
 nonisolated final class InlineMarkdownTests: XCTestCase {
@@ -1262,5 +1263,257 @@ nonisolated final class WindowCloseTests: XCTestCase {
             XCTAssertTrue(AppDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true),
                           "with a visible window the default behaviour stands")
         }
+    }
+}
+
+// MARK: - Security findings (Claude Security, zApps-v3 project, 2026-11)
+
+nonisolated final class SecurityFindingTests: XCTestCase {
+    private let parser = MarkdownParser.shared
+
+    /// Code points that fuse with a neighbouring metacharacter into one grapheme cluster.
+    private let fusers = ["\u{0301}", "\u{0903}", "\u{200D}", "\u{FE0F}"]
+
+    // MARK: Escaping (option-less replacingOccurrences)
+
+    func testHTMLEscaperReplacesMetacharactersFusedWithCombiningMarks() {
+        let entities = ["&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"]
+        for (meta, entity) in entities {
+            for fuser in fusers {
+                XCTAssertEqual(parser.escapeHTML(meta + fuser + "x"), entity + fuser + "x")
+            }
+            XCTAssertEqual(parser.escapeHTML("\u{0600}" + meta + "x"), "\u{0600}" + entity + "x", "Prepend before \(meta)")
+        }
+    }
+
+    func testImageAltWithQuoteAndCombiningMarkCannotAddAttributes() {
+        let html = parser.toHTML("![x\"\u{0301} onerror=alert(1) y](p.png)\n\nText ![a\"\u{0301} onload=z](q.png) end", includeStyles: false)
+        XCTAssertFalse(html.unicodeScalars.split(separator: "\u{0301}").dropLast().contains { $0.last == "\"" },
+                       "a raw quote precedes the combining mark: \(html)")
+        XCTAssertFalse(html.contains("\" onerror") || html.contains("\" onload"))
+    }
+
+    /// Every option-less `replacingOccurrences(of:with:)` is a grapheme-aware search that skips a
+    /// metacharacter fused with a combining mark. New calls must say `.literal` (or a regex).
+    func testNoSourceFileUsesOptionlessReplacingOccurrences() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        var offenders: [String] = []
+        for folder in ["zMD", "zMDQuickLook"] {
+            let dir = root.appendingPathComponent(folder)
+            for file in try FileManager.default.contentsOfDirectory(atPath: dir.path) where file.hasSuffix(".swift") {
+                let text = try String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+                var search = text.startIndex
+                while let hit = text.range(of: "replacingOccurrences(", range: search..<text.endIndex) {
+                    let windowEnd = text.index(hit.upperBound, offsetBy: 600, limitedBy: text.endIndex) ?? text.endIndex
+                    let nextCall = text.range(of: "replacingOccurrences(", range: hit.upperBound..<windowEnd)?.lowerBound ?? windowEnd
+                    if !text[hit.upperBound..<nextCall].contains("options:") {
+                        let line = text[..<hit.lowerBound].filter { $0 == "\n" }.count + 1
+                        offenders.append("\(folder)/\(file):\(line)")
+                    }
+                    search = hit.upperBound
+                }
+            }
+        }
+        XCTAssertEqual(offenders, [], "replacingOccurrences without options: (use .literal)")
+    }
+
+    // MARK: sanitizeURLScheme
+
+    func testSanitizeURLSchemeFindsTheColonPerScalar() {
+        for fuser in fusers {
+            XCTAssertEqual(MarkdownParser.sanitizeURLScheme("javascript:" + fuser + "alert(1)"), "#")
+            XCTAssertEqual(MarkdownParser.sanitizeURLScheme("JaVaScRiPt:" + fuser + "x"), "#")
+        }
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("java\tscript:alert(1)"), "#")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("vbscript:x"), "#")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("data:text/html,x"), "#")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("https://example.com/a:b"), "https://example.com/a:b")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("notes/a.md"), "notes/a.md")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("./a:b"), "./a:b")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("#heading"), "#heading")
+        XCTAssertEqual(MarkdownParser.sanitizeURLScheme("data:image/png;base64,AA"), "data:image/png;base64,AA")
+        XCTAssertNil(ExportManager.safeDOCXHyperlinkURL("javascript:\u{0301}x"))
+    }
+
+    func testExportedLinkWithFusedColonHasNoJavascriptHref() {
+        let html = parser.toHTML("[click](javascript:\u{0301}alert(1))", includeStyles: false)
+        XCTAssertTrue(html.contains("href=\"#\""), html)
+    }
+
+    // MARK: WebRenderer JavaScript literals
+
+    func testJavaScriptStringLiteralRoundTripsHostileText() throws {
+        let context = try XCTUnwrap(JSContext())
+        var executed = false
+        let flag: @convention(block) () -> Void = { executed = true }
+        context.setObject(flag, forKeyedSubscript: "pwn" as NSString)
+        let samples = [
+            "${\u{0300}pwn()}", "`${pwn()}`", "\\`${pwn()}", "a\"b'c", "line\nbreak\r\u{2028}\u{2029}",
+            "\u{0600}'+pwn()+'", "</script>", "\\u0022", "graph TD; A-->B",
+        ]
+        for sample in samples {
+            for fuser in fusers {
+                let text = sample + fuser + sample
+                let literal = try XCTUnwrap(WebRenderer.javaScriptStringLiteral(text))
+                let value = context.evaluateScript("(\(literal))")
+                XCTAssertNil(context.exception, "literal did not parse: \(literal)")
+                XCTAssertEqual(value?.toString(), text)
+            }
+        }
+        XCTAssertFalse(executed, "document text ran as code")
+    }
+
+    // MARK: Preview link policy
+
+    func testPreviewLinkPolicyOpensOnlyWebMailAndInFolderMarkdown() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("zmd-links-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let doc = folder.appendingPathComponent("doc.md")
+        let sibling = folder.appendingPathComponent("sub/other.md")
+        try "x".write(to: sibling, atomically: true, encoding: .utf8)
+        try "#!/bin/sh".write(to: folder.appendingPathComponent("run.command"), atomically: true, encoding: .utf8)
+
+        func action(_ s: String) -> PreviewLinkPolicy.Action {
+            PreviewLinkPolicy.action(for: URL(string: s)!, documentURL: doc)
+        }
+        XCTAssertEqual(action("https://example.com"), .openExternally(URL(string: "https://example.com")!))
+        XCTAssertEqual(action("mailto:a@b.c"), .openExternally(URL(string: "mailto:a@b.c")!))
+        XCTAssertEqual(action("sub/other.md"), .openDocument(sibling.resolvingSymlinksInPath()))
+        XCTAssertEqual(action(sibling.absoluteString), .openDocument(sibling.resolvingSymlinksInPath()))
+        for refused in ["file:///System/Applications/Calculator.app", "run.command", folder.appendingPathComponent("run.command").absoluteString,
+                        "ssh://attacker@host", "smb://host/share", "vnc://host", "x-apple.systempreferences:com.apple.preference.security",
+                        "../outside.md", "missing.md", "#section", "javascript:alert(1)", "/etc/passwd"] {
+            XCTAssertEqual(action(refused), .ignore, refused)
+        }
+        XCTAssertTrue(PreviewLinkPolicy.keepsLink(URL(string: "#section")!, documentURL: doc))
+        XCTAssertFalse(PreviewLinkPolicy.keepsLink(URL(string: "smb://host/share")!, documentURL: doc))
+        XCTAssertFalse(PreviewLinkPolicy.keepsLink(URL(string: "file:///System/Applications/Calculator.app")!, documentURL: doc))
+    }
+
+    // MARK: Updater
+
+    func testUpdateRequirementCompilesAndRejectsTheUnnotarizedTestBuild() {
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecRequirementCreateWithString(UpdateManager.updateRequirement as CFString, [], &requirement), errSecSuccess)
+        // The app under test is a development (or ad-hoc) build: never a notarized Developer ID release.
+        let hostApp = Bundle(for: DocumentManager.self).bundleURL
+        XCTAssertNotEqual(UpdateManager.verifySignature(at: hostApp), .ok)
+    }
+
+    func testUpdateBundleIdentityChecksTheDownloadedBundle() throws {
+        func bundle(id: String, version: String) throws -> URL {
+            let app = FileManager.default.temporaryDirectory.appendingPathComponent("zmd-update-\(UUID().uuidString).app")
+            try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            let plist: NSDictionary = ["CFBundleIdentifier": id, "CFBundleShortVersionString": version]
+            XCTAssertTrue(plist.write(to: app.appendingPathComponent("Contents/Info.plist"), atomically: true))
+            return app
+        }
+        let good = try bundle(id: "com.zmd.app", version: "2.10.2")
+        let old = try bundle(id: "com.zmd.app", version: "2.9.0")
+        let other = try bundle(id: "com.zapps.zstats", version: "9.0.0")
+        defer { [good, old, other].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        XCTAssertEqual(UpdateManager.verifyBundleIdentity(at: good, advertisedVersion: "2.10.2", currentVersion: "2.10.1"), .ok)
+        XCTAssertNotEqual(UpdateManager.verifyBundleIdentity(at: old, advertisedVersion: "99.0", currentVersion: "2.10.1"), .ok, "high tag, old build")
+        XCTAssertNotEqual(UpdateManager.verifyBundleIdentity(at: other, advertisedVersion: "9.0.0", currentVersion: "2.10.1"), .ok, "same team, other app")
+        XCTAssertNotEqual(UpdateManager.verifyBundleIdentity(at: good, advertisedVersion: "2.11.0", currentVersion: "2.10.1"), .ok, "tag and bundle disagree")
+    }
+
+    func testUpdateDownloadURLMustBeAGitHubReleaseAsset() {
+        XCTAssertTrue(UpdateManager.isTrustedDownloadURL(URL(string: "https://github.com/umzcio/zMD/releases/download/v2.10.2/zMD.dmg")!, initial: true))
+        XCTAssertFalse(UpdateManager.isTrustedDownloadURL(URL(string: "https://evil.example/umzcio/zMD/releases/download/v9/zMD.dmg")!, initial: true))
+        XCTAssertFalse(UpdateManager.isTrustedDownloadURL(URL(string: "https://github.com/someone/else/releases/download/v9/zMD.dmg")!, initial: true))
+        XCTAssertFalse(UpdateManager.isTrustedDownloadURL(URL(string: "http://github.com/umzcio/zMD/releases/download/v9/zMD.dmg")!, initial: true))
+        XCTAssertTrue(UpdateManager.isTrustedDownloadURL(URL(string: "https://release-assets.githubusercontent.com/abc")!, initial: false))
+        XCTAssertFalse(UpdateManager.isTrustedDownloadURL(URL(string: "https://githubusercontent.com.evil.example/abc")!, initial: false))
+    }
+
+    // MARK: Parser cost
+
+    func testUnclosedHTMLBlockParsesInLinearTime() {
+        let lines = ["<div>"] + Array(repeating: "<span>x", count: 60_000)
+        let markdown = lines.joined(separator: "\n")
+        let start = Date()
+        let elements = parser.parse(markdown)
+        _ = parser.extractHeadings(markdown)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "unclosed HTML block must not be quadratic")
+        XCTAssertEqual(elements.count, 1)
+    }
+
+    func testBalanceScannerMatchesTagsSplitAcrossLines() {
+        // `<span` / `class="b">` is one tag across two lines: counting it per line would see only
+        // the `</span>` and end the block one line early.
+        let elements = parser.parse("<div class=\"a\">\n<span\n  class=\"b\">x</span>\ninside\n</div>\n\nafter")
+        guard elements.count == 2, case .htmlBlock = elements[0], case .paragraph(let p) = elements[1] else {
+            return XCTFail("\(elements)")
+        }
+        XCTAssertEqual(p, "after")
+        XCTAssertTrue(parser.isHTMLBalanced("<p>a<br/><img src=x></p>"))
+        XCTAssertFalse(parser.isHTMLBalanced("<div><p>a</p>"))
+        XCTAssertTrue(parser.isHTMLBalanced("a < b and 3<4 </ x"))
+    }
+
+    func testHTMLToEndMarkerKeepsEverythingAfterItInOneBlock() {
+        let markdown = "# Title\n\n" + MarkdownParser.htmlToEndMarker + "\n<div>a</div></div>\n![x](https://evil.example/t.png)\n```mermaid\ngraph TD;A-->B\n```\n$$\nx\n$$\n# Not a heading"
+        let elements = parser.parse(markdown)
+        XCTAssertEqual(elements.count, 2, "\(elements)")
+        if case .htmlBlock(let html) = elements.last { XCTAssertTrue(html.contains("evil.example")) } else { XCTFail("\(elements)") }
+        XCTAssertEqual(parser.extractHeadings(markdown).map(\.text), ["Title"])
+    }
+
+    func testFrontmatterValuesExportAsPlainText() {
+        let html = parser.toHTML("---\nSubject: ![x](/etc/secret.png) [l](javascript:x)\n---\n\nbody", includeStyles: false)
+        XCTAssertFalse(html.contains("<img"), html)
+        XCTAssertFalse(html.contains("<a "), html)
+    }
+
+    func testInlineTokenizerIsLinearOnUnmatchedBrackets() {
+        for text in [String(repeating: "[", count: 200_000), String(repeating: "[x](", count: 50_000),
+                     String(repeating: "![", count: 100_000), String(repeating: "<", count: 200_000)] {
+            let start = Date()
+            _ = InlineMarkdown.tokenize(text)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+        }
+        XCTAssertEqual(InlineMarkdown.tokenize("a [b](c) ![d](e) [f] (g) x<br>y"), [
+            .text("a "), .link(label: "b", destination: "c"), .text(" "), .image(alt: "d", source: "e"),
+            .text(" [f] (g) x"), .lineBreak, .text("y"),
+        ])
+    }
+
+    func testSourceEditorLinkHighlightIsLinear() throws {
+        let regex = try NSRegularExpression(pattern: SourceEditorView.linkHighlightPattern)
+        for text in [String(repeating: "[", count: 300_000), String(repeating: "[x](", count: 75_000)] {
+            let start = Date()
+            _ = regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+            XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+        }
+        XCTAssertEqual(regex.numberOfMatches(in: "see [a](b) and [c](d)", range: NSRange(location: 0, length: 21)), 2)
+    }
+
+    // MARK: Export image resolution
+
+    @MainActor
+    func testExportsResolveImagesLikeThePreview() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("zmd-img-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("my pics"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let doc = folder.appendingPathComponent("doc.md")
+        let image = folder.appendingPathComponent("my pics/a.png")
+        try Data([0x89, 0x50]).write(to: image)
+
+        XCTAssertEqual(MarkdownParser.resolveLocalImage("my pics/a.png", documentURL: doc), image.standardizedFileURL)
+        XCTAssertEqual(MarkdownParser.resolveLocalImage("my%20pics/a.png", documentURL: doc), image.standardizedFileURL)
+        XCTAssertEqual(MarkdownParser.resolveLocalImage(image.path, documentURL: doc), image.standardizedFileURL)
+        XCTAssertNil(MarkdownParser.resolveLocalImage(image.absoluteString, documentURL: doc), "file:// is not a path")
+        XCTAssertNil(MarkdownParser.resolveLocalImage("my pics", documentURL: doc), "directories are not images")
+        XCTAssertNil(MarkdownParser.resolveLocalImage("/dev/zero", documentURL: doc), "devices are not images")
+
+        let html = "<p><img src=\"\(image.absoluteString)\" alt=\"f\"><img src=\"my%20pics/a.png\"><img src=\"/dev/zero\"><img src=\"data:image/png;base64,AA\"></p>"
+        let out = ExportManager.shared.absolutizeImageSrcs(html, baseURL: doc)
+        XCTAssertFalse(out.contains("alt=\"f\""), "file:// image removed: \(out)")
+        XCTAssertFalse(out.contains("/dev/zero"), out)
+        XCTAssertTrue(out.contains("src=\"\(image.standardizedFileURL.absoluteString)\""), out)
+        XCTAssertTrue(out.contains("data:image/png;base64,AA"), out)
     }
 }

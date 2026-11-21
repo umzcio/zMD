@@ -139,10 +139,12 @@ class UpdateManager: ObservableObject {
         // S5: defense-in-depth — refuse a non-HTTPS artifact URL before downloading. GitHub
         // release assets are always HTTPS and ATS already blocks cleartext, but an explicit guard
         // ensures the downloaded bundle can never arrive over an untrusted transport.
-        guard url.scheme == "https" else {
-            stage = .failed("Update download URL is not HTTPS. Download manually from GitHub.")
+        guard Self.isTrustedDownloadURL(url, initial: true) else {
+            stage = .failed("Update download URL is not a zMD GitHub release asset. Download manually from GitHub.")
             return
         }
+        let advertisedVersion = latestVersion
+        let currentVersion = self.currentVersion
 
         stage = .downloading
 
@@ -166,6 +168,13 @@ class UpdateManager: ObservableObject {
                 }
                 return
             }
+            // Redirects are followed automatically; make sure they ended on GitHub's asset host.
+            if let finalURL = response?.url, !Self.isTrustedDownloadURL(finalURL, initial: false) {
+                DispatchQueue.main.async {
+                    self.stage = .failed("Update download was redirected off GitHub. Download manually from GitHub.")
+                }
+                return
+            }
 
             // Copy off URLSession's temp area before that gets cleaned up.
             let stableDMGPath = FileManager.default.temporaryDirectory.appendingPathComponent("zMD-update.dmg")
@@ -182,7 +191,7 @@ class UpdateManager: ObservableObject {
             // Transition to installing; hdiutil + /Applications copy on background queue.
             DispatchQueue.main.async { self.stage = .installing }
             DispatchQueue.global(qos: .userInitiated).async {
-                self.installFromDMG(at: stableDMGPath)
+                self.installFromDMG(at: stableDMGPath, advertisedVersion: advertisedVersion, currentVersion: currentVersion)
             }
         }
         task.resume()
@@ -191,7 +200,7 @@ class UpdateManager: ObservableObject {
     /// Install the new app bundle. MUST be called off main — runs hdiutil subprocesses,
     /// codesign verification, and an /Applications copy that together can take several seconds.
     /// Hops to main only for the relaunch prompt at the end.
-    private nonisolated func installFromDMG(at stableDMGPath: URL) {
+    private nonisolated func installFromDMG(at stableDMGPath: URL, advertisedVersion: String, currentVersion: String) {
         let fileManager = FileManager.default
 
         func reportError(_ message: String, detachVolume: String? = nil) {
@@ -250,18 +259,14 @@ class UpdateManager: ObservableObject {
             return
         }
 
-        // Verify the downloaded bundle: codesign valid AND same Team ID as the running process.
-        // Without this, a compromised release URL or any future TLS issue could silently
-        // replace /Applications/zMD.app with arbitrary code that auto-launches.
-        guard let teamID = currentTeamID() else {
-            reportError("Cannot determine current bundle Team ID; refusing to auto-install.", detachVolume: volumePath)
+        // Verify the downloaded bundle before touching /Applications: Developer ID + notarized +
+        // zMD's team and identifier, then the bundle's own identity and version.
+        if case .invalid(let reason) = Self.verifySignature(at: appURL) {
+            reportError("Downloaded app failed signature check: \(reason). Aborting auto-install.", detachVolume: volumePath)
             return
         }
-        switch verifySignature(at: appURL, requireTeamID: teamID) {
-        case .ok:
-            break
-        case .invalid(let reason):
-            reportError("Downloaded app failed signature check: \(reason). Aborting auto-install.", detachVolume: volumePath)
+        if case .invalid(let reason) = Self.verifyBundleIdentity(at: appURL, advertisedVersion: advertisedVersion, currentVersion: currentVersion) {
+            reportError("Downloaded app was rejected: \(reason). Aborting auto-install.", detachVolume: volumePath)
             return
         }
 
@@ -311,47 +316,81 @@ class UpdateManager: ObservableObject {
 
     // MARK: - Code-signing verification
 
-    private nonisolated enum VerifyResult {
+    /// The code requirement a downloaded update must satisfy before anything in /Applications
+    /// is touched: Apple's root, a Developer ID Application leaf from zMD's own team, zMD's
+    /// bundle identifier, and a notarization ticket.
+    ///
+    /// The old check compared `kSecCodeInfoTeamIdentifier` against the running app with no
+    /// requirement. That string is copied from whatever certificate signed the bundle, so a
+    /// self-generated certificate whose OU claimed the public Team ID passed (security finding,
+    /// 2026-11). Team and identifier are fixed strings — never read from the download.
+    nonisolated static let teamID = "5JJ6G6A84S"
+    nonisolated static let bundleIdentifier = "com.zmd.app"
+    nonisolated static let updateRequirement =
+        "anchor apple generic"
+        + " and identifier \"\(bundleIdentifier)\""
+        + " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"      // Developer ID CA
+        + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"  // Developer ID Application
+        + " and certificate leaf[subject.OU] = \"\(teamID)\""
+        + " and notarized"
+
+    nonisolated enum VerifyResult: Equatable {
         case ok
         case invalid(String)
     }
 
-    /// The Team ID of the currently-running process bundle. Used as the trust anchor for
-    /// auto-update — the new bundle MUST be signed by the same team or we refuse to install.
-    private nonisolated func currentTeamID() -> String? {
-        var staticCode: SecStaticCode?
-        let bundleURL = Bundle.main.bundleURL
-        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, [], &staticCode) == errSecSuccess,
-              let code = staticCode else { return nil }
-        var info: CFDictionary?
-        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let dict = info as? [String: Any] else { return nil }
-        return dict[kSecCodeInfoTeamIdentifier as String] as? String
-    }
-
-    private nonisolated func verifySignature(at url: URL, requireTeamID expectedTeamID: String) -> VerifyResult {
+    /// Strict, nested-code, all-architecture validation against `updateRequirement`.
+    nonisolated static func verifySignature(at url: URL) -> VerifyResult {
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
               let code = staticCode else {
             return .invalid("Cannot create static code reference")
         }
-        // Strict signature check: covers tampering, broken signatures, missing resources.
-        // Default flags (empty set) perform a strict validation including resource hashes.
-        let validity = SecStaticCodeCheckValidity(code, [], nil)
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(updateRequirement as CFString, [], &requirement) == errSecSuccess,
+              let requirement else {
+            return .invalid("Cannot build the update code requirement")
+        }
+        let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode
+                               | kSecCSCheckAllArchitectures | kSecCSRestrictSymlinks)
+        let validity = SecStaticCodeCheckValidity(code, flags, requirement)
         guard validity == errSecSuccess else {
-            return .invalid("codesign validity \(validity)")
-        }
-        // Team ID check: must match the running app to prevent swap-in of an unrelated signed app.
-        var info: CFDictionary?
-        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let dict = info as? [String: Any],
-              let foundTeamID = dict[kSecCodeInfoTeamIdentifier as String] as? String else {
-            return .invalid("Could not extract Team ID from new bundle")
-        }
-        guard foundTeamID == expectedTeamID else {
-            return .invalid("Team ID mismatch: expected \(expectedTeamID), got \(foundTeamID)")
+            return .invalid("not a notarized zMD release signed by the zMD team (\(validity))")
         }
         return .ok
+    }
+
+    /// After the signature check (which seals Info.plist): the bundle must BE zMD and must be
+    /// the version the release advertised, and that version must be newer than the running
+    /// one. The feed's `tag_name` alone proves nothing — a high tag could carry an old build or
+    /// another app from the same team.
+    nonisolated static func verifyBundleIdentity(at url: URL, advertisedVersion: String, currentVersion: String) -> VerifyResult {
+        guard let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")) as? [String: Any],
+              let identifier = info["CFBundleIdentifier"] as? String,
+              let version = info["CFBundleShortVersionString"] as? String else {
+            return .invalid("Cannot read the downloaded app's Info.plist")
+        }
+        guard identifier == bundleIdentifier else {
+            return .invalid("the downloaded app is \(identifier), not zMD")
+        }
+        guard isNewerVersion(remote: version, current: currentVersion) else {
+            return .invalid("the downloaded app is version \(version), not newer than \(currentVersion)")
+        }
+        guard !isNewerVersion(remote: version, current: advertisedVersion),
+              !isNewerVersion(remote: advertisedVersion, current: version) else {
+            return .invalid("the downloaded app is version \(version) but the release says \(advertisedVersion)")
+        }
+        return .ok
+    }
+
+    /// Release assets are served from github.com and redirected to GitHub's asset CDN. Anything
+    /// else is refused before (initial URL) and after (final URL) the download.
+    nonisolated static func isTrustedDownloadURL(_ url: URL, initial: Bool) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        if initial {
+            return host == "github.com" && url.path.lowercased().hasPrefix("/umzcio/zmd/releases/download/")
+        }
+        return host == "github.com" || host.hasSuffix(".githubusercontent.com")
     }
 
     private func relaunch() {
@@ -416,6 +455,10 @@ class UpdateManager: ObservableObject {
     // Not private: exercised directly from InlineMarkdownTests via `@testable import zMD`,
     // matching the pattern used for ExportManager.safeDOCXHyperlinkURL / extractMathFromMarkdown.
     func isNewerVersion(remote: String, current: String) -> Bool {
+        Self.isNewerVersion(remote: remote, current: current)
+    }
+
+    nonisolated static func isNewerVersion(remote: String, current: String) -> Bool {
         // Strip semver pre-release/build metadata (everything after the first '-' or '+') so
         // `2.5.3-rc1` parses as `[2,5,3]` instead of `[2,5]` (L9). The current shipped version
         // never has metadata, so this only affects how we compare against tagged pre-releases.

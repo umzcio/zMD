@@ -98,6 +98,7 @@ struct DocumentViewModeContent: View {
             content: document.content,
             baseURL: document.url,
             directoryBookmark: document.directoryBookmarkData,
+            allowsRemoteContent: document.kind == .markdown,
             documentId: document.id,
             scrollToHeadingId: searchEnabled ? $selectedHeadingId : .constant(nil),
             searchText: searchEnabled && documentManager.isSearching ? documentManager.searchText : "",

@@ -6,6 +6,10 @@ struct MarkdownTextView: NSViewRepresentable {
     let content: String
     let baseURL: URL?
     let directoryBookmark: Data?
+    /// False for email documents: their privacy contract is that the sender learns nothing when
+    /// the message is opened, so no remote image is ever fetched for them, whatever the
+    /// rendered markdown contains.
+    let allowsRemoteContent: Bool
     /// Identifies which open document this pane is currently displaying. Threaded through to
     /// the Coordinator and stamped on every posted `.diagramRendered` notification so a
     /// diagram/math render completing in one pane cannot invalidate another pane's cache
@@ -37,10 +41,11 @@ struct MarkdownTextView: NSViewRepresentable {
     /// state, rendered item text) → whether the source was changed.
     let onToggleTask: ((Int, Bool, String) -> Bool)?
 
-    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left, contentWidth: SettingsManager.ContentWidth = .medium, onToggleTask: ((Int, Bool, String) -> Bool)? = nil) {
+    init(content: String, baseURL: URL?, directoryBookmark: Data? = nil, allowsRemoteContent: Bool = true, documentId: UUID, scrollToHeadingId: Binding<String?>, searchText: String, currentMatchIndex: Int, fontStyle: SettingsManager.FontStyle, zoomLevel: CGFloat = 1.0, initialScrollPosition: CGFloat = 0, onScrollPositionChanged: ((CGFloat) -> Void)? = nil, onMatchCountChanged: ((Int) -> Void)? = nil, onScrollPercentChanged: ((CGFloat) -> Void)? = nil, scrollToPercent: CGFloat? = nil, isRegexSearch: Bool = false, isCaseSensitive: Bool = false, contentAlignment: SettingsManager.ContentAlignment = .left, contentWidth: SettingsManager.ContentWidth = .medium, onToggleTask: ((Int, Bool, String) -> Bool)? = nil) {
         self.content = content
         self.baseURL = baseURL
         self.directoryBookmark = directoryBookmark
+        self.allowsRemoteContent = allowsRemoteContent
         self.documentId = documentId
         self._scrollToHeadingId = scrollToHeadingId
         self.searchText = searchText
@@ -434,6 +439,10 @@ struct MarkdownTextView: NSViewRepresentable {
 
         // MARK: - Link Handling
 
+        /// Always returns `true`. Returning `false` does NOT refuse a link: it tells AppKit the
+        /// delegate did not handle the click, and NSTextView then opens the URL through
+        /// NSWorkspace — so `file://` apps and scripts, custom schemes (`ssh:`, `smb:`, …) and
+        /// out-of-folder files all launched despite the allowlist (security finding, 2026-11).
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             let url: URL?
             if let linkURL = link as? URL {
@@ -441,37 +450,19 @@ struct MarkdownTextView: NSViewRepresentable {
             } else if let linkString = link as? String {
                 url = URL(string: linkString)
             } else {
-                return false
+                url = nil
             }
+            guard let url else { return true }
 
-            guard let url = url else { return false }
-
-            // Handle relative .md links by opening as a new tab
-            if ["md", "markdown"].contains(url.pathExtension.lowercased()),
-               let base = baseURL?.deletingLastPathComponent() {
-                let resolved = base.appendingPathComponent(url.relativeString).standardizedFileURL
-                // S3: confine the resolved path to the document's directory subtree. Without this,
-                // a crafted link like [x](../../../../private.md) resolves outside the folder and
-                // would be opened. The trailing-slash form prevents a sibling-prefix false match
-                // (e.g. base "/a/notes" vs "/a/notes-secret/x.md").
-                let baseDir = base.standardizedFileURL
-                let basePrefix = baseDir.path.hasSuffix("/") ? baseDir.path : baseDir.path + "/"
-                guard resolved.path == baseDir.path || resolved.path.hasPrefix(basePrefix) else {
-                    return false
-                }
-                if FileManager.default.fileExists(atPath: resolved.path) {
-                    DocumentManager.shared.loadDocument(from: resolved)
-                    return true
-                }
+            switch PreviewLinkPolicy.action(for: url, documentURL: baseURL) {
+            case .openDocument(let fileURL):
+                DocumentManager.shared.loadDocument(from: fileURL)
+            case .openExternally(let externalURL):
+                NSWorkspace.shared.open(externalURL)
+            case .ignore:
+                break
             }
-
-            // Open external URLs in default browser
-            if url.scheme == "http" || url.scheme == "https" || url.scheme == "mailto" {
-                NSWorkspace.shared.open(url)
-                return true
-            }
-
-            return false
+            return true
         }
 
         // MARK: - Interruptible programmatic scroll
@@ -1417,7 +1408,8 @@ struct MarkdownTextView: NSViewRepresentable {
         // Posts .diagramRendered when the image lands so the preview rebuilds and the placeholder
         // text gets replaced with the actual image. (Piggybacks on the existing diagram refresh hook.)
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
-            guard !Coordinator.remoteImageFailures.contains(cacheKey),
+            guard allowsRemoteContent,
+                  !Coordinator.remoteImageFailures.contains(cacheKey),
                   !Coordinator.remoteImageInFlight.contains(cacheKey),
                   let url = URL(string: path) else {
                 return nil
@@ -1468,18 +1460,9 @@ struct MarkdownTextView: NSViewRepresentable {
             }
         }
 
-        // Local file — synchronous is fine for local disk I/O
-        let resolvedURL: URL?
-
-        let absoluteURL = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(atPath: absoluteURL.path) {
-            resolvedURL = absoluteURL
-        } else if let base = baseURL?.deletingLastPathComponent() {
-            let relativeURL = base.appendingPathComponent(path)
-            resolvedURL = FileManager.default.fileExists(atPath: relativeURL.path) ? relativeURL : nil
-        } else {
-            resolvedURL = nil
-        }
+        // Local file — synchronous is fine for local disk I/O. Same resolver as every export, so
+        // an export never embeds a file this preview did not show.
+        let resolvedURL = MarkdownParser.resolveLocalImage(path, documentURL: baseURL)
 
         if let url = resolvedURL, let image = NSImage(contentsOf: url) {
             Coordinator.imageCache.setObject(image, forKey: cacheKey as NSString)
@@ -1638,9 +1621,18 @@ struct MarkdownTextView: NSViewRepresentable {
             return
         }
 
-        result.append(attributed)
+        // The importer turns every `<a href>` into a `.link`, resolving relative hrefs against the
+        // document folder; drop the ones the click policy would refuse (custom schemes, files
+        // that are not in-folder markdown).
+        let imported = NSMutableAttributedString(attributedString: attributed)
+        imported.enumerateAttribute(.link, in: NSRange(location: 0, length: imported.length)) { value, range, _ in
+            let url = (value as? URL) ?? (value as? String).flatMap { URL(string: $0) }
+            if let url, PreviewLinkPolicy.keepsLink(url, documentURL: baseURL) { return }
+            imported.removeAttribute(.link, range: range)
+        }
+        result.append(imported)
         // Ensure trailing newline
-        if !attributed.string.hasSuffix("\n") {
+        if !imported.string.hasSuffix("\n") {
             result.append(NSAttributedString(string: "\n"))
         }
     }
@@ -1701,9 +1693,12 @@ struct MarkdownTextView: NSViewRepresentable {
                     result.append(NSAttributedString(string: label, attributes: tokenAttributes))
                 }
             case .link(let label, let destination):
-                tokenAttributes[.link] = URL(string: destination)
-                tokenAttributes[.foregroundColor] = NSColor.linkColor
-                tokenAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                // A link the click policy would refuse renders as its plain label.
+                if let url = URL(string: destination), PreviewLinkPolicy.keepsLink(url, documentURL: baseURL) {
+                    tokenAttributes[.link] = url
+                    tokenAttributes[.foregroundColor] = NSColor.linkColor
+                    tokenAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                }
                 result.append(formatInlineMarkdown(label, attributes: tokenAttributes, stripCodeSpanSentinel: false))
             }
         }
@@ -2255,5 +2250,62 @@ final class TaskItemPayload: NSObject {
         self.isChecked = isChecked
         self.text = text
         super.init()
+    }
+}
+
+// MARK: - Link policy
+
+/// What a click on a preview link may do. Pure, so the allowlist is unit-tested.
+///
+/// - `http`, `https`, `mailto` open in the default browser / mail client.
+/// - A relative or `file:` link to a `.md` / `.markdown` file opens as a tab, but only when it
+///   resolves (symlinks included) inside the current document's folder and exists.
+/// - Everything else — other schemes, `file:` links to apps or scripts, files outside the
+///   folder — does nothing. Links reach the preview from untrusted documents and email bodies.
+nonisolated enum PreviewLinkPolicy {
+    enum Action: Equatable {
+        case openDocument(URL)
+        case openExternally(URL)
+        case ignore
+    }
+
+    static let externalSchemes: Set<String> = ["http", "https", "mailto"]
+    static let documentExtensions: Set<String> = ["md", "markdown"]
+
+    static func action(for url: URL, documentURL: URL?, fileExists: (URL) -> Bool = defaultFileExists) -> Action {
+        let scheme = url.scheme?.lowercased()
+        if let scheme, externalSchemes.contains(scheme) { return .openExternally(url) }
+        guard scheme == nil || scheme == "file",
+              let folder = documentURL?.deletingLastPathComponent() else { return .ignore }
+
+        let target: URL
+        if scheme == "file" {
+            target = url
+        } else {
+            let path = url.path
+            guard !path.isEmpty, !path.hasPrefix("/") else { return .ignore }
+            target = folder.appendingPathComponent(path)
+        }
+        guard documentExtensions.contains(target.pathExtension.lowercased()) else { return .ignore }
+
+        let resolvedTarget = target.standardizedFileURL.resolvingSymlinksInPath()
+        let resolvedFolder = folder.standardizedFileURL.resolvingSymlinksInPath()
+        // Trailing slash so "/a/notes" does not match "/a/notes-secret/x.md".
+        let prefix = resolvedFolder.path.hasSuffix("/") ? resolvedFolder.path : resolvedFolder.path + "/"
+        guard resolvedTarget.path.hasPrefix(prefix), fileExists(resolvedTarget) else { return .ignore }
+        return .openDocument(resolvedTarget)
+    }
+
+    /// Whether a link should stay clickable when the preview is built. Same-page `#fragment`
+    /// links stay styled (a click does nothing); anything the click policy would refuse is
+    /// turned back into plain text so it does not pose as a working link.
+    static func keepsLink(_ url: URL, documentURL: URL?) -> Bool {
+        if url.scheme == nil, url.path.isEmpty { return true }
+        return action(for: url, documentURL: documentURL, fileExists: { _ in true }) != .ignore
+    }
+
+    static func defaultFileExists(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && !isDirectory.boolValue
     }
 }

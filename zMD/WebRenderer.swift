@@ -161,6 +161,19 @@ class WebRenderer: NSObject {
         processNextMermaidRender()
     }
 
+    /// `text` as a JavaScript string literal (`"…"`), for splicing into `evaluateJavaScript`.
+    /// JSON string syntax is a subset of JavaScript string syntax, and the serializer escapes
+    /// per code unit — quotes, backslashes and control characters can never end the literal,
+    /// whatever combining marks sit next to them. U+2028/U+2029 are escaped as well for
+    /// engines that predate ES2019's JSON superset.
+    nonisolated static func javaScriptStringLiteral(_ text: String) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: text, options: [.fragmentsAllowed]),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return json
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028", options: .literal)
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029", options: .literal)
+    }
+
     private func processNextMermaidRender() {
         guard !isMermaidRendering, !mermaidRenderQueue.isEmpty else { return }
         guard let webView = mermaidWebView else {
@@ -174,17 +187,16 @@ class WebRenderer: NSObject {
         isMermaidRendering = true
         let item = mermaidRenderQueue.removeFirst()
 
-        // Escape for safe splicing into a JS backtick template literal:
-        // - `\\` must double to survive the JS string parser
-        // - backticks close the literal
-        // - newlines must be escaped in the string representation
-        // - `${` would trigger template-literal interpolation and evaluate arbitrary JS in the
-        //   hidden WebView if present in user markdown (defensive hardening, not an observed RCE)
-        let escapedCode = item.code
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "`", with: "\\`")
-            .replacingOccurrences(of: "${", with: "\\${")
-            .replacingOccurrences(of: "\n", with: "\\n")
+        // Document text reaches JavaScript as a JSON string literal, never hand-escaped into a
+        // template literal. The old `replacingOccurrences` escaping matched by grapheme, so a
+        // `${` followed by a combining mark stayed raw and opened a live substitution that ran
+        // attacker code in this web view (security finding, 2026-11).
+        guard let codeLiteral = Self.javaScriptStringLiteral(item.code) else {
+            item.completion(nil)
+            isMermaidRendering = false
+            processNextMermaidRender()
+            return
+        }
 
         self.activeMermaidCompletion = { [weak self] image in
             if let image = image {
@@ -203,7 +215,7 @@ class WebRenderer: NSObject {
         // early, overwrote activeMermaidCompletion with the next item's closure, and delivered one
         // diagram's PNG to the wrong item — poisoning the SHA256 image cache for the session. With
         // `void`, this completion only fires on a genuine JS error.
-        webView.evaluateJavaScript("void renderMermaid(`\(escapedCode)`)") { [weak self] _, error in
+        webView.evaluateJavaScript("void renderMermaid(\(codeLiteral))") { [weak self] _, error in
             if error != nil {
                 // Genuine error: drop the active completion so a late mermaidResult cannot invoke it
                 // for the wrong item, then fail this item and advance the queue.
@@ -439,12 +451,12 @@ class WebRenderer: NSObject {
         isKatexRendering = true
         let item = katexRenderQueue.removeFirst()
 
-        let escapedLatex = item.latex.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        guard let latexLiteral = Self.javaScriptStringLiteral(item.latex) else {
+            item.completion(nil)
+            isKatexRendering = false
+            processNextKatexRender()
+            return
+        }
 
         self.activeKatexCompletion = { [weak self] image in
             if let image = image {
@@ -460,7 +472,7 @@ class WebRenderer: NSObject {
         // current appearance. Light text on dark themes (and vice versa) — the WebView is
         // transparent so the text-color in the snapshot is what actually shows over the
         // surrounding NSTextView.
-        webView.evaluateJavaScript("renderMath('\(escapedLatex)', \(item.displayMode), \(item.isDark))") { [weak self] _, error in
+        webView.evaluateJavaScript("renderMath(\(latexLiteral), \(item.displayMode), \(item.isDark))") { [weak self] _, error in
             if error != nil {
                 self?.cancelWatchdog(for: .katex)
                 self?.activeKatexCompletion = nil

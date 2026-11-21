@@ -171,7 +171,7 @@ nonisolated extension EmailMessage {
                 let addr = String(s[s.index(after: open)..<close]).trimmingCharacters(in: .whitespaces)
                 var name = String(s[..<open]).trimmingCharacters(in: .whitespaces)
                 if name.hasPrefix("\""), name.hasSuffix("\""), name.count >= 2 {
-                    name = String(name.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"")
+                    name = String(name.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"", options: .literal)
                 }
                 result.append(Address(name: name.isEmpty ? nil : name, address: addr))
             } else if let open = s.firstIndex(of: "("), let close = s.lastIndex(of: ")"), open < close {
@@ -327,13 +327,30 @@ nonisolated struct MIMEEntity: Sendable {
 
     // MARK: Parsing
 
+    /// Multipart nesting deeper than this is kept as an opaque leaf. Real mail nests a handful of
+    /// levels (forwarded, signed, related, alternative); a crafted file nested tens of thousands
+    /// deep used to recurse until the stack overflowed (security finding, 2026-11).
+    static let maxNestingDepth = 32
+    /// Total entities parsed per message; anything past it is dropped.
+    static let maxPartCount = 2_000
+
     static func parse(_ data: Data) -> MIMEEntity {
+        var remainingParts = maxPartCount
+        return parse(data, depth: 0, remainingParts: &remainingParts)
+    }
+
+    private static func parse(_ data: Data, depth: Int, remainingParts: inout Int) -> MIMEEntity {
+        remainingParts -= 1
         let (headerData, bodyData) = splitHeaders(data)
         let headers = parseHeaders(headerData)
         var entity = MIMEEntity(rawHeaders: headers, body: bodyData, parts: [])
         let type = entity.contentType
-        if type.type == "multipart", let boundary = type.boundary, !boundary.isEmpty {
-            let parts = splitMultipart(bodyData, boundary: boundary).map(parse)
+        if type.type == "multipart", let boundary = type.boundary, !boundary.isEmpty, depth < maxNestingDepth {
+            var parts: [MIMEEntity] = []
+            for partData in splitMultipart(bodyData, boundary: boundary) {
+                guard remainingParts > 0 else { break }
+                parts.append(parse(partData, depth: depth + 1, remainingParts: &remainingParts))
+            }
             entity = MIMEEntity(rawHeaders: headers, body: bodyData, parts: parts)
         }
         return entity
@@ -382,7 +399,8 @@ nonisolated struct MIMEEntity: Sendable {
     }
 
     /// Bodies between `--boundary` delimiter lines, up to `--boundary--`. The CRLF before a
-    /// delimiter belongs to the delimiter, not the part (RFC 2046 §5.1.1).
+    /// delimiter belongs to the delimiter, not the part (RFC 2046 §5.1.1). Parts are slices of
+    /// `body` (shared storage), so nesting does not copy the message once per level.
     static func splitMultipart(_ body: Data, boundary: String) -> [Data] {
         let bytes = [UInt8](body)
         let delimiter = Array(("--" + boundary).utf8)
@@ -409,7 +427,7 @@ nonisolated struct MIMEEntity: Sendable {
                     var end = i
                     if end > start, bytes[end - 1] == 0x0A { end -= 1 }
                     if end > start, bytes[end - 1] == 0x0D { end -= 1 }
-                    parts.append(Data(bytes[start..<end]))
+                    parts.append(body[(body.startIndex + start)..<(body.startIndex + end)])
                 }
                 if closing { break }
                 partStart = next
@@ -420,7 +438,7 @@ nonisolated struct MIMEEntity: Sendable {
         }
         // Unterminated multipart (truncated file): keep the trailing part rather than drop it.
         if let start = partStart, i >= bytes.count, start < bytes.count {
-            parts.append(Data(bytes[start...]))
+            parts.append(body[(body.startIndex + start)...])
         }
         return parts
     }
@@ -441,7 +459,7 @@ nonisolated enum MIMEHeaderValue {
             var name = String(p[..<eq]).trimmingCharacters(in: .whitespaces).lowercased()
             var val = String(p[p.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
             if val.hasPrefix("\""), val.hasSuffix("\""), val.count >= 2 {
-                val = String(val.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"")
+                val = String(val.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"", options: .literal)
             }
             var encoded = false
             if name.hasSuffix("*") { encoded = true; name.removeLast() }
@@ -521,7 +539,7 @@ nonisolated enum RFC2047 {
                 bytes = Data(base64Encoded: payload, options: .ignoreUnknownCharacters) ?? Data()
             } else {
                 // Q: like quoted-printable but "_" is a space.
-                bytes = TransferEncoding.decodeQuotedPrintable(Data(payload.replacingOccurrences(of: "_", with: " ").utf8))
+                bytes = TransferEncoding.decodeQuotedPrintable(Data(payload.replacingOccurrences(of: "_", with: " ", options: .literal).utf8))
             }
             let encoding = Charsets.encoding(named: charset) ?? .utf8
             result += String(data: bytes, encoding: encoding) ?? String(data: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
@@ -623,6 +641,14 @@ nonisolated enum Charsets {
 
 // MARK: - Rendering to markdown
 
+/// A markdown line holding exactly this makes the rest of the document one raw HTML block
+/// (`MarkdownParser.htmlToEndMarker`). Defined here because this file is compiled into targets
+/// that do not include the parser.
+nonisolated enum RawHTMLMarker {
+    static let toEndOfDocument = "<!-- zmd:html-to-end -->"
+}
+
+
 nonisolated extension EmailMessage {
     /// The markdown zMD displays for an email: header block, attachment list, then the body as
     /// a single sanitized HTML block. The body is LAST on purpose — email HTML is routinely
@@ -662,6 +688,9 @@ nonisolated extension EmailMessage {
             out += "*\(blockedRemote) remote image\(blockedRemote == 1 ? "" : "s") not loaded.*\n\n"
         }
         out += "---\n\n"
+        // The marker makes the parser take everything after it as one HTML block, however the
+        // body's tags are (un)balanced — no part of an email body is ever read as markdown.
+        out += RawHTMLMarker.toEndOfDocument + "\n"
         out += bodyHTML
         out += "\n"
         return out
@@ -689,16 +718,19 @@ nonisolated extension EmailMessage {
 
     private static func frontmatterValue(_ s: String) -> String {
         // Frontmatter lines must stay on one line; the renderer splits on the first colon only.
-        s.replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        s.replacingOccurrences(of: "\r", with: " ", options: .literal).replacingOccurrences(of: "\n", with: " ", options: .literal)
     }
 
     static func escapeMarkdownInline(_ s: String) -> String {
-        var out = ""
-        for ch in s.replacingOccurrences(of: "\n", with: " ") {
-            if "\\`*_[]<>#|~$".contains(ch) { out.append("\\") }
-            out.append(ch)
+        // Per scalar, not per Character: a `[` with a combining mark after it is one grapheme
+        // that `"…".contains(ch)` would not match, yet the HTML and DOCX exports see the bare `[`.
+        var out = String.UnicodeScalarView()
+        for scalar in s.unicodeScalars {
+            if scalar == "\n" || scalar == "\r" { out.append(" "); continue }
+            if "\\`*_[]<>#|~$".unicodeScalars.contains(scalar) { out.append("\\") }
+            out.append(scalar)
         }
-        return out
+        return String(out)
     }
 
     static func displayDate(_ date: Date) -> String {
@@ -718,13 +750,25 @@ nonisolated extension EmailMessage {
 // MARK: - HTML sanitizer
 
 /// Makes email HTML safe and private to render through zMD's HTML-block path.
-///  - Strips script/iframe/object/embed/link/meta/base elements and on* handlers. (The AppKit
-///    importer doesn't run scripts, but the exported HTML is opened by other programs.)
-///  - Blocks REMOTE images: `<img src="http…">` becomes a placeholder; `background=` and CSS
-///    `url(http…)` are removed. This is the tracking-pixel defense and is not optional.
-///  - Resolves `cid:` images to `data:` URIs from the message's inline parts.
-///  - Keeps only the <body> contents (plus any <style> blocks from <head>), since the result is
-///    embedded inside zMD's own document.
+///
+/// Allowlist, not denylist: the HTML is tokenized (tags, attributes, text, comments) and the
+/// output is REBUILT from known-safe elements and attributes only. The old single-pass regex
+/// denylist missed `srcset`, `<picture><source>`, `<input type=image>`, `poster`, SVG
+/// `<image href>`, tags rebuilt around an inner removal and entity- or escape-encoded CSS URLs,
+/// and AppKit's HTML importer fetched whatever survived (security finding, 2026-11). Output
+/// built this way cannot reference the network:
+///  - Elements outside `allowedElements` are unwrapped (their text kept); `droppedElements`
+///    (script, media, forms, SVG, …) disappear with their content. Comments are dropped.
+///  - Attributes outside `allowedAttributes` are dropped. `href` survives only on `<a>` and only
+///    for http/https/mailto; nothing else may carry a URL.
+///  - `<img>` keeps only a `data:` raster image or a `cid:` reference resolved to one; anything
+///    else becomes a placeholder (remote ones are counted).
+///  - `style` attributes and `<style>` blocks lose every declaration that could fetch (`url(`,
+///    `image-set(`, `@import`, …); one that cannot be judged (CSS escapes, unknown entities) is
+///    dropped whole.
+///  - Every emitted tag is closed, so the result is balanced whatever the input was.
+/// Text is copied through unchanged apart from `<` and `>`, so whitespace (`pre-wrap` bodies)
+/// and character references survive exactly.
 nonisolated enum EmailHTMLSanitizer {
     struct Result: Sendable {
         let html: String
@@ -733,75 +777,229 @@ nonisolated enum EmailHTMLSanitizer {
 
     private static let options: NSRegularExpression.Options = [.caseInsensitive, .dotMatchesLineSeparators]
 
+    static let allowedElements: Set<String> = [
+        "a", "abbr", "address", "article", "aside", "b", "big", "blockquote", "br", "caption", "center",
+        "cite", "code", "col", "colgroup", "dd", "del", "dfn", "div", "dl", "dt", "em", "figcaption",
+        "figure", "font", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "i", "img", "ins",
+        "kbd", "label", "li", "main", "mark", "nav", "ol", "p", "pre", "q", "s", "samp", "section",
+        "small", "span", "strike", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th", "thead",
+        "tr", "tt", "u", "ul", "var", "wbr",
+    ]
+    /// Removed together with everything inside them.
+    static let droppedElements: Set<String> = [
+        "applet", "audio", "button", "canvas", "datalist", "dialog", "form", "frameset", "map", "math",
+        "object", "optgroup", "option", "picture", "select", "svg", "template", "video",
+    ]
+    /// Void elements that are dropped (no content to skip).
+    private static let droppedVoidElements: Set<String> = [
+        "area", "base", "basefont", "bgsound", "embed", "frame", "input", "isindex", "keygen", "link",
+        "meta", "param", "source", "track",
+    ]
+    static let allowedAttributes: Set<String> = [
+        "align", "alt", "bgcolor", "border", "cellpadding", "cellspacing", "class", "color", "cols",
+        "colspan", "dir", "face", "height", "hspace", "lang", "nowrap", "rowspan", "size", "span",
+        "start", "summary", "title", "type", "valign", "vspace", "width",
+    ]
+    private static let voidElements: Set<String> = ["br", "col", "hr", "img", "wbr"]
+    private static let rasterImageTypes: Set<String> = [
+        "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp", "image/tiff",
+    ]
+
     static func sanitize(_ input: String, inlineParts: [String: EmailMessage.Attachment]) -> Result {
-        var html = input
-        var blocked = 0
+        var builder = Builder(inlineParts: inlineParts)
+        var tokenizer = HTMLTokenizer(input)
+        var dropping: (name: String, depth: Int)?
 
-        // Keep <style> blocks from <head>, then reduce to the body contents.
-        let styles = matches(#"<style\b[^>]*>.*?</style\s*>"#, in: html)
-        if let body = firstGroup(#"<body\b[^>]*>(.*?)</body\s*>"#, in: html) {
-            html = body
-        } else {
-            html = removing(#"<head\b[^>]*>.*?</head\s*>"#, from: html)
-            html = removing(#"</?(?:html|body)\b[^>]*>"#, from: html)
-        }
-
-        // Dangerous / pointless elements.
-        for pattern in [#"<script\b[^>]*>.*?</script\s*>"#, #"<iframe\b[^>]*>.*?</iframe\s*>"#,
-                        #"<object\b[^>]*>.*?</object\s*>"#, #"<embed\b[^>]*/?>"#, #"<link\b[^>]*/?>"#,
-                        #"<meta\b[^>]*/?>"#, #"<base\b[^>]*/?>"#, #"<title\b[^>]*>.*?</title\s*>"#] {
-            html = removing(pattern, from: html)
-        }
-        // Event handlers and javascript: URLs.
-        html = removing(#"\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, from: html)
-        html = replacing(#"(href\s*=\s*["']?)\s*javascript:[^"'\s>]*"#, in: html, with: "$1#")
-
-        // Images: resolve cid:, block remote, keep data:.
-        if let imgRegex = try? NSRegularExpression(pattern: #"<img\b[^>]*>"#, options: options) {
-            let ns = html as NSString
-            var rebuilt = ""
-            var cursor = 0
-            for m in imgRegex.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
-                rebuilt += ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
-                let tag = ns.substring(with: m.range)
-                let src = firstGroup(#"\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#, in: tag, groups: [1, 2, 3])?.trimmingCharacters(in: .whitespaces) ?? ""
-                let lower = src.lowercased()
-                if lower.hasPrefix("cid:") {
-                    let cid = String(src.dropFirst(4)).lowercased()
-                    if let part = inlineParts[cid] {
-                        let uri = "data:\(part.mimeType);base64,\(part.data.base64EncodedString())"
-                        rebuilt += replacing(#"\bsrc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, in: tag, with: "src=\"\(uri)\"")
-                    } else {
-                        rebuilt += placeholder("missing inline image")
-                    }
-                } else if lower.hasPrefix("data:") {
-                    rebuilt += tag
-                } else if lower.isEmpty {
-                    rebuilt += ""
-                } else {
-                    blocked += 1
-                    rebuilt += placeholder("remote image not loaded")
+        while let token = tokenizer.next() {
+            if var drop = dropping {
+                // Inside a dropped element: only track nesting of the same name.
+                switch token {
+                case .startTag(let name, _, let selfClosing) where name == drop.name && !selfClosing:
+                    drop.depth += 1
+                    dropping = drop
+                case .endTag(let name) where name == drop.name:
+                    drop.depth -= 1
+                    dropping = drop.depth == 0 ? nil : drop
+                default:
+                    break
                 }
-                cursor = NSMaxRange(m.range)
+                continue
             }
-            rebuilt += ns.substring(from: cursor)
-            html = rebuilt
+            switch token {
+            case .text(let text):
+                builder.appendText(text)
+            case .rawText(let name, let content):
+                if name == "style", let css = cleanStylesheet(content) { builder.styles.append(css) }
+            case .startTag(let rawName, let attributes, let selfClosing):
+                let name = rawName == "image" ? "img" : rawName   // HTML parsers alias <image> to <img>
+                if droppedElements.contains(name) {
+                    if !selfClosing { dropping = (name, 1) }
+                } else if allowedElements.contains(name) {
+                    builder.open(name, attributes: attributes)
+                }
+                // Everything else (html, head, body, font-less wrappers, unknown tags, dropped
+                // void elements) is unwrapped: the tag goes, its content stays.
+            case .endTag(let name):
+                builder.close(name)
+            }
         }
-        // Other remote fetches: background attributes and CSS url().
-        html = removing(#"\s+background\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#, from: html)
-        html = stripRemoteCSS(html)
+        builder.closeAll()
 
-        let cleanedStyles = styles.map(stripRemoteCSS)
-        let combined = (cleanedStyles.joined(separator: "\n") + "\n" + html).trimmingCharacters(in: .whitespacesAndNewlines)
-        return Result(html: combined, blockedRemoteImages: blocked)
+        let combined = (builder.styles.map { "<style>\($0)</style>" }.joined(separator: "\n") + "\n" + builder.html)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Result(html: combined, blockedRemoteImages: builder.blocked)
     }
 
-    /// `url(http…)` and `@import` are the two ways a stylesheet can make the HTML importer fetch
-    /// a remote resource (`@import "https://…"` needs no `url(`), so both go.
-    private static func stripRemoteCSS(_ css: String) -> String {
-        var out = replacing(#"url\(\s*["']?\s*(?:https?:|//)[^)]*\)"#, in: css, with: "none")
-        out = removing(#"@import\b[^;{]*;?"#, from: out)
+    private struct Builder {
+        let inlineParts: [String: EmailMessage.Attachment]
+        var html = ""
+        var styles: [String] = []
+        var blocked = 0
+        private var openElements: [String] = []
+
+        init(inlineParts: [String: EmailMessage.Attachment]) { self.inlineParts = inlineParts }
+
+        /// Text keeps its character references (`&nbsp;`, `&amp;`) as written: in text content a
+        /// reference can only ever produce characters, never markup. Only `<` and `>` need care.
+        mutating func appendText(_ text: String) {
+            html += text.replacingOccurrences(of: "<", with: "&lt;", options: .literal)
+                .replacingOccurrences(of: ">", with: "&gt;", options: .literal)
+        }
+
+        mutating func open(_ name: String, attributes: [(name: String, value: String)]) {
+            if name == "img" {
+                appendImage(attributes)
+                return
+            }
+            html += "<\(name)"
+            for (attributeName, value) in attributes {
+                if attributeName == "href" {
+                    if name == "a", let safe = EmailHTMLSanitizer.safeLinkTarget(value) {
+                        html += " href=\"\(EmailHTMLSanitizer.escape(safe))\""
+                    }
+                } else if attributeName == "style" {
+                    if let css = EmailHTMLSanitizer.cleanDeclarations(value), !css.isEmpty {
+                        html += " style=\"\(EmailHTMLSanitizer.escape(css))\""
+                    }
+                } else if EmailHTMLSanitizer.allowedAttributes.contains(attributeName) {
+                    html += " \(attributeName)=\"\(EmailHTMLSanitizer.escape(value))\""
+                }
+            }
+            html += ">"
+            if !EmailHTMLSanitizer.voidElements.contains(name) { openElements.append(name) }
+        }
+
+        /// Closes `name` and anything opened inside it; an end tag with no open element is ignored.
+        mutating func close(_ name: String) {
+            guard let index = openElements.lastIndex(of: name) else { return }
+            while openElements.count > index {
+                html += "</\(openElements.removeLast())>"
+            }
+        }
+
+        mutating func closeAll() {
+            while let name = openElements.popLast() { html += "</\(name)>" }
+        }
+
+        private mutating func appendImage(_ attributes: [(name: String, value: String)]) {
+            func attribute(_ key: String) -> String? { attributes.first { $0.name == key }?.value }
+            let src = (attribute("src") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = src.lowercased()
+            let dataURI: String?
+            if lower.hasPrefix("cid:") {
+                let cid = String(src.dropFirst(4)).lowercased()
+                if let part = inlineParts[cid], let mime = EmailHTMLSanitizer.rasterImageType(part.mimeType) {
+                    dataURI = "data:\(mime);base64,\(part.data.base64EncodedString())"
+                } else {
+                    html += EmailHTMLSanitizer.placeholder("missing inline image")
+                    return
+                }
+            } else if lower.hasPrefix("data:") {
+                dataURI = EmailHTMLSanitizer.isRasterDataURI(lower) ? src : nil
+            } else {
+                dataURI = nil
+            }
+            guard let dataURI else {
+                if lower.isEmpty { return }
+                let isRemote = lower.hasPrefix("http:") || lower.hasPrefix("https:") || lower.hasPrefix("//")
+                if isRemote { blocked += 1 }
+                html += EmailHTMLSanitizer.placeholder(isRemote ? "remote image not loaded" : "image not loaded")
+                return
+            }
+            html += "<img src=\"\(EmailHTMLSanitizer.escape(dataURI))\""
+            for key in ["alt", "width", "height", "title", "align", "border"] {
+                if let value = attribute(key) { html += " \(key)=\"\(EmailHTMLSanitizer.escape(value))\"" }
+            }
+            if let css = attribute("style").flatMap(EmailHTMLSanitizer.cleanDeclarations), !css.isEmpty {
+                html += " style=\"\(EmailHTMLSanitizer.escape(css))\""
+            }
+            html += ">"
+        }
+    }
+
+    /// `type/subtype` if it is a raster image type that may be inlined, else nil. The MIME type
+    /// comes from the attachment's headers — attacker text — and is only ever echoed from the
+    /// fixed allowlist.
+    static func rasterImageType(_ mimeType: String) -> String? {
+        let normalized = mimeType.trimmingCharacters(in: .whitespaces).lowercased()
+        return rasterImageTypes.contains(normalized) ? normalized : nil
+    }
+
+    private static func isRasterDataURI(_ lower: String) -> Bool {
+        let afterScheme = lower.dropFirst("data:".count)
+        guard let end = afterScheme.firstIndex(where: { $0 == ";" || $0 == "," }) else { return false }
+        return rasterImageTypes.contains(String(afterScheme[..<end]))
+    }
+
+    /// http, https and mailto links only, judged per Unicode scalar like a browser's URL parser.
+    /// `href` arrives entity-decoded; a reference the decoder does not know stays literal and so
+    /// can only make the scheme fail the allowlist.
+    static func safeLinkTarget(_ href: String) -> String? {
+        let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = trimmed.unicodeScalars.filter { $0 != "\t" && $0 != "\n" && $0 != "\r" }
+        guard let colon = scalars.firstIndex(of: ":") else { return nil }
+        let scheme = String(String.UnicodeScalarView(scalars[..<colon])).lowercased()
+        return ["http", "https", "mailto"].contains(scheme) ? trimmed : nil
+    }
+
+    /// Substrings that let CSS fetch something. Matched after removing whitespace and comments
+    /// so `url (` or `u/**/rl(` cannot slip past.
+    private static let fetchingCSS = ["url(", "image-set(", "image(", "cross-fade(", "element(", "@import",
+                                      "expression(", "behavior:", "-moz-binding", "src:"]
+
+    /// A `style` attribute (already entity-decoded) with every fetching declaration removed; nil
+    /// when it cannot be judged — CSS escapes, or a character reference the decoder left alone —
+    /// and must go entirely.
+    static func cleanDeclarations(_ css: String) -> String? {
+        guard !css.contains("\\"), !containsCharacterReference(css) else { return nil }
+        let kept = css.split(separator: ";").filter { declaration in
+            let squashed = squash(String(declaration))
+            return !fetchingCSS.contains { squashed.contains($0) }
+        }
+        return kept.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "; ")
+    }
+
+    /// A `<style>` block with fetching rules neutralized; nil when it must go entirely (CSS
+    /// escapes, or anything that could close the element).
+    static func cleanStylesheet(_ css: String) -> String? {
+        guard !css.contains("\\"), !css.contains("<") else { return nil }
+        var out = removing(#"@import\b[^;{]*;?"#, from: css)
+        out = replacing(#"(?:-webkit-)?(?:url|image-set|image|cross-fade|element)\s*\([^)]*\)"#, in: out, with: "none")
+        let squashed = squash(out)
+        // Anything still able to fetch after the rewrite (nested parens, comments splitting a
+        // function name) drops the whole block rather than being parsed further.
+        if fetchingCSS.contains(where: { $0 != "src:" && $0 != "behavior:" && squashed.contains($0) }) { return nil }
         return out
+    }
+
+    private static func containsCharacterReference(_ s: String) -> Bool {
+        s.range(of: #"&[#a-zA-Z]"#, options: .regularExpression) != nil
+    }
+
+    /// Lowercased, whitespace and `/* */` comments removed.
+    private static func squash(_ css: String) -> String {
+        let noComments = replacing(#"/\*.*?\*/"#, in: css, with: "")
+        return String(String.UnicodeScalarView(noComments.lowercased().unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }))
     }
 
     private static func placeholder(_ text: String) -> String {
@@ -809,10 +1007,10 @@ nonisolated enum EmailHTMLSanitizer {
     }
 
     static func escape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&", with: "&amp;")
-         .replacingOccurrences(of: "<", with: "&lt;")
-         .replacingOccurrences(of: ">", with: "&gt;")
-         .replacingOccurrences(of: "\"", with: "&quot;")
+        s.replacingOccurrences(of: "&", with: "&amp;", options: .literal)
+         .replacingOccurrences(of: "<", with: "&lt;", options: .literal)
+         .replacingOccurrences(of: ">", with: "&gt;", options: .literal)
+         .replacingOccurrences(of: "\"", with: "&quot;", options: .literal)
     }
 
     /// Turn bare http(s) URLs in already-escaped text into links.
@@ -841,5 +1039,248 @@ nonisolated enum EmailHTMLSanitizer {
             if let r = Range(m.range(at: g), in: s) { return String(s[r]) }
         }
         return nil
+    }
+}
+
+// MARK: - HTML tokenizer
+
+/// A small, forgiving HTML tokenizer for `EmailHTMLSanitizer`: start and end tags with
+/// entity-decoded attributes, text, and the content of raw-text elements (`<style>`,
+/// `<script>`, …). Comments, doctypes and processing instructions are skipped. It never fails:
+/// a `<` that does not start markup is text, and an unterminated tag at end of input is
+/// dropped, as browsers do.
+nonisolated struct HTMLTokenizer {
+    enum Token {
+        case text(String)
+        case startTag(name: String, attributes: [(name: String, value: String)], selfClosing: Bool)
+        case endTag(String)
+        case rawText(name: String, content: String)
+    }
+
+    static let rawTextElements: Set<String> = [
+        "iframe", "noembed", "noframes", "noscript", "plaintext", "script", "style", "textarea", "title", "xmp",
+    ]
+
+    private let s: [Unicode.Scalar]
+    private var i = 0
+
+    init(_ input: String) { s = Array(input.unicodeScalars) }
+
+    mutating func next() -> Token? {
+        while i < s.count {
+            if s[i] == "<" {
+                switch markup() {
+                case .token(let token): return token
+                case .skipped: continue
+                case .notMarkup: break
+                }
+            }
+            // Text up to the next `<` (a `<` that was not markup is part of it).
+            let start = i
+            i += 1
+            while i < s.count, s[i] != "<" { i += 1 }
+            return .text(Self.string(s[start..<i]))
+        }
+        return nil
+    }
+
+    private enum Markup { case token(Token), skipped, notMarkup }
+
+    private mutating func markup() -> Markup {
+        let next = i + 1 < s.count ? s[i + 1] : nil
+        if next == "!" {
+            if hasPrefix("<!--", at: i) {
+                i = indexAfter("-->", from: i + 4) ?? s.count
+            } else {
+                i = indexAfter(">", from: i + 2) ?? s.count   // doctype, CDATA, conditional comments
+            }
+            return .skipped
+        }
+        if next == "?" {
+            i = indexAfter(">", from: i + 2) ?? s.count
+            return .skipped
+        }
+        if next == "/" {
+            guard i + 2 < s.count, Self.isLetter(s[i + 2]) else {
+                i = indexAfter(">", from: i + 2) ?? s.count   // `</>` and `</ …>` are bogus comments
+                return .skipped
+            }
+            i += 2
+            let name = readName()
+            // End tags may carry (ignored) attributes; one cut off by end of input is dropped.
+            guard readAttributes() != nil else { return .skipped }
+            return .token(.endTag(name))
+        }
+        guard let next, Self.isLetter(next) else { return .notMarkup }
+        i += 1
+        let name = readName()
+        guard let (attributes, selfClosing) = readAttributes() else { return .skipped }   // EOF inside the tag
+        if Self.rawTextElements.contains(name) {
+            let contentStart = i
+            let contentEnd = findEndTag(name, from: i) ?? s.count
+            let content = Self.string(s[contentStart..<contentEnd])
+            i = contentEnd < s.count ? (indexAfter(">", from: contentEnd) ?? s.count) : s.count
+            return .token(.rawText(name: name, content: content))
+        }
+        return .token(.startTag(name: name, attributes: attributes, selfClosing: selfClosing))
+    }
+
+    private mutating func readName() -> String {
+        let start = i
+        while i < s.count, !Self.isSpace(s[i]), s[i] != "/", s[i] != ">" { i += 1 }
+        return Self.string(s[start..<i]).lowercased()
+    }
+
+    /// Attributes up to and including the closing `>`; nil when input ends first.
+    private mutating func readAttributes() -> (attributes: [(name: String, value: String)], selfClosing: Bool)? {
+        var attributes: [(name: String, value: String)] = []
+        var selfClosing = false
+        while i < s.count {
+            let c = s[i]
+            if c == ">" { i += 1; return (attributes, selfClosing) }
+            if Self.isSpace(c) { i += 1; continue }
+            if c == "/" { selfClosing = true; i += 1; continue }
+            selfClosing = false
+            let nameStart = i
+            i += 1   // the first character may be `=` (an odd but legal attribute name)
+            while i < s.count, !Self.isSpace(s[i]), s[i] != "/", s[i] != ">", s[i] != "=" { i += 1 }
+            let name = Self.string(s[nameStart..<i]).lowercased()
+            while i < s.count, Self.isSpace(s[i]) { i += 1 }
+            var value = ""
+            if i < s.count, s[i] == "=" {
+                i += 1
+                while i < s.count, Self.isSpace(s[i]) { i += 1 }
+                if i < s.count, s[i] == "\"" || s[i] == "'" {
+                    let quote = s[i]
+                    let valueStart = i + 1
+                    i = valueStart
+                    while i < s.count, s[i] != quote { i += 1 }
+                    value = Self.string(s[valueStart..<min(i, s.count)])
+                    if i < s.count { i += 1 }
+                } else {
+                    let valueStart = i
+                    while i < s.count, !Self.isSpace(s[i]), s[i] != ">" { i += 1 }
+                    value = Self.string(s[valueStart..<i])
+                }
+            }
+            attributes.append((name, Self.decodeCharacterReferences(value)))
+        }
+        return nil
+    }
+
+    private func hasPrefix(_ prefix: String, at index: Int) -> Bool {
+        var j = index
+        for p in prefix.unicodeScalars {
+            guard j < s.count, s[j] == p else { return false }
+            j += 1
+        }
+        return true
+    }
+
+    private func indexAfter(_ terminator: String, from start: Int) -> Int? {
+        let t = Array(terminator.unicodeScalars)
+        var j = max(start, 0)
+        while j + t.count <= s.count {
+            if s[j] == t[0], Array(s[j..<(j + t.count)]) == t { return j + t.count }
+            j += 1
+        }
+        return nil
+    }
+
+    /// Index of `</name` (any case) followed by whitespace, `/` or `>`.
+    private func findEndTag(_ name: String, from start: Int) -> Int? {
+        let n = Array(name.unicodeScalars)
+        var j = start
+        while j + 2 + n.count <= s.count {
+            if s[j] == "<", s[j + 1] == "/" {
+                var matches = true
+                for k in 0..<n.count where Self.lower(s[j + 2 + k]) != n[k] { matches = false; break }
+                if matches {
+                    let after = j + 2 + n.count
+                    if after == s.count || Self.isSpace(s[after]) || s[after] == "/" || s[after] == ">" { return j }
+                }
+            }
+            j += 1
+        }
+        return nil
+    }
+
+    private static func isLetter(_ c: Unicode.Scalar) -> Bool {
+        (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+    }
+
+    private static func isSpace(_ c: Unicode.Scalar) -> Bool {
+        c == " " || c == "\t" || c == "\n" || c == "\r" || c == "\u{0C}"
+    }
+
+    private static func lower(_ c: Unicode.Scalar) -> Unicode.Scalar {
+        (c >= "A" && c <= "Z") ? Unicode.Scalar(c.value + 32)! : c
+    }
+
+    private static func string(_ scalars: ArraySlice<Unicode.Scalar>) -> String {
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: scalars)
+        return String(view)
+    }
+
+    // MARK: Character references
+
+    private static let namedReferences: [String: String] = [
+        "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{A0}",
+        "colon": ":", "semi": ";", "comma": ",", "period": ".", "sol": "/", "bsol": "\\",
+        "lpar": "(", "rpar": ")", "lsqb": "[", "rsqb": "]", "lcub": "{", "rcub": "}",
+        "equals": "=", "num": "#", "excl": "!", "quest": "?", "commat": "@", "percnt": "%",
+        "Tab": "\t", "NewLine": "\n",
+        "lsquo": "\u{2018}", "rsquo": "\u{2019}", "ldquo": "\u{201C}", "rdquo": "\u{201D}",
+        "ndash": "\u{2013}", "mdash": "\u{2014}", "hellip": "\u{2026}", "copy": "\u{A9}",
+        "reg": "\u{AE}", "trade": "\u{2122}", "middot": "\u{B7}", "bull": "\u{2022}",
+    ]
+    /// Legacy references browsers also accept without the trailing `;`.
+    private static let legacyReferences: Set<String> = ["amp", "lt", "gt", "quot", "nbsp", "copy", "reg"]
+
+    /// Decodes numeric references (with or without `;`) and the named ones above. Anything else
+    /// stays literal; callers that judge URLs or CSS treat a leftover `&name` as unjudgeable.
+    static func decodeCharacterReferences(_ value: String) -> String {
+        guard value.unicodeScalars.contains("&") else { return value }
+        let v = Array(value.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var j = 0
+        while j < v.count {
+            guard v[j] == "&", j + 1 < v.count else { out.append(v[j]); j += 1; continue }
+            if v[j + 1] == "#" {
+                var k = j + 2
+                let hex = k < v.count && (v[k] == "x" || v[k] == "X")
+                if hex { k += 1 }
+                let digitsStart = k
+                while k < v.count, hex ? v[k].properties.isASCIIHexDigit : (v[k] >= "0" && v[k] <= "9") { k += 1 }
+                if k > digitsStart {
+                    let digits = string(v[digitsStart..<k])
+                    let code = UInt32(digits.prefix(8), radix: hex ? 16 : 10) ?? 0xFFFD
+                    out.append(Unicode.Scalar(code).flatMap { $0.value == 0 ? nil : $0 } ?? "\u{FFFD}")
+                    if k < v.count, v[k] == ";" { k += 1 }
+                    j = k
+                    continue
+                }
+            } else {
+                var k = j + 1
+                while k < v.count, isLetter(v[k]) || (v[k] >= "0" && v[k] <= "9") { k += 1 }
+                let name = string(v[(j + 1)..<k])
+                if let replacement = namedReferences[name] {
+                    if k < v.count, v[k] == ";" {
+                        out.append(contentsOf: replacement.unicodeScalars)
+                        j = k + 1
+                        continue
+                    }
+                    if legacyReferences.contains(name), !(k < v.count && v[k] == "=") {
+                        out.append(contentsOf: replacement.unicodeScalars)
+                        j = k
+                        continue
+                    }
+                }
+            }
+            out.append(v[j])
+            j += 1
+        }
+        return String(out)
     }
 }

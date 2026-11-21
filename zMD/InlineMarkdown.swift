@@ -18,6 +18,10 @@ nonisolated enum InlineMarkdown {
         var tokens: [Token] = []
         var buffer = ""
         var index = text.startIndex
+        // Shared across the whole paragraph so every `[` / `![` does not rescan to the end for
+        // a `]` or `)` that is not there (quadratic on crafted input; security finding, 2026-11).
+        var closeBracket = ForwardFinder(target: "]")
+        var closeParen = ForwardFinder(target: ")")
 
         func flushText() {
             guard !buffer.isEmpty else { return }
@@ -56,14 +60,14 @@ nonisolated enum InlineMarkdown {
                 continue
             }
 
-            if let token = imageToken(in: text, at: index) {
+            if let token = imageToken(in: text, at: index, closeBracket: &closeBracket, closeParen: &closeParen) {
                 flushText()
                 tokens.append(.image(alt: token.alt, source: token.source))
                 index = token.end
                 continue
             }
 
-            if let token = linkToken(in: text, at: index) {
+            if let token = linkToken(in: text, at: index, closeBracket: &closeBracket, closeParen: &closeParen) {
                 flushText()
                 tokens.append(.link(label: token.label, destination: token.destination))
                 index = token.end
@@ -110,9 +114,33 @@ nonisolated enum InlineMarkdown {
         #"\\`*_{}[]()#+-.!|~"#.contains(character)
     }
 
+    /// Only a short window is examined: running the regex over `text[index...]` at every
+    /// character bridged the whole remaining paragraph each time.
     private static func lineBreakRange(in text: String, at index: String.Index) -> Range<String.Index>? {
-        let tail = text[index...]
-        return tail.range(of: #"^<br\s*/?>"#, options: [.regularExpression, .caseInsensitive])
+        guard text[index] == "<" else { return nil }
+        let windowEnd = text.index(index, offsetBy: 64, limitedBy: text.endIndex) ?? text.endIndex
+        return text[index..<windowEnd].range(of: #"^<br\s*/?>"#, options: [.regularExpression, .caseInsensitive])
+    }
+
+    /// `firstIndex(of:)` with memory: a search from `start` that found the target at `r` (or
+    /// nothing) answers every later search starting between `start` and `r` without scanning.
+    struct ForwardFinder {
+        let target: Character
+        private var searchedFrom: String.Index?
+        private var result: String.Index?
+
+        init(target: Character) { self.target = target }
+
+        mutating func find(in text: String, from start: String.Index) -> String.Index? {
+            if let from = searchedFrom, start >= from {
+                guard let found = result else { return nil }   // none from `from` to the end
+                if start <= found { return found }
+            }
+            let found = text[start...].firstIndex(of: target)
+            searchedFrom = start
+            result = found
+            return found
+        }
     }
 
     private static func codeToken(in text: String, at index: String.Index) -> (content: String, end: String.Index)? {
@@ -189,10 +217,10 @@ nonisolated enum InlineMarkdown {
         return nil
     }
 
-    private static func imageToken(in text: String, at index: String.Index) -> (alt: String, source: String, end: String.Index)? {
+    private static func imageToken(in text: String, at index: String.Index, closeBracket: inout ForwardFinder, closeParen: inout ForwardFinder) -> (alt: String, source: String, end: String.Index)? {
         guard text[index...].hasPrefix("!["),
               let altStart = text.index(index, offsetBy: 2, limitedBy: text.endIndex),
-              let altEnd = text[altStart...].firstIndex(of: "]") else {
+              let altEnd = closeBracket.find(in: text, from: altStart) else {
             return nil
         }
 
@@ -200,7 +228,7 @@ nonisolated enum InlineMarkdown {
         guard openParen < text.endIndex, text[openParen] == "(" else { return nil }
         let sourceStart = text.index(after: openParen)
         guard sourceStart < text.endIndex,
-              let sourceEnd = text[sourceStart...].firstIndex(of: ")"),
+              let sourceEnd = closeParen.find(in: text, from: sourceStart),
               sourceStart < sourceEnd else {
             return nil
         }
@@ -212,11 +240,11 @@ nonisolated enum InlineMarkdown {
         )
     }
 
-    private static func linkToken(in text: String, at index: String.Index) -> (label: String, destination: String, end: String.Index)? {
+    private static func linkToken(in text: String, at index: String.Index, closeBracket: inout ForwardFinder, closeParen: inout ForwardFinder) -> (label: String, destination: String, end: String.Index)? {
         guard text[index] == "[",
               let labelStart = text.index(index, offsetBy: 1, limitedBy: text.endIndex),
               labelStart < text.endIndex,
-              let labelEnd = text[labelStart...].firstIndex(of: "]"),
+              let labelEnd = closeBracket.find(in: text, from: labelStart),
               labelStart < labelEnd else {
             return nil
         }
@@ -225,7 +253,7 @@ nonisolated enum InlineMarkdown {
         guard openParen < text.endIndex, text[openParen] == "(" else { return nil }
         let destinationStart = text.index(after: openParen)
         guard destinationStart < text.endIndex,
-              let destinationEnd = text[destinationStart...].firstIndex(of: ")"),
+              let destinationEnd = closeParen.find(in: text, from: destinationStart),
               destinationStart < destinationEnd else {
             return nil
         }

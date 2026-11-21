@@ -681,3 +681,242 @@ nonisolated final class EmailReviewRegressionTests: XCTestCase {
                              "a .msg must be read whole, under a cap larger than the prefix cap used for text")
     }
 }
+
+// MARK: - Security findings (Claude Security, zApps-v3 project, 2026-11)
+
+nonisolated final class EmailSecurityTests: XCTestCase {
+    private func eml(_ s: String) -> Data { Data(s.replacingOccurrences(of: "\n", with: "\r\n", options: .literal).utf8) }
+    private func sanitize(_ html: String, _ parts: [String: EmailMessage.Attachment] = [:]) -> EmailHTMLSanitizer.Result {
+        EmailHTMLSanitizer.sanitize(html, inlineParts: parts)
+    }
+    /// True when `host` appears inside any tag of `html` (as an attribute or tag text) rather than
+    /// as escaped body text.
+    private func referencesInMarkup(_ html: String, _ host: String) -> Bool {
+        html.range(of: "<[^>]*\(host)", options: .regularExpression) != nil
+    }
+
+    // MARK: Sanitizer bypasses
+
+    func testSanitizerAllowlistDefeatsKnownRemoteLoadBypasses() {
+        let cases = [
+            "<lin<link>k rel=stylesheet href=http://evil.example/a.css>",
+            "<img src=\"data:image/png;base64,AA\" srcset=\"http://evil.example/s 2x\">",
+            "<picture><source srcset=\"http://evil.example/p\"><img src=\"data:image/png;base64,AA\"></picture>",
+            "<input type=image src=\"http://evil.example/i\">",
+            "<video poster=\"http://evil.example/v\"></video>",
+            "<svg><image href=\"http://evil.example/svg\"/></svg>",
+            "<image src=\"http://evil.example/alias\">",
+            "<p style=\"background:u\\72 l(http://evil.example/esc)\">x</p>",
+            "<p style=\"background:&#117;rl(http://evil.example/ent)\">x</p>",
+            "<p style=\"background:image-set('http://evil.example/is' 1x)\">x</p>",
+            "<p style=\"background:url (http://evil.example/sp)\">x</p>",
+            "<style>p{background:url(http://evil.example/st)} @import 'http://evil.example/imp';</style>",
+            "<style>p{background:u/**/rl(http://evil.example/cm)}</style>",
+            "<body background=\"http://evil.example/bg\"><table background=\"http://evil.example/tb\"><tr><td>x</td></tr></table>",
+            "<img src=\"//evil.example/proto\">",
+            "<embed src=\"http://evil.example/e\"><object data=\"http://evil.example/o\"></object><iframe src=\"http://evil.example/f\"></iframe>",
+            "<meta http-equiv=refresh content=\"0;url=http://evil.example/r\"><base href=\"http://evil.example/\">",
+            "<a href=\"http://ok.example\" ping=\"http://evil.example/ping\">x</a>",
+            "<div><!-- <img src=http://evil.example/c> --></div>",
+        ]
+        for html in cases {
+            let out = sanitize(html).html
+            XCTAssertFalse(referencesInMarkup(out, "evil\\.example"), "\(html)\n→ \(out)")
+            XCTAssertFalse(out.lowercased().contains("url("), out)
+        }
+    }
+
+    func testInlineImageMimeTypeCannotInjectAttributes() {
+        let evil = EmailMessage.Attachment(filename: "a.png", mimeType: "image/png\" srcset=\"http://evil.example/x 1x", data: Data([1, 2, 3]), contentId: "x", isInline: true)
+        let svg = EmailMessage.Attachment(filename: "a.svg", mimeType: "image/svg+xml", data: Data([1]), contentId: "s", isInline: true)
+        let png = EmailMessage.Attachment(filename: "a.png", mimeType: "IMAGE/PNG", data: Data([1, 2, 3]), contentId: "g", isInline: true)
+        let out = sanitize("<img src=cid:x><img src=cid:s><img src=\"cid:g\" alt=\"logo\">", ["x": evil, "s": svg, "g": png]).html
+        XCTAssertFalse(out.contains("srcset"), out)
+        XCTAssertFalse(out.contains("svg"), out)
+        XCTAssertTrue(out.contains("<img src=\"data:image/png;base64,AQID\" alt=\"logo\">"), out)
+    }
+
+    func testSanitizerKeepsOnlySafeLinksAndAttributes() {
+        let out = sanitize("""
+        <a href="java&#115;cript:alert(1)">a</a><a href="jav&#x09;ascript:x">b</a><a href="javascript&colon;x">c</a>\
+        <a href="https://ok.example/?a=1&amp;b=2" onclick="x()">d</a><a href="file:///Applications/Calculator.app">e</a>\
+        <p title='a" onclick="b' class=k data-x=1>q</p>
+        """).html
+        XCTAssertEqual(out, """
+        <a>a</a><a>b</a><a>c</a><a href="https://ok.example/?a=1&amp;b=2">d</a><a>e</a><p title="a&quot; onclick=&quot;b" class="k">q</p>
+        """)
+    }
+
+    func testSanitizerPreservesTextAndBalancesTags() {
+        XCTAssertEqual(sanitize("<div style=\"white-space: pre-wrap\">line1\n   line2\tx &nbsp;&amp; &lt;b&gt;</div>").html,
+                       "<div style=\"white-space: pre-wrap\">line1\n   line2\tx &nbsp;&amp; &lt;b&gt;</div>")
+        XCTAssertEqual(sanitize("<div><p>unclosed <b>bold").html, "<div><p>unclosed <b>bold</b></p></div>")
+        XCTAssertEqual(sanitize("</div></div>text<p>x</div>y").html, "text<p>xy</p>")
+        XCTAssertEqual(sanitize("<scr<script>x</script>ipt>alert(1)</script>").html, "xipt&gt;alert(1)")
+    }
+
+    // MARK: Body stays one HTML block
+
+    func testEmailBodyWithStrayClosingTagsStaysOneHTMLBlock() {
+        let m = EmailMessage.parse(eml("""
+        Subject: hi
+        Content-Type: text/html
+
+        <div>hello</div><!-- </div> --></div></div>
+        ![x](https://evil.example/beacon.png)
+        ```mermaid
+        graph TD;A-->B
+        ```
+        $$
+        x
+        $$
+        [link](https://evil.example)
+        """))
+        let elements = MarkdownParser.shared.parse(m.markdownRepresentation())
+        guard let bodyIndex = elements.lastIndex(where: { if case .horizontalRule = $0 { return true }; return false }) else {
+            return XCTFail("\(elements)")
+        }
+        let after = elements[(bodyIndex + 1)...]
+        XCTAssertEqual(after.count, 1, "\(Array(after))")
+        guard case .htmlBlock = after.first else { return XCTFail("\(Array(after))") }
+        XCTAssertFalse(elements.contains { if case .image = $0 { return true }; if case .mermaidBlock = $0 { return true }; return false })
+    }
+
+    // MARK: MIME nesting
+
+    func testDeeplyNestedMultipartParsesOnASmallStack() {
+        var body = "Subject: nest\r\nContent-Type: multipart/mixed; boundary=b0\r\n\r\n"
+        for level in 1...100_000 {
+            body += "--b\(level - 1)\r\nContent-Type: multipart/mixed; boundary=b\(level)\r\n\r\n"
+        }
+        body += "--b100000\r\nContent-Type: text/plain\r\n\r\ndeep\r\n"
+        let data = Data(body.utf8)
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var subject: String?
+        let thread = Thread {
+            subject = EmailMessage.parse(data).subject
+            done.signal()
+        }
+        thread.stackSize = 512 * 1024
+        let start = Date()
+        thread.start()
+        XCTAssertEqual(done.wait(timeout: .now() + 60), .success)
+        XCTAssertEqual(subject, "nest")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 30)
+    }
+
+    func testNormalNestingStillFindsTheBody() {
+        let m = EmailMessage.parse(eml("""
+        Subject: s
+        Content-Type: multipart/mixed; boundary=a
+
+        --a
+        Content-Type: multipart/related; boundary=b
+
+        --b
+        Content-Type: multipart/alternative; boundary=c
+
+        --c
+        Content-Type: text/plain
+
+        plain
+        --c
+        Content-Type: text/html
+
+        <p>rich</p>
+        --c--
+        --b--
+        --a--
+        """))
+        XCTAssertEqual(m.htmlBody?.trimmingCharacters(in: .whitespacesAndNewlines), "<p>rich</p>")
+        XCTAssertEqual(m.textBody?.trimmingCharacters(in: .whitespacesAndNewlines), "plain")
+    }
+
+    // MARK: Compound file (.msg)
+
+    private typealias B = TestCompoundFileBuilder
+
+    private func sampleMessage(recipients: Int = 1) -> Data {
+        var children: [B.Node] = [B.properties(topLevel: true), B.unicode(0x0037, "Subject line"), B.unicode(0x1000, "Body text")]
+        for r in 0..<recipients {
+            children.append(B.Node(name: String(format: "__recip_version1.0_#%08X", r), isStorage: true, data: Data(),
+                                   children: [B.properties(topLevel: false), B.unicode(0x3001, "Recipient \(r)")]))
+        }
+        return B.build(root: children)
+    }
+
+    private func patch(_ data: inout Data, at offset: Int, _ value: UInt32) {
+        data.replaceSubrange(offset..<(offset + 4), with: B.le32(value))
+    }
+
+    func testCompoundFileRejectsAFATCountLargerThanTheFile() {
+        var data = sampleMessage()
+        patch(&data, at: 44, 0x00FF_FFFF)
+        let start = Date()
+        XCTAssertNil(OutlookMessage.parse(data))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+    }
+
+    func testCompoundFileStopsASelfReferencingDIFATChain() {
+        var data = sampleMessage()
+        let sectorCount = data.count / 512 - 1
+        // Append a DIFAT sector whose 127 entries all name FAT sector 0 and whose next-DIFAT
+        // pointer names itself; claim as many FAT sectors as the file has.
+        var difat = Data()
+        for _ in 0..<127 { difat.append(B.le32(0)) }
+        difat.append(B.le32(UInt32(sectorCount)))
+        data.append(difat)
+        patch(&data, at: 44, UInt32(sectorCount + 1))
+        patch(&data, at: 68, UInt32(sectorCount))
+        patch(&data, at: 72, 1)
+        let start = Date()
+        let m = OutlookMessage.parse(data)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertEqual(m?.subject, "Subject line")
+    }
+
+    func testSharedRecipientSubtreeIsReadOnce() throws {
+        var data = sampleMessage(recipients: 40)
+        // Directory entries live in sector 1 (offset 1024). Point every recipient storage's child
+        // at the first recipient's children.
+        var storages: [Int] = []
+        var offset = 1024
+        while offset + 128 <= data.count, data[offset + 66] != 0 || storages.isEmpty {
+            if data[offset + 66] == 1 { storages.append(offset) }
+            offset += 128
+        }
+        XCTAssertEqual(storages.count, 40)
+        let sharedChild = data.subdata(in: (storages[0] + 76)..<(storages[0] + 80))
+        for s in storages { data.replaceSubrange((s + 76)..<(s + 80), with: sharedChild) }
+        let m = try XCTUnwrap(OutlookMessage.parse(data))
+        XCTAssertEqual(m.to.filter { $0.name != nil }.count, 1, "the shared subtree belongs to one storage only")
+    }
+
+    func testLoopingMiniStreamChainReturnsAtMostOnePass() throws {
+        var data = sampleMessage()
+        // Find the body stream (0x1000) entry, make its mini chain loop on itself and claim 4000 bytes.
+        let name = Data("__substg1.0_1000001F".utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] })
+        var entry = 1024
+        while entry + 128 <= data.count, data.subdata(in: entry..<(entry + name.count)) != name { entry += 128 }
+        let start = Int(data.le32(at: entry + 116))
+        let miniFatSector = Int(data.le32(at: 60))
+        patch(&data, at: (miniFatSector + 1) * 512 + start * 4, UInt32(start))
+        patch(&data, at: entry + 120, 4000)
+        let m = try XCTUnwrap(OutlookMessage.parse(data))
+        XCTAssertLessThanOrEqual(m.textBody?.utf16.count ?? 0, 32, "one 64-byte mini sector at most")
+    }
+
+    // MARK: Quick Look cap
+
+    func testQuickLookCapsRenderedEmailMarkdown() {
+        let big = String(repeating: "a", count: QuickLookHTML.maxRenderedMarkdownBytes + 10)
+        let capped = QuickLookHTML.cappedMarkdown(big)
+        XCTAssertTrue(capped.truncated)
+        XCTAssertEqual(capped.markdown.utf8.count, QuickLookHTML.maxRenderedMarkdownBytes)
+        XCTAssertFalse(QuickLookHTML.cappedMarkdown("small").truncated)
+    }
+
+    func testEscapeMarkdownInlineWorksPerScalar() {
+        XCTAssertEqual(EmailMessage.escapeMarkdownInline("[\u{0301}x](y)\r\nz"), "\\[\u{0301}x\\](y)  z")
+    }
+}

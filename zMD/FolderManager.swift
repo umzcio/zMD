@@ -195,7 +195,7 @@ class FolderManager: ObservableObject {
             let resourceValues = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             let isDir = resourceValues?.isDirectory ?? false
             let isSymlink = resourceValues?.isSymbolicLink ?? false
-            let relativePath = item.path.replacingOccurrences(of: root.path, with: "")
+            let relativePath = item.path.replacingOccurrences(of: root.path, with: "", options: .literal)
 
             if isDir {
                 // Skip symlinked directories — buildTree resolves .isDirectoryKey through
@@ -309,8 +309,8 @@ nonisolated enum FolderSearch {
         var hits: [FolderSearchHit] = []
         var occurrence = 0
         let lines = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\r\n", with: "\n", options: .literal)
+            .replacingOccurrences(of: "\r", with: "\n", options: .literal)
             .components(separatedBy: "\n")
         for (index, line) in lines.enumerated() {
             var searchStart = line.startIndex

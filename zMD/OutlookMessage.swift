@@ -7,6 +7,11 @@ import Foundation
 /// Quick Look come for free. Foundation-only; member of the app, the Quick Look extension,
 /// and the tests. Never throws — anything unreadable degrades to empty fields.
 nonisolated enum OutlookMessage {
+    /// Per-message caps; together with `CompoundFile`'s read budget they keep a crafted file's
+    /// parse time and memory proportional to its size.
+    static let maxRecipients = 5_000
+    static let maxAttachments = 1_000
+
     static func parse(_ data: Data) -> EmailMessage? {
         guard let file = CompoundFile(data: data) else { return nil }
         let root = MAPIPropertySet(file: file, storage: file.root, isTopLevel: true)
@@ -47,7 +52,7 @@ nonisolated enum OutlookMessage {
         // Recipients from the __recip_version1.0_#NNNNNNNN storages.
         var to: [EmailMessage.Address] = []
         var cc: [EmailMessage.Address] = []
-        for storage in file.children(of: file.root).filter({ $0.name.hasPrefix("__recip_version1.0_") }).sorted(by: { $0.name < $1.name }) {
+        for storage in file.children(of: file.root).filter({ $0.name.hasPrefix("__recip_version1.0_") }).sorted(by: { $0.name < $1.name }).prefix(maxRecipients) {
             let props = MAPIPropertySet(file: file, storage: storage, isTopLevel: false)
             let name = props.string(0x3001, ansi: encoding)
             var address = props.string(0x39FE, ansi: encoding)
@@ -84,7 +89,7 @@ nonisolated enum OutlookMessage {
 
         // Attachments from the __attach_version1.0_#NNNNNNNN storages.
         var attachments: [EmailMessage.Attachment] = []
-        for storage in file.children(of: file.root).filter({ $0.name.hasPrefix("__attach_version1.0_") }).sorted(by: { $0.name < $1.name }) {
+        for storage in file.children(of: file.root).filter({ $0.name.hasPrefix("__attach_version1.0_") }).sorted(by: { $0.name < $1.name }).prefix(maxAttachments) {
             let props = MAPIPropertySet(file: file, storage: storage, isTopLevel: false)
             let method = props.int32(0x3705) ?? 1
             let longName = props.string(0x3707, ansi: encoding)
@@ -239,30 +244,41 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         guard data.count >= 512,
               [UInt8](data.prefix(8)) == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] else { return nil }
         self.data = data
+        readBudget = data.count * 4 + 1_048_576
         let sectorShift = Int(data.le16(at: 30))
         guard sectorShift == 9 || sectorShift == 12 else { return nil }
         sectorSize = 1 << sectorShift
         miniStreamCutoff = Int(data.le32(at: 56))
 
-        // FAT via DIFAT: 109 entries in the header, then a chain of DIFAT sectors.
+        // FAT via DIFAT: 109 entries in the header, then a chain of DIFAT sectors. Every count
+        // here is bounded by the sectors the file really has: a header claiming millions of FAT
+        // sectors plus a self-referencing DIFAT sector once expanded an 8 KB file into tens of
+        // GB of FAT (security finding, 2026-11).
+        let fileSectorCount = max(0, data.count / sectorSize - 1)
         let fatSectorCount = Int(data.le32(at: 44))
+        guard fatSectorCount <= fileSectorCount else { return nil }
         var fatSectors: [UInt32] = []
+        var seenFatSectors = Set<UInt32>()
+        func addFatSector(_ s: UInt32) {
+            guard s != Self.freeSector, s != Self.endOfChain, Int(s) < fileSectorCount,
+                  seenFatSectors.insert(s).inserted else { return }
+            fatSectors.append(s)
+        }
         for i in 0..<109 where fatSectors.count < fatSectorCount {
-            let s = data.le32(at: 76 + i * 4)
-            if s != Self.freeSector { fatSectors.append(s) }
+            addFatSector(data.le32(at: 76 + i * 4))
         }
         var difat = data.le32(at: 68)
-        var difatGuard = 0
-        while difat != Self.endOfChain && difat != Self.freeSector && fatSectors.count < fatSectorCount && difatGuard < 10_000 {
+        var visitedDifat = Set<UInt32>()
+        while difat != Self.endOfChain && difat != Self.freeSector && fatSectors.count < fatSectorCount,
+              visitedDifat.insert(difat).inserted {
             guard let sector = sectorData(Int(difat)) else { break }
             let perSector = sectorSize / 4 - 1
             for i in 0..<perSector where fatSectors.count < fatSectorCount {
-                let s = sector.le32(at: i * 4)
-                if s != Self.freeSector { fatSectors.append(s) }
+                addFatSector(sector.le32(at: i * 4))
             }
             difat = sector.le32(at: perSector * 4)
-            difatGuard += 1
         }
+        fat.reserveCapacity(fatSectors.count * (sectorSize / 4))
         for s in fatSectors {
             guard let sector = sectorData(Int(s)) else { continue }
             for i in 0..<(sectorSize / 4) { fat.append(sector.le32(at: i * 4)) }
@@ -292,6 +308,7 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         }
         guard let first = list.first, first.type == 5 else { return nil }
         entries = list
+        childrenByStorage = Self.buildTree(list)
 
         // Mini FAT + mini stream (the root entry's stream).
         let miniFatStart = Int(data.le32(at: 60))
@@ -305,18 +322,36 @@ nonisolated final class CompoundFile: @unchecked Sendable {
 
     // MARK: Tree
 
-    func children(of storage: Entry) -> [Entry] {
-        var result: [Entry] = []
-        var stack = [storage.child]
-        var seen = Set<Int>()
-        while let id = stack.popLast() {
-            guard id >= 0, id < entries.count, seen.insert(id).inserted else { continue }
-            let e = entries[id]
-            result.append(e)
-            stack.append(e.left)
-            stack.append(e.right)
+    /// Children of each storage, built once. Every entry belongs to exactly one parent: an
+    /// entry reachable a second time (several recipient storages pointing at one shared subtree,
+    /// a sibling pointer looping back) is ignored, so a crafted directory cannot make the same
+    /// streams be walked and decoded once per storage.
+    private var childrenByStorage: [Int: [Entry]] = [:]
+
+    private static func buildTree(_ list: [Entry]) -> [Int: [Entry]] {
+        var claimed = [Bool](repeating: false, count: list.count)
+        claimed[0] = true
+        var result: [Int: [Entry]] = [:]
+        var storages = [0]
+        while let storageId = storages.popLast() {
+            var kids: [Entry] = []
+            var stack = [list[storageId].child]
+            while let id = stack.popLast() {
+                guard id >= 0, id < list.count, !claimed[id] else { continue }
+                claimed[id] = true
+                let e = list[id]
+                kids.append(e)
+                stack.append(e.left)
+                stack.append(e.right)
+                if e.type == 1 { storages.append(id) }
+            }
+            result[storageId] = kids
         }
         return result
+    }
+
+    func children(of storage: Entry) -> [Entry] {
+        childrenByStorage[storage.id] ?? []
     }
 
     func child(of storage: Entry, named name: String) -> Entry? {
@@ -325,12 +360,21 @@ nonisolated final class CompoundFile: @unchecked Sendable {
 
     // MARK: Streams
 
+    /// Bytes all `read` calls may return in total. Cross-linked streams (many entries sharing
+    /// one chain) are otherwise each a file-sized copy; real messages read back roughly their
+    /// own size once.
+    private var readBudget = 0
+
     func read(_ entry: Entry) -> Data? {
-        guard entry.type == 2 else { return nil }
+        guard entry.type == 2, readBudget > 0 else { return nil }
+        let stream: Data
         if entry.size < miniStreamCutoff {
-            return readMiniChain(startSector: entry.startSector).prefix(entry.size)
+            stream = readMiniChain(startSector: entry.startSector).prefix(entry.size)
+        } else {
+            stream = readChain(startSector: entry.startSector).prefix(entry.size)
         }
-        return readChain(startSector: entry.startSector).prefix(entry.size)
+        readBudget -= stream.count
+        return readBudget >= 0 ? stream : nil
     }
 
     private func sectorData(_ sector: Int) -> Data? {
@@ -343,7 +387,9 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         var out = Data()
         var sector = UInt32(truncatingIfNeeded: startSector)
         var guardCount = 0
-        while sector < Self.endOfChain - 1, guardCount < maxChainLength {   // < 0xFFFF_FFFD
+        var visited = Set<UInt32>()
+        // A sector may appear once per chain; a loop back ends the chain.
+        while sector < Self.endOfChain - 1, guardCount < maxChainLength, visited.insert(sector).inserted {   // < 0xFFFF_FFFD
             guard let chunk = sectorData(Int(sector)) else { break }
             out.append(chunk)
             guard Int(sector) < fat.count else { break }
@@ -357,7 +403,8 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         var out = Data()
         var sector = UInt32(truncatingIfNeeded: startSector)
         var guardCount = 0
-        while sector < Self.endOfChain - 1, guardCount < maxMiniChainLength {
+        var visited = Set<UInt32>()
+        while sector < Self.endOfChain - 1, guardCount < maxMiniChainLength, visited.insert(sector).inserted {
             let start = Int(sector) * miniSectorSize
             guard start + miniSectorSize <= miniStream.count else {
                 if start < miniStream.count { out.append(miniStream.suffix(from: miniStream.startIndex + start)) }

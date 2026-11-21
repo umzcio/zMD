@@ -105,7 +105,7 @@ class ExportManager {
     private nonisolated static func mathPlaceholderPrefix(avoiding source: String) -> String {
         var prefix: String
         repeat {
-            let token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            let token = UUID().uuidString.replacingOccurrences(of: "-", with: "", options: .literal)
             prefix = "ZMDMATHPH_\(token)_"
         } while source.contains(prefix)
         return prefix
@@ -208,7 +208,7 @@ class ExportManager {
                 let style = hit.display ? "display:block; margin:0.4em auto;" : "vertical-align:middle;"
                 return "<img src=\"data:image/png;base64,\(b64)\" width=\"\(Int(targetWidth))\" height=\"\(Int(targetHeight))\" style=\"\(style)\" alt=\"\(parser.escapeHTML(hit.latex))\">"
             }()
-            result = result.replacingOccurrences(of: placeholder, with: replacement)
+            result = result.replacingOccurrences(of: placeholder, with: replacement, options: .literal)
         }
         return result
     }
@@ -254,30 +254,43 @@ class ExportManager {
         return result
     }
 
-    /// Rewrite `<img src="...">` paths to absolute file:// URLs relative to baseURL so PDF
-    /// export resolves images against the document's directory the same way preview does.
-    /// Without this `<img src="images/foo.png">` resolves against the process working
-    /// directory (typically `/`), and the image silently fails to render in PDF (M15).
-    private nonisolated func absolutizeImageSrcs(_ html: String, baseURL: URL?) -> String {
-        guard let baseDir = baseURL?.deletingLastPathComponent() else { return html }
-        let pattern = #"(<img\b[^>]*\bsrc\s*=\s*["'])([^"']+)(["'])"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return html }
+    /// Rewrite every `<img>` for the attributed-string importer: `data:` and http(s) sources are
+    /// left alone (remote ones are stripped separately), local references become the absolute
+    /// file URL `MarkdownParser.resolveLocalImage` — the preview's own rule — picks, and any
+    /// other reference is removed so the importer cannot load a file the preview never showed.
+    /// Without the rewrite `<img src="images/foo.png">` resolved against the process working
+    /// directory (typically `/`) and silently failed in PDF (M15).
+    nonisolated func absolutizeImageSrcs(_ html: String, baseURL: URL?) -> String {
+        guard let tagRegex = try? NSRegularExpression(pattern: #"<img\b[^>]*>"#, options: .caseInsensitive),
+              let srcRegex = try? NSRegularExpression(pattern: #"(\bsrc\s*=\s*)(?:"([^"]*)"|'([^']*)')"#, options: .caseInsensitive) else { return html }
         let ns = html as NSString
-        let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).reversed()
         let mutable = NSMutableString(string: html)
-        for m in matches where m.numberOfRanges == 4 {
-            let src = ns.substring(with: m.range(at: 2))
-            // Skip absolute URLs (http(s)://, file://, etc.), data: URIs, and rooted paths.
-            // data: has no "://", so the previous test treated base64 images as relative paths
-            // and prepended the document directory — silently dropping them from PDF/RTF.
-            if src.contains("://") || src.hasPrefix("/") || src.lowercased().hasPrefix("data:") { continue }
-            let decoded = src.removingPercentEncoding ?? src
-            let abs = baseDir.appendingPathComponent(decoded).absoluteString
-            let prefix = ns.substring(with: m.range(at: 1))
-            let suffix = ns.substring(with: m.range(at: 3))
-            mutable.replaceCharacters(in: m.range, with: "\(prefix)\(abs)\(suffix)")
+        for tag in tagRegex.matches(in: html, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let tagText = ns.substring(with: tag.range) as NSString
+            guard let src = srcRegex.firstMatch(in: tagText as String, range: NSRange(location: 0, length: tagText.length)) else {
+                mutable.replaceCharacters(in: tag.range, with: "")
+                continue
+            }
+            let valueRange = src.range(at: 2).location != NSNotFound ? src.range(at: 2) : src.range(at: 3)
+            let value = Self.unescapeHTMLAttribute(tagText.substring(with: valueRange))
+            let lower = value.lowercased()
+            if lower.hasPrefix("data:") || lower.hasPrefix("http://") || lower.hasPrefix("https://") { continue }
+            guard let fileURL = MarkdownParser.resolveLocalImage(value, documentURL: baseURL) else {
+                mutable.replaceCharacters(in: tag.range, with: "")
+                continue
+            }
+            let rewritten = (tagText as NSString).replacingCharacters(in: valueRange, with: parser.escapeHTML(fileURL.absoluteString))
+            mutable.replaceCharacters(in: tag.range, with: rewritten)
         }
         return mutable as String
+    }
+
+    private nonisolated static func unescapeHTMLAttribute(_ value: String) -> String {
+        value.replacingOccurrences(of: "&quot;", with: "\"", options: .literal)
+            .replacingOccurrences(of: "&#39;", with: "'", options: .literal)
+            .replacingOccurrences(of: "&lt;", with: "<", options: .literal)
+            .replacingOccurrences(of: "&gt;", with: ">", options: .literal)
+            .replacingOccurrences(of: "&amp;", with: "&", options: .literal)
     }
 
     // MARK: - PDF Export
@@ -1185,25 +1198,9 @@ class ExportManager {
     }
 
     private nonisolated func createImageParagraph(path: String, alt: String, baseURL: URL?) -> String {
-        // Resolve the image path. H17: a path like `images/foo.png` is RELATIVE to the doc;
-        // building `URL(fileURLWithPath:)` from it produced a URL relative to the process working
-        // directory (typically `/`), which spuriously matched `/images/foo.png` if it existed and
-        // missed the actual sibling file. Treat as relative unless rooted (`/`) or has a scheme;
-        // also percent-decode in case the markdown writer URL-encoded spaces etc.
-        let decodedPath = path.removingPercentEncoding ?? path
-        let isRooted = decodedPath.hasPrefix("/")
-        let hasScheme = decodedPath.contains("://")
-
-        let resolvedURL: URL?
-        if isRooted || hasScheme {
-            let absoluteURL = URL(fileURLWithPath: decodedPath)
-            resolvedURL = FileManager.default.fileExists(atPath: absoluteURL.path) ? absoluteURL : nil
-        } else if let base = baseURL?.deletingLastPathComponent() {
-            let relativeURL = base.appendingPathComponent(decodedPath)
-            resolvedURL = FileManager.default.fileExists(atPath: relativeURL.path) ? relativeURL : nil
-        } else {
-            resolvedURL = nil
-        }
+        // Same rule as the preview (H17: relative paths resolve against the document, not the
+        // process working directory; percent-encoded spellings are tried too).
+        let resolvedURL = MarkdownParser.resolveLocalImage(path, documentURL: baseURL)
 
         guard let imageURL = resolvedURL,
               let imageData = try? Data(contentsOf: imageURL),
@@ -1400,11 +1397,11 @@ class ExportManager {
             return true
         })
         return scrubbed
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
+            .replacingOccurrences(of: "&", with: "&amp;", options: .literal)
+            .replacingOccurrences(of: "<", with: "&lt;", options: .literal)
+            .replacingOccurrences(of: ">", with: "&gt;", options: .literal)
+            .replacingOccurrences(of: "\"", with: "&quot;", options: .literal)
+            .replacingOccurrences(of: "'", with: "&apos;", options: .literal)
     }
 
     private nonisolated func createZipArchive(sourceURL: URL, destinationURL: URL) throws {

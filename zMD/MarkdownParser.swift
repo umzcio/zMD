@@ -150,8 +150,8 @@ nonisolated final class MarkdownParser: Sendable {
     /// blockquotes (split per line) and code blocks (double-spaced) in any Windows-authored file.
     private func splitLines(_ markdown: String) -> [String] {
         return markdown
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\r\n", with: "\n", options: .literal)
+            .replacingOccurrences(of: "\r", with: "\n", options: .literal)
             .components(separatedBy: "\n")
     }
 
@@ -267,6 +267,21 @@ nonisolated final class MarkdownParser: Sendable {
         while i < lines.count {
             let line = lines[i]
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+
+            // Everything after the marker is one raw HTML block, unconditionally. Email bodies
+            // use it: tag balancing let a stray `</div>` (even one inside an HTML comment) end the
+            // body's block early, and the rest of the body was then parsed as markdown — remote
+            // images, mermaid, math — from an untrusted sender (security finding, 2026-11).
+            if trimmedLine == Self.htmlToEndMarker {
+                if !listItems.isEmpty { elements.append(.list(items: listItems)); listItems = [] }
+                if !paragraphLines.isEmpty { elements.append(.paragraph(paragraphLines.joined(separator: " "))); paragraphLines = [] }
+                let rest = lines[(i + 1)...].joined(separator: "\n")
+                if !rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    elements.append(.htmlBlock(rest))
+                }
+                i = lines.count
+                break
+            }
 
             // End list if we hit a non-list item
             if !isListLine(line) && !listItems.isEmpty {
@@ -449,13 +464,16 @@ nonisolated final class MarkdownParser: Sendable {
             // `<div>x</div>` would swallow every paragraph up to the next blank line.
             else if isHTMLLine(line) {
                 var htmlLines: [String] = [line]
-                if isHTMLBalanced(line) {
+                var scanner = HTMLBalanceScanner()
+                scanner.feed(line)
+                if scanner.isBalanced {
                     elements.append(.htmlBlock(line))
                 } else {
                     i += 1
                     while i < lines.count {
                         htmlLines.append(lines[i])
-                        if isHTMLBalanced(htmlLines.joined(separator: "\n")) {
+                        scanner.feedLine(lines[i])
+                        if scanner.isBalanced {
                             break
                         }
                         i += 1
@@ -554,6 +572,10 @@ nonisolated final class MarkdownParser: Sendable {
         return Self.htmlBlockTags.contains(tagName)
     }
 
+    /// A line holding exactly this makes the rest of the document one raw HTML block.
+    /// `EmailMessage.markdownRepresentation` puts it before the email body.
+    static let htmlToEndMarker = RawHTMLMarker.toEndOfDocument
+
     /// Compiled once — this runs per appended line while accumulating an HTML block (the parse
     /// hot path); recompiling it per call was measurable on long unbalanced blocks.
     private static let htmlTagRegex = try? NSRegularExpression(pattern: #"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>"#)
@@ -568,38 +590,88 @@ nonisolated final class MarkdownParser: Sendable {
     /// as literal run-on text, because HTML collapses newlines). That is exactly what a
     /// `<picture><source ...><source ...><img ...></picture>` header — the standard GitHub
     /// dark-mode logo pattern — used to do when `source` was absent from this set.
-    private static let voidElements: Set<String> = [
+    fileprivate static let voidElements: Set<String> = [
         "area", "base", "br", "col", "embed", "hr", "img",
         "input", "link", "meta", "param", "source", "track", "wbr"
     ]
 
     func isHTMLBalanced(_ html: String) -> Bool {
-        guard let regex = Self.htmlTagRegex else { return true }
-        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
-        var depth = 0
-        let selfClosing = Self.voidElements
-        for match in matches {
-            guard let tagRange = Range(match.range(at: 2), in: html) else { continue }
-            let tag = String(html[tagRange]).lowercased()
-            if selfClosing.contains(tag) { continue }
-            if let fullRange = Range(match.range, in: html) {
-                let fullTag = String(html[fullRange])
-                if fullTag.hasSuffix("/>") { continue }
-            }
-            if let slashRange = Range(match.range(at: 1), in: html), !html[slashRange].isEmpty {
-                depth -= 1
-            } else {
-                depth += 1
-            }
+        var scanner = HTMLBalanceScanner()
+        scanner.feed(html)
+        return scanner.isBalanced
+    }
+
+    /// Running tag depth of an HTML block, fed one line at a time. Equivalent to matching
+    /// `htmlTagRegex` over the whole accumulated block, but each byte is scanned once: the
+    /// accumulators used to re-join the buffer and re-run the regex for every appended line,
+    /// which made an unclosed block quadratic (a small crafted file froze the app; security
+    /// finding, 2026-11). A tag split across lines (`<div\n class="x">`) still counts once,
+    /// because the scanner remembers it is inside a tag between calls.
+    struct HTMLBalanceScanner {
+        private(set) var depth = 0
+        private enum State { case text, afterOpen, afterSlash, name, attributes }
+        private var state = State.text
+        private var isClosing = false
+        private var name: [UInt8] = []
+        private var lastByte: UInt8 = 0
+
+        var isBalanced: Bool { depth <= 0 }
+
+        mutating func feed(_ text: String) {
+            for byte in text.utf8 { consume(byte) }
         }
-        return depth <= 0
+
+        mutating func feedLine(_ line: String) {
+            consume(0x0A)   // the newline joining this line to the previous one
+            feed(line)
+        }
+
+        private static func isLetter(_ b: UInt8) -> Bool { (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) }
+        private static func isDigit(_ b: UInt8) -> Bool { b >= 0x30 && b <= 0x39 }
+
+        private mutating func consume(_ b: UInt8) {
+            switch state {
+            case .text:
+                if b == 0x3C { state = .afterOpen }
+            case .afterOpen, .afterSlash:
+                if b == 0x2F, state == .afterOpen {
+                    state = .afterSlash
+                } else if Self.isLetter(b) {
+                    isClosing = state == .afterSlash
+                    name = [b]
+                    state = .name
+                } else {
+                    // `<` not starting a tag: the regex would retry at the next character.
+                    state = .text
+                    if b == 0x3C { state = .afterOpen }
+                }
+            case .name:
+                if Self.isLetter(b) || Self.isDigit(b) {
+                    name.append(b)
+                } else if b == 0x3E {
+                    closeTag(selfClosing: false)
+                } else {
+                    state = .attributes
+                }
+            case .attributes:
+                if b == 0x3E { closeTag(selfClosing: lastByte == 0x2F) }
+            }
+            lastByte = b
+        }
+
+        private mutating func closeTag(selfClosing: Bool) {
+            state = .text
+            let tag = String(decoding: name, as: UTF8.self).lowercased()
+            if MarkdownParser.voidElements.contains(tag) || selfClosing { return }
+            depth += isClosing ? -1 : 1
+        }
     }
 
     func isTableSeparator(_ line: String) -> Bool {
         // A table separator contains mostly dashes, pipes, and colons
-        let withoutPipes = line.replacingOccurrences(of: "|", with: "")
-        let withoutDashes = withoutPipes.replacingOccurrences(of: "-", with: "")
-        let withoutColons = withoutDashes.replacingOccurrences(of: ":", with: "")
+        let withoutPipes = line.replacingOccurrences(of: "|", with: "", options: .literal)
+        let withoutDashes = withoutPipes.replacingOccurrences(of: "-", with: "", options: .literal)
+        let withoutColons = withoutDashes.replacingOccurrences(of: ":", with: "", options: .literal)
         let withoutSpaces = withoutColons.trimmingCharacters(in: .whitespaces)
         return withoutSpaces.isEmpty && line.contains("-")
     }
@@ -817,9 +889,12 @@ nonisolated final class MarkdownParser: Sendable {
                 if let colonIndex = trimmed.firstIndex(of: ":") {
                     let key = String(trimmed[..<colonIndex]).trimmingCharacters(in: .whitespaces)
                     let value = String(trimmed[trimmed.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
-                    html += "<tr><td><strong>\(escapeHTML(key))</strong></td><td>\(formatInlineHTML(value))</td></tr>\n"
+                    // Plain text, as the preview shows it: frontmatter is data, and email headers
+                    // land here — a Subject holding `![](/path)` must not become an <img> that
+                    // PDF export then loads from disk.
+                    html += "<tr><td><strong>\(escapeHTML(key))</strong></td><td>\(escapeHTML(value))</td></tr>\n"
                 } else {
-                    html += "<tr><td colspan=\"2\">\(formatInlineHTML(trimmed))</td></tr>\n"
+                    html += "<tr><td colspan=\"2\">\(escapeHTML(trimmed))</td></tr>\n"
                 }
             }
             html += "</table></div>\n"
@@ -862,7 +937,7 @@ nonisolated final class MarkdownParser: Sendable {
             // literal bytes "</" regardless of context, so raw LaTeX containing "</script>" would
             // otherwise inject markup into the exported HTML. The backslash is ignored by KaTeX's
             // TeX parser, so the rendered math is unchanged.
-            let safeLatex = latex.replacingOccurrences(of: "</", with: "<\\/")
+            let safeLatex = latex.replacingOccurrences(of: "</", with: "<\\/", options: .literal)
             return "<div class=\"math-display\"><script type=\"math/tex; mode=display\">\(safeLatex)</script></div>\n"
         case .table(let rows):
             var html = "<table>\n"
@@ -908,35 +983,76 @@ nonisolated final class MarkdownParser: Sendable {
 
     private static func escapeHTMLAttribute(_ text: String) -> String {
         text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "&", with: "&amp;", options: .literal)
+            .replacingOccurrences(of: "\"", with: "&quot;", options: .literal)
+            .replacingOccurrences(of: "<", with: "&lt;", options: .literal)
+            .replacingOccurrences(of: ">", with: "&gt;", options: .literal)
     }
 
     /// C3: Allow only safe URL schemes in markdown link `href`. Anything else is rewritten
     /// to `#` so an exported HTML can't execute `javascript:` / `data:text/html` payloads
     /// when opened in a browser. Relative paths and fragment links pass through unchanged.
+    ///
+    /// Works on Unicode scalars, the way a browser's URL parser does. A `Character`-based search
+    /// (`firstIndex(of: ":")`, `hasPrefix("/")`) misses a delimiter that a following combining
+    /// mark fuses into one grapheme, so `javascript:` + U+0301 used to be classed as relative
+    /// and pass through untouched while the browser still saw the `javascript` scheme.
     static func sanitizeURLScheme(_ url: String) -> String {
         let trimmed = url.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return "#" }
-        // Schemeless / fragment / relative paths are fine.
-        if trimmed.hasPrefix("#") || trimmed.hasPrefix("/") || trimmed.hasPrefix("./") || trimmed.hasPrefix("../") {
-            return trimmed
-        }
+        // Browsers drop ASCII tab and newline anywhere in a URL before parsing it.
+        let scalars = trimmed.unicodeScalars.filter { $0 != "\t" && $0 != "\n" && $0 != "\r" }
+        guard let first = scalars.first else { return "#" }
+        // Fragment and path-relative references (`#x`, `/x`, `./x`, `../x`) carry no scheme.
+        if first == "#" || first == "/" { return trimmed }
+        if first == ".", let second = scalars.dropFirst().first, second == "/" || second == "." { return trimmed }
         // No colon = no scheme = relative.
-        guard let colon = trimmed.firstIndex(of: ":") else { return trimmed }
-        let scheme = trimmed[..<colon].lowercased()
-        // No `/` before the colon = file or filename with `:` in it = let it pass.
-        if scheme.contains("/") { return trimmed }
+        guard let colon = scalars.firstIndex(of: ":") else { return trimmed }
+        let scheme = String(String.UnicodeScalarView(scalars[..<colon])).lowercased()
+        // A `/` before the colon means the colon is inside a path (`a/b:c`), not a scheme.
+        if scheme.unicodeScalars.contains("/") { return trimmed }
         let allowed: Set<String> = ["http", "https", "mailto", "tel", "ftp", "file"]
         if allowed.contains(scheme) { return trimmed }
         // Allow data:image/* but not data:text/html or other arbitrary data: payloads.
         if scheme == "data" {
-            let rest = trimmed[trimmed.index(after: colon)...].lowercased()
+            let rest = String(String.UnicodeScalarView(scalars[scalars.index(after: colon)...])).lowercased()
             if rest.hasPrefix("image/") && !rest.hasPrefix("image/svg+xml") { return trimmed }
         }
         return "#"
+    }
+
+    /// The one rule for which local file an image reference means — used by the preview and by
+    /// every export, so an export can never embed a file the preview did not show (the DOCX and
+    /// PDF paths used to accept `file://` URLs and percent-encoded paths the preview ignored;
+    /// security finding, 2026-11).
+    ///
+    /// A rooted path is used as is, a relative one is resolved against the document's folder; the
+    /// percent-decoded spelling is tried second. URLs with a scheme (`file://`, `http:`, `data:`)
+    /// are not local paths. The target must be a regular file no larger than `maxLocalImageBytes`
+    /// — not a directory, device or FIFO.
+    static let maxLocalImageBytes = 50 * 1024 * 1024
+
+    static func resolveLocalImage(_ path: String, documentURL: URL?) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.contains("://"), !trimmed.lowercased().hasPrefix("data:") else { return nil }
+        var spellings = [trimmed]
+        if let decoded = trimmed.removingPercentEncoding, decoded != trimmed { spellings.append(decoded) }
+        for spelling in spellings {
+            let candidate: URL
+            if spelling.hasPrefix("/") {
+                candidate = URL(fileURLWithPath: spelling)
+            } else if let folder = documentURL?.deletingLastPathComponent() {
+                candidate = folder.appendingPathComponent(spelling)
+            } else {
+                continue
+            }
+            let resolved = candidate.standardizedFileURL
+            guard let values = try? resolved.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true,
+                  (values.fileSize ?? 0) <= maxLocalImageBytes else { continue }
+            return resolved
+        }
+        return nil
     }
 
     // MARK: - Inline Formatting
@@ -974,11 +1090,11 @@ nonisolated final class MarkdownParser: Sendable {
     /// Escape HTML special characters
     func escapeHTML(_ text: String) -> String {
         return text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
+            .replacingOccurrences(of: "&", with: "&amp;", options: .literal)
+            .replacingOccurrences(of: "<", with: "&lt;", options: .literal)
+            .replacingOccurrences(of: ">", with: "&gt;", options: .literal)
+            .replacingOccurrences(of: "\"", with: "&quot;", options: .literal)
+            .replacingOccurrences(of: "'", with: "&#39;", options: .literal)
     }
 
     // MARK: - Outline Extraction
@@ -1029,7 +1145,7 @@ nonisolated final class MarkdownParser: Sendable {
         // Track HTML block: accumulate lines from the open until isHTMLBalanced returns true,
         // then exit. Mirrors parse()'s loop so a `# X` line inside a `<div>...</div>` block
         // doesn't get counted as a heading (M4).
-        var htmlBuffer: [String]? = nil
+        var htmlScanner: HTMLBalanceScanner? = nil
         // C3: track open `$$` display-math blocks, mirroring parse()'s consumption, so a `# X` line
         // inside one isn't emitted as a phantom heading — which would desync the positional
         // heading↔slug pairing in MarkdownTextView and shift every later heading by one.
@@ -1040,7 +1156,7 @@ nonisolated final class MarkdownParser: Sendable {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             // Fence enter/exit
-            if trimmed.hasPrefix("```") && htmlBuffer == nil {
+            if trimmed.hasPrefix("```") && htmlScanner == nil {
                 let fenceLen = trimmed.prefix { $0 == "`" }.count
                 if openFenceLen == 0 {
                     openFenceLen = fenceLen
@@ -1058,7 +1174,7 @@ nonisolated final class MarkdownParser: Sendable {
             // C3: display-math block enter/exit ($$ ... $$). A bare `$$` line toggles the block;
             // lines inside are not headings. Single-line `$$...$$` is self-contained (no enclosed
             // lines) so it needs no handling here.
-            if trimmed == "$$" && htmlBuffer == nil {
+            if trimmed == "$$" && htmlScanner == nil {
                 inDisplayMath.toggle()
                 i += 1
                 continue
@@ -1069,22 +1185,21 @@ nonisolated final class MarkdownParser: Sendable {
             }
 
             // Inside an open HTML block — keep accumulating until balanced.
-            if var buf = htmlBuffer {
-                buf.append(line)
-                if isHTMLBalanced(buf.joined(separator: "\n")) {
-                    htmlBuffer = nil
-                } else {
-                    htmlBuffer = buf
-                }
+            if var scanner = htmlScanner {
+                scanner.feedLine(line)
+                htmlScanner = scanner.isBalanced ? nil : scanner
                 i += 1
                 continue
             }
 
             // New HTML block entry: only if line opens a recognized block tag and isn't
             // immediately balanced on its own line.
+            if trimmed == Self.htmlToEndMarker { break }
             if isHTMLLine(line) {
-                if !isHTMLBalanced(line) {
-                    htmlBuffer = [line]
+                var scanner = HTMLBalanceScanner()
+                scanner.feed(line)
+                if !scanner.isBalanced {
+                    htmlScanner = scanner
                 }
                 // Either way, an HTML-block-opening line is not a heading.
                 i += 1

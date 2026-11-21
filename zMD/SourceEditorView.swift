@@ -2,6 +2,12 @@ import SwiftUI
 import AppKit
 
 struct SourceEditorView: NSViewRepresentable {
+    /// Markdown link highlight. Label and destination exclude their own openers and newlines, so
+    /// a scan from each `[` stops at the next `[`, `(` or line end. The old `[^\]]+` / `[^\)]+`
+    /// ran to the next `]` or `)` anywhere in the document — quadratic on a run of `[`, which
+    /// froze the app on a crafted file (security finding, 2026-11).
+    nonisolated static let linkHighlightPattern = #"\[[^\[\]\n]+\]\([^()\n]+\)"#
+
     @Binding var content: String
     let onContentChange: ((String) -> Void)?
     /// Identity of the document this editor is bound to. updateNSView compares it against the
@@ -599,7 +605,7 @@ struct SourceEditorView: NSViewRepresentable {
             highlightPattern(#"~~[^~]+~~"#, in: storage, text: nsText, range: highlightRange, color: .systemGray)
             highlightPattern(#"`[^`]+`"#, in: storage, text: nsText, range: highlightRange, color: .systemOrange)
             highlightPattern(#"^```.*$"#, in: storage, text: nsText, range: highlightRange, color: .systemGray)
-            highlightPattern(#"\[[^\]]+\]\([^\)]+\)"#, in: storage, text: nsText, range: highlightRange, color: .systemTeal)
+            highlightPattern(SourceEditorView.linkHighlightPattern, in: storage, text: nsText, range: highlightRange, color: .systemTeal)
             highlightPattern(#"^>\s+.*$"#, in: storage, text: nsText, range: highlightRange, color: .systemGreen)
             highlightPattern(#"^[\t ]*[-*+]\s"#, in: storage, text: nsText, range: highlightRange, color: .systemPurple)
             highlightPattern(#"^[\t ]*\d+\.\s"#, in: storage, text: nsText, range: highlightRange, color: .systemPurple)

@@ -15,7 +15,7 @@ nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingControll
 
         // .eml: parse as MIME and render to markdown; .msg: compound file; everything else IS
         // markdown.
-        let markdown: String
+        var markdown: String
         var truncated = false
         if ext == "msg" {
             // A compound file cannot be previewed from a prefix (its directory and FAT are
@@ -33,6 +33,12 @@ nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingControll
             markdown = ext == "eml"
                 ? EmailMessage.parse(data).markdownRepresentation()
                 : QuickLookHTML.decode(data, truncated: truncated)
+        }
+
+        if ext == "msg" || ext == "eml" {
+            let capped = QuickLookHTML.cappedMarkdown(markdown)
+            markdown = capped.markdown
+            truncated = truncated || capped.truncated
         }
 
         var html = QuickLookHTML.makeOfflineSafe(
