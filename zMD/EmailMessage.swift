@@ -862,6 +862,9 @@ nonisolated enum EmailHTMLSanitizer {
         var styles: [String] = []
         var blocked = 0
         private var openElements: [String] = []
+        /// How many of each element are open, so an end tag with nothing to close is rejected
+        /// without searching the stack.
+        private var openCounts: [String: Int] = [:]
         /// Base64 bytes of `cid:` images still allowed in the output.
         private var inlineImageBudget: Int
         private var refusedInlineImages = Set<String>()
@@ -902,20 +905,28 @@ nonisolated enum EmailHTMLSanitizer {
                 }
             }
             html += ">"
-            if !isVoid { openElements.append(name) }
-        }
-
-        /// Closes `name` and anything opened inside it; an end tag with no open element is ignored.
-        mutating func close(_ name: String) {
-            guard EmailHTMLSanitizer.allowedElements.contains(name),
-                  let index = openElements.lastIndex(of: name) else { return }
-            while openElements.count > index {
-                html += "</\(openElements.removeLast())>"
+            if !isVoid {
+                openElements.append(name)
+                openCounts[name, default: 0] += 1
             }
         }
 
+        /// Closes `name` and anything opened inside it; an end tag with no open element is ignored.
+        /// O(1) for an end tag with nothing open to close; otherwise the elements searched are the
+        /// ones popped, so the total is linear.
+        mutating func close(_ name: String) {
+            guard openCounts[name, default: 0] > 0, let index = openElements.lastIndex(of: name) else { return }
+            while openElements.count > index { popElement() }
+        }
+
         mutating func closeAll() {
-            while let name = openElements.popLast() { html += "</\(name)>" }
+            while !openElements.isEmpty { popElement() }
+        }
+
+        private mutating func popElement() {
+            let name = openElements.removeLast()
+            openCounts[name, default: 1] -= 1
+            html += "</\(name)>"
         }
 
         private mutating func appendImage(_ attributes: [(name: String, value: String)]) {
