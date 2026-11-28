@@ -657,7 +657,7 @@ nonisolated extension EmailMessage {
     ///
     /// Remote content (http(s) images, CSS url()s) is blocked by default: AppKit's HTML importer
     /// fetches whatever the markup references, and HTML email is full of tracking pixels.
-    func markdownRepresentation() -> String {
+    func markdownRepresentation(inlineImageBudget: Int = EmailHTMLSanitizer.defaultInlineImageBudget) -> String {
         var out = ""
 
         // Frontmatter block: zMD renders it as a key/value metadata table — the right look
@@ -683,7 +683,7 @@ nonisolated extension EmailMessage {
             out += "\n"
         }
 
-        let (bodyHTML, blockedRemote) = renderedBodyHTML()
+        let (bodyHTML, blockedRemote) = renderedBodyHTML(inlineImageBudget: inlineImageBudget)
         if blockedRemote > 0 {
             out += "*\(blockedRemote) remote image\(blockedRemote == 1 ? "" : "s") not loaded.*\n\n"
         }
@@ -699,13 +699,13 @@ nonisolated extension EmailMessage {
     /// The body as one HTML block, sanitized. Prefers the HTML part; falls back to the plain
     /// text rendered literally (escaped, whitespace preserved) so markdown-looking text in an
     /// email is never reinterpreted.
-    func renderedBodyHTML() -> (html: String, blockedRemoteImages: Int) {
+    func renderedBodyHTML(inlineImageBudget: Int = EmailHTMLSanitizer.defaultInlineImageBudget) -> (html: String, blockedRemoteImages: Int) {
         if let htmlBody, !htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let inline = Dictionary(attachments.compactMap { a -> (String, Attachment)? in
                 guard let cid = a.contentId else { return nil }
                 return (cid.lowercased(), a)
             }, uniquingKeysWith: { first, _ in first })   // duplicate Content-IDs happen in forwarded mail; never trap
-            let result = EmailHTMLSanitizer.sanitize(htmlBody, inlineParts: inline)
+            let result = EmailHTMLSanitizer.sanitize(htmlBody, inlineParts: inline, inlineImageBudget: inlineImageBudget)
             return ("<div class=\"email-body\">\n\(result.html)\n</div>", result.blockedRemoteImages)
         }
         let text = textBody ?? ""
@@ -805,8 +805,14 @@ nonisolated enum EmailHTMLSanitizer {
         "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp", "image/tiff",
     ]
 
-    static func sanitize(_ input: String, inlineParts: [String: EmailMessage.Attachment]) -> Result {
-        var builder = Builder(inlineParts: inlineParts)
+    /// Base64 bytes of inlined `cid:` images one message may render, in total.
+    static let defaultInlineImageBudget = 32 * 1024 * 1024
+    /// Allowed elements open at once; deeper start tags are unwrapped.
+    static let maxOpenElements = 256
+
+    static func sanitize(_ input: String, inlineParts: [String: EmailMessage.Attachment],
+                         inlineImageBudget: Int = defaultInlineImageBudget) -> Result {
+        var builder = Builder(inlineParts: inlineParts, inlineImageBudget: inlineImageBudget)
         var tokenizer = HTMLTokenizer(input)
         var dropping: (name: String, depth: Int)?
 
@@ -856,8 +862,14 @@ nonisolated enum EmailHTMLSanitizer {
         var styles: [String] = []
         var blocked = 0
         private var openElements: [String] = []
+        /// Base64 bytes of `cid:` images still allowed in the output.
+        private var inlineImageBudget: Int
+        private var refusedInlineImages = Set<String>()
 
-        init(inlineParts: [String: EmailMessage.Attachment]) { self.inlineParts = inlineParts }
+        init(inlineParts: [String: EmailMessage.Attachment], inlineImageBudget: Int) {
+            self.inlineParts = inlineParts
+            self.inlineImageBudget = inlineImageBudget
+        }
 
         /// Text keeps its character references (`&nbsp;`, `&amp;`) as written: in text content a
         /// reference can only ever produce characters, never markup. Only `<` and `>` need care.
@@ -871,6 +883,10 @@ nonisolated enum EmailHTMLSanitizer {
                 appendImage(attributes)
                 return
             }
+            let isVoid = EmailHTMLSanitizer.voidElements.contains(name)
+            // Past the depth cap a start tag is unwrapped, so `close` never searches a stack
+            // longer than the cap — N unclosed tags then M stray end tags used to cost N × M.
+            if !isVoid, openElements.count >= EmailHTMLSanitizer.maxOpenElements { return }
             html += "<\(name)"
             for (attributeName, value) in attributes {
                 if attributeName == "href" {
@@ -886,12 +902,13 @@ nonisolated enum EmailHTMLSanitizer {
                 }
             }
             html += ">"
-            if !EmailHTMLSanitizer.voidElements.contains(name) { openElements.append(name) }
+            if !isVoid { openElements.append(name) }
         }
 
         /// Closes `name` and anything opened inside it; an end tag with no open element is ignored.
         mutating func close(_ name: String) {
-            guard let index = openElements.lastIndex(of: name) else { return }
+            guard EmailHTMLSanitizer.allowedElements.contains(name),
+                  let index = openElements.lastIndex(of: name) else { return }
             while openElements.count > index {
                 html += "</\(openElements.removeLast())>"
             }
@@ -909,6 +926,18 @@ nonisolated enum EmailHTMLSanitizer {
             if lower.hasPrefix("cid:") {
                 let cid = String(src.dropFirst(4)).lowercased()
                 if let part = inlineParts[cid], let mime = EmailHTMLSanitizer.rasterImageType(part.mimeType) {
+                    // Each reference inlines the whole part again; the budget bounds the output
+                    // whatever the reference count (one 1 MB part referenced 20,000 times was
+                    // ~27 GB of HTML; security finding, 2026-11).
+                    let encodedLength = (part.data.count + 2) / 3 * 4
+                    guard encodedLength <= inlineImageBudget else {
+                        // One placeholder per image, not per reference.
+                        if refusedInlineImages.insert(cid).inserted {
+                            html += EmailHTMLSanitizer.placeholder("inline image not shown")
+                        }
+                        return
+                    }
+                    inlineImageBudget -= encodedLength
                     dataURI = "data:\(mime);base64,\(part.data.base64EncodedString())"
                 } else {
                     html += EmailHTMLSanitizer.placeholder("missing inline image")
@@ -962,44 +991,54 @@ nonisolated enum EmailHTMLSanitizer {
         return ["http", "https", "mailto"].contains(scheme) ? trimmed : nil
     }
 
-    /// Substrings that let CSS fetch something. Matched after removing whitespace and comments
-    /// so `url (` or `u/**/rl(` cannot slip past.
+    // MARK: CSS
+
+    /// Tokens that let CSS fetch something, matched in lowercased text with whitespace removed.
     private static let fetchingCSS = ["url(", "image-set(", "image(", "cross-fade(", "element(", "@import",
                                       "expression(", "behavior:", "-moz-binding", "src:"]
+    /// CSS functions whose argument is a resource to fetch; replaced by `none` in stylesheets.
+    private static let fetchingFunctions: Set<String> = [
+        "url", "image-set", "-webkit-image-set", "image", "cross-fade", "-webkit-cross-fade", "element", "-moz-element",
+    ]
 
     /// A `style` attribute (already entity-decoded) with every fetching declaration removed; nil
-    /// when it cannot be judged — CSS escapes, or a character reference the decoder left alone —
-    /// and must go entirely.
+    /// when it cannot be judged and must go entirely.
+    ///
+    /// Every decision is made on the exact text that is emitted, by a scanner that knows CSS
+    /// strings and comments. The old version stripped `/* … */` with a regex that did not know
+    /// strings, so `"/*"` and `"*/"` in quoted values hid a `url(` between them from the check
+    /// while the browser still fetched it (security finding, 2026-11).
     static func cleanDeclarations(_ css: String) -> String? {
-        guard !css.contains("\\"), !containsCharacterReference(css) else { return nil }
-        let kept = css.split(separator: ";").filter { declaration in
-            let squashed = squash(String(declaration))
-            return !fetchingCSS.contains { squashed.contains($0) }
-        }
-        return kept.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "; ")
+        guard let stripped = CSSText.strippingComments(css) else { return nil }
+        let kept = CSSText.splitTopLevel(stripped, on: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !canFetch($0, ignoring: []) }
+        let out = kept.joined(separator: "; ")
+        return canFetch(out, ignoring: []) ? nil : out
     }
 
-    /// A `<style>` block with fetching rules neutralized; nil when it must go entirely (CSS
-    /// escapes, or anything that could close the element).
+    /// A `<style>` block with fetching rules neutralized (`url(…)` and friends become `none`,
+    /// `@import` rules are removed); nil when it must go entirely. The emitted text is checked
+    /// again after rewriting, and may never contain `<` — rewriting used to be able to join
+    /// `</sty` and `le>` into an end tag the check had not seen (security finding, 2026-11).
     static func cleanStylesheet(_ css: String) -> String? {
-        guard !css.contains("\\"), !css.contains("<") else { return nil }
-        var out = removing(#"@import\b[^;{]*;?"#, from: css)
-        out = replacing(#"(?:-webkit-)?(?:url|image-set|image|cross-fade|element)\s*\([^)]*\)"#, in: out, with: "none")
-        let squashed = squash(out)
-        // Anything still able to fetch after the rewrite (nested parens, comments splitting a
-        // function name) drops the whole block rather than being parsed further.
-        if fetchingCSS.contains(where: { $0 != "src:" && $0 != "behavior:" && squashed.contains($0) }) { return nil }
-        return out
+        guard let stripped = CSSText.strippingComments(css),
+              let neutralized = CSSText.neutralizingFetches(stripped, functions: fetchingFunctions) else { return nil }
+        // `src:` and `behavior:` are harmless once every url() is `none` (`@font-face { src: none }`).
+        return canFetch(neutralized, ignoring: ["src:", "behavior:"]) ? nil : neutralized
     }
 
-    private static func containsCharacterReference(_ s: String) -> Bool {
-        s.range(of: #"&[#a-zA-Z]"#, options: .regularExpression) != nil
-    }
-
-    /// Lowercased, whitespace and `/* */` comments removed.
-    private static func squash(_ css: String) -> String {
-        let noComments = replacing(#"/\*.*?\*/"#, in: css, with: "")
-        return String(String.UnicodeScalarView(noComments.lowercased().unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }))
+    /// True when `css` could fetch, contains markup or escape characters, or holds a character
+    /// reference the decoder left alone. Per scalar, so no neighbouring mark can hide a `<`.
+    private static func canFetch(_ css: String, ignoring: Set<String>) -> Bool {
+        if css.unicodeScalars.contains(where: { $0 == "<" || $0 == ">" || $0 == "\\" }) { return true }
+        if css.range(of: #"&[#a-zA-Z]"#, options: .regularExpression) != nil { return true }
+        var squashed = String.UnicodeScalarView()
+        for scalar in css.lowercased().unicodeScalars where !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            squashed.append(scalar)
+        }
+        let text = String(squashed)
+        return fetchingCSS.contains { !ignoring.contains($0) && text.range(of: $0, options: .literal) != nil }
     }
 
     private static func placeholder(_ text: String) -> String {
@@ -1020,25 +1059,9 @@ nonisolated enum EmailHTMLSanitizer {
 
     // MARK: regex helpers
 
-    private static func removing(_ pattern: String, from s: String) -> String { replacing(pattern, in: s, with: "") }
-
     private static func replacing(_ pattern: String, in s: String, with template: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return s }
         return regex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template)
-    }
-
-    private static func matches(_ pattern: String, in s: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return [] }
-        return regex.matches(in: s, range: NSRange(s.startIndex..., in: s)).compactMap { Range($0.range, in: s).map { String(s[$0]) } }
-    }
-
-    private static func firstGroup(_ pattern: String, in s: String, groups: [Int] = [1]) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options),
-              let m = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) else { return nil }
-        for g in groups where g < m.numberOfRanges {
-            if let r = Range(m.range(at: g), in: s) { return String(s[r]) }
-        }
-        return nil
     }
 }
 
@@ -1279,6 +1302,174 @@ nonisolated struct HTMLTokenizer {
                 }
             }
             out.append(v[j])
+            j += 1
+        }
+        return String(out)
+    }
+}
+
+// MARK: - CSS text
+
+/// Linear, string- and comment-aware passes over CSS for `EmailHTMLSanitizer`. They fail closed:
+/// anything a browser could read differently (an unterminated string, a backslash escape, an
+/// unclosed fetch function) makes them return nil so the caller drops the CSS.
+nonisolated enum CSSText {
+    /// `css` with comments removed (an unterminated comment runs to the end, as in browsers) and
+    /// strings kept verbatim. Nil for a backslash anywhere or a string that does not close on
+    /// its line.
+    static func strippingComments(_ css: String) -> String? {
+        let s = Array(css.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var i = 0
+        while i < s.count {
+            let c = s[i]
+            if c == "\\" { return nil }
+            if c == "/", i + 1 < s.count, s[i + 1] == "*" {
+                i += 2
+                while i < s.count, !(s[i] == "*" && i + 1 < s.count && s[i + 1] == "/") { i += 1 }
+                i = min(i + 2, s.count)
+                continue
+            }
+            if c == "\"" || c == "'" {
+                guard let end = stringEnd(s, from: i) else { return nil }
+                out.append(contentsOf: s[i...end])
+                i = end + 1
+                continue
+            }
+            out.append(c)
+            i += 1
+        }
+        return String(out)
+    }
+
+    /// Splits on `separator` outside strings and parentheses. Input has no comments.
+    static func splitTopLevel(_ css: String, on separator: Unicode.Scalar) -> [String] {
+        let s = Array(css.unicodeScalars)
+        var parts: [String] = []
+        var current = String.UnicodeScalarView()
+        var depth = 0
+        var i = 0
+        while i < s.count {
+            let c = s[i]
+            if c == "\"" || c == "'", let end = stringEnd(s, from: i) {
+                current.append(contentsOf: s[i...end])
+                i = end + 1
+                continue
+            }
+            if c == "(" { depth += 1 } else if c == ")" { depth = max(0, depth - 1) }
+            if c == separator, depth == 0 {
+                parts.append(String(current))
+                current = String.UnicodeScalarView()
+            } else {
+                current.append(c)
+            }
+            i += 1
+        }
+        parts.append(String(current))
+        return parts
+    }
+
+    /// Replaces each fetching function call (`url(…)`, `image-set(…)`, …) with `none` and
+    /// removes `@import` rules, outside strings. Input has no comments. Nil when a function or
+    /// an `@import` is not closed.
+    static func neutralizingFetches(_ css: String, functions: Set<String>) -> String? {
+        let s = Array(css.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var i = 0
+        while i < s.count {
+            let c = s[i]
+            if c == "\"" || c == "'" {
+                guard let end = stringEnd(s, from: i) else { return nil }
+                out.append(contentsOf: s[i...end])
+                i = end + 1
+                continue
+            }
+            if c == "@", lowercasedIdentifier(s, from: i + 1) == "import" {
+                guard let end = topLevelIndex(of: ";", in: s, from: i) else { return nil }
+                i = end + 1
+                continue
+            }
+            if isIdentifierStart(c), i == 0 || !isIdentifierPart(s[i - 1]) {
+                let name = lowercasedIdentifier(s, from: i)
+                let afterName = i + name.unicodeScalars.count
+                if afterName < s.count, s[afterName] == "(", functions.contains(name) {
+                    guard let close = matchingParen(s, from: afterName) else { return nil }
+                    out.append(contentsOf: "none".unicodeScalars)
+                    i = close + 1
+                    continue
+                }
+            }
+            out.append(c)
+            i += 1
+        }
+        return String(out)
+    }
+
+    // MARK: helpers
+
+    /// Index of the quote closing the string that opens at `start`; nil at a newline or end.
+    private static func stringEnd(_ s: [Unicode.Scalar], from start: Int) -> Int? {
+        let quote = s[start]
+        var j = start + 1
+        while j < s.count {
+            if s[j] == quote { return j }
+            if s[j] == "\n" || s[j] == "\r" || s[j] == "\u{0C}" { return nil }
+            j += 1
+        }
+        return nil
+    }
+
+    private static func matchingParen(_ s: [Unicode.Scalar], from open: Int) -> Int? {
+        var depth = 0
+        var j = open
+        while j < s.count {
+            let c = s[j]
+            if c == "\"" || c == "'" {
+                guard let end = stringEnd(s, from: j) else { return nil }
+                j = end + 1
+                continue
+            }
+            if c == "(" { depth += 1 }
+            if c == ")" {
+                depth -= 1
+                if depth == 0 { return j }
+            }
+            j += 1
+        }
+        return nil
+    }
+
+    private static func topLevelIndex(of target: Unicode.Scalar, in s: [Unicode.Scalar], from start: Int) -> Int? {
+        var depth = 0
+        var j = start
+        while j < s.count {
+            let c = s[j]
+            if c == "\"" || c == "'" {
+                guard let end = stringEnd(s, from: j) else { return nil }
+                j = end + 1
+                continue
+            }
+            if c == "(" { depth += 1 } else if c == ")" { depth = max(0, depth - 1) }
+            if c == target, depth == 0 { return j }
+            j += 1
+        }
+        return nil
+    }
+
+    private static func isIdentifierStart(_ c: Unicode.Scalar) -> Bool {
+        (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c == "-" || c == "_"
+    }
+
+    private static func isIdentifierPart(_ c: Unicode.Scalar) -> Bool {
+        isIdentifierStart(c) || (c >= "0" && c <= "9")
+    }
+
+    private static func lowercasedIdentifier(_ s: [Unicode.Scalar], from start: Int) -> String {
+        var out = String.UnicodeScalarView()
+        var j = start
+        while j < s.count, isIdentifierPart(s[j]) {
+            let c = s[j]
+            out.append((c >= "A" && c <= "Z") ? Unicode.Scalar(c.value + 32)! : c)
             j += 1
         }
         return String(out)

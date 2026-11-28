@@ -25,13 +25,13 @@ nonisolated final class PreviewProvider: QLPreviewProvider, QLPreviewingControll
             if overCap {
                 markdown = "# Message too large to preview\n\nOpen the file in zMD to view it.\n"
             } else {
-                markdown = OutlookMessage.parse(whole)?.markdownRepresentation() ?? "# Unreadable message\n"
+                markdown = OutlookMessage.parse(whole)?.markdownRepresentation(inlineImageBudget: QuickLookHTML.maxInlineImageBytes) ?? "# Unreadable message\n"
             }
         } else {
             let (data, wasTruncated) = try QuickLookHTML.readPrefix(of: url)
             truncated = wasTruncated
             markdown = ext == "eml"
-                ? EmailMessage.parse(data).markdownRepresentation()
+                ? EmailMessage.parse(data).markdownRepresentation(inlineImageBudget: QuickLookHTML.maxInlineImageBytes)
                 : QuickLookHTML.decode(data, truncated: truncated)
         }
 

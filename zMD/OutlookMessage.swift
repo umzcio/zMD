@@ -364,17 +364,23 @@ nonisolated final class CompoundFile: @unchecked Sendable {
     /// one chain) are otherwise each a file-sized copy; real messages read back roughly their
     /// own size once.
     private var readBudget = 0
+    /// Bytes walked by `read` so far (what the budget is charged).
+    private(set) var bytesWalked = 0
 
+    /// Walks only as many sectors as `entry.size` needs and charges every byte walked, not
+    /// the truncated result: thousands of size-0 entries sharing one file-long chain used to walk
+    /// and copy the whole file each time while charging nothing (security finding, 2026-11).
     func read(_ entry: Entry) -> Data? {
         guard entry.type == 2, readBudget > 0 else { return nil }
-        let stream: Data
+        let walked: Data
         if entry.size < miniStreamCutoff {
-            stream = readMiniChain(startSector: entry.startSector).prefix(entry.size)
+            walked = readMiniChain(startSector: entry.startSector, maxBytes: entry.size)
         } else {
-            stream = readChain(startSector: entry.startSector).prefix(entry.size)
+            walked = readChain(startSector: entry.startSector, maxBytes: entry.size)
         }
-        readBudget -= stream.count
-        return readBudget >= 0 ? stream : nil
+        readBudget -= walked.count
+        bytesWalked += walked.count
+        return readBudget >= 0 ? walked.prefix(entry.size) : nil
     }
 
     private func sectorData(_ sector: Int) -> Data? {
@@ -383,13 +389,13 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         return data.subdata(in: start..<(start + sectorSize))
     }
 
-    private func readChain(startSector: Int) -> Data {
+    private func readChain(startSector: Int, maxBytes: Int = .max) -> Data {
         var out = Data()
         var sector = UInt32(truncatingIfNeeded: startSector)
         var guardCount = 0
         var visited = Set<UInt32>()
         // A sector may appear once per chain; a loop back ends the chain.
-        while sector < Self.endOfChain - 1, guardCount < maxChainLength, visited.insert(sector).inserted {   // < 0xFFFF_FFFD
+        while out.count < maxBytes, sector < Self.endOfChain - 1, guardCount < maxChainLength, visited.insert(sector).inserted {   // < 0xFFFF_FFFD
             guard let chunk = sectorData(Int(sector)) else { break }
             out.append(chunk)
             guard Int(sector) < fat.count else { break }
@@ -399,12 +405,12 @@ nonisolated final class CompoundFile: @unchecked Sendable {
         return out
     }
 
-    private func readMiniChain(startSector: Int) -> Data {
+    private func readMiniChain(startSector: Int, maxBytes: Int) -> Data {
         var out = Data()
         var sector = UInt32(truncatingIfNeeded: startSector)
         var guardCount = 0
         var visited = Set<UInt32>()
-        while sector < Self.endOfChain - 1, guardCount < maxMiniChainLength, visited.insert(sector).inserted {
+        while out.count < maxBytes, sector < Self.endOfChain - 1, guardCount < maxMiniChainLength, visited.insert(sector).inserted {
             let start = Int(sector) * miniSectorSize
             guard start + miniSectorSize <= miniStream.count else {
                 if start < miniStream.count { out.append(miniStream.suffix(from: miniStream.startIndex + start)) }

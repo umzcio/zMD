@@ -258,6 +258,12 @@ class UpdateManager: ObservableObject {
             reportError("No app found in DMG.", detachVolume: volumePath)
             return
         }
+        // The checks below follow symlinks but the copy does not, so a symlinked `.app` used to
+        // be verified as its target and installed as a dangling link (security finding, 2026-11).
+        guard Self.isRealDirectory(appURL) else {
+            reportError("The app in the DMG is not a real bundle. Aborting auto-install.", detachVolume: volumePath)
+            return
+        }
 
         // Verify the downloaded bundle before touching /Applications: Developer ID + notarized +
         // zMD's team and identifier, then the bundle's own identity and version.
@@ -282,7 +288,16 @@ class UpdateManager: ObservableObject {
                 try? fileManager.removeItem(at: stagingURL)
             }
             try fileManager.copyItem(at: appURL, to: stagingURL)
-            // Copy succeeded — only now is it safe to displace the installed bundle.
+            // Verify what will actually be installed — the staged copy — before the installed
+            // bundle is removed.
+            guard Self.isRealDirectory(stagingURL),
+                  Self.verifySignature(at: stagingURL) == .ok,
+                  Self.verifyBundleIdentity(at: stagingURL, advertisedVersion: advertisedVersion, currentVersion: currentVersion) == .ok else {
+                try? fileManager.removeItem(at: stagingURL)
+                reportError("The staged update failed verification. Aborting auto-install.", detachVolume: volumePath)
+                return
+            }
+            // Copy verified — only now is it safe to displace the installed bundle.
             if fileManager.fileExists(atPath: destURL.path) {
                 try fileManager.removeItem(at: destURL)
             }
@@ -381,6 +396,12 @@ class UpdateManager: ObservableObject {
             return .invalid("the downloaded app is version \(version) but the release says \(advertisedVersion)")
         }
         return .ok
+    }
+
+    /// A directory that is not itself a symbolic link.
+    nonisolated static func isRealDirectory(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]) else { return false }
+        return values.isSymbolicLink == false && values.isDirectory == true
     }
 
     /// Release assets are served from github.com and redirected to GitHub's asset CDN. Anything

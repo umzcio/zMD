@@ -920,3 +920,88 @@ nonisolated final class EmailSecurityTests: XCTestCase {
         XCTAssertEqual(EmailMessage.escapeMarkdownInline("[\u{0301}x](y)\r\nz"), "\\[\u{0301}x\\](y)  z")
     }
 }
+
+// MARK: - Security findings, second scan (Claude Security, zApps-v3 project, 2026-11-21)
+
+nonisolated final class EmailSecurityRescanTests: XCTestCase {
+    private func sanitize(_ html: String, _ parts: [String: EmailMessage.Attachment] = [:], budget: Int = EmailHTMLSanitizer.defaultInlineImageBudget) -> String {
+        EmailHTMLSanitizer.sanitize(html, inlineParts: parts, inlineImageBudget: budget).html
+    }
+    private func noEvil(_ out: String, _ input: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertNil(out.range(of: "evil.example", options: .literal), "\(input)\n→ \(out)", file: file, line: line)
+    }
+
+    func testStyleBlockCannotReassembleAnEndTag() {
+        for neighbour in ["", "\u{0600}", "\u{0301}", "\u{200D}"] {
+            let input = "<style>p{color:red}\(neighbour)</sty@import 'x';le>\(neighbour)<img src=http://evil.example/a></style><p>after</p>"
+            let out = sanitize(input)
+            noEvil(out, input)
+            XCTAssertFalse(out.contains("<style>"), out)
+            XCTAssertNil(EmailHTMLSanitizer.cleanStylesheet("p{}\(neighbour)<b>"))
+        }
+    }
+
+    func testCommentDelimitersInsideStringsDoNotHideFetches() {
+        let inputs = [
+            "<p style='content:\"/*\";background:url(http://evil.example/a);x:\"*/\"'>x</p>",
+            "<style>a{content:\"/*\"} b{background:url(http://evil.example/b)} c{content:\"*/\"}</style><p>y</p>",
+            "<style>p{color:red} q{background:url(http://evil.example/unclosed</style>",
+            "<style>a{content:'/*'} @import 'http://evil.example/i'; b{content:'*/'}</style>",
+            "<style>@imp@import 'a';ort 'http://evil.example/re';</style>",
+            "<p style=\"background:url(http://evil.example/n\">z</p>",
+            "<p style=\"content:'unterminated; background:url(http://evil.example/s)\">z</p>",
+        ]
+        for input in inputs { noEvil(sanitize(input), input) }
+        XCTAssertEqual(sanitize("<style>@font-face{src:url(http://evil.example/f)} p{color:blue}</style><p>k</p>"),
+                       "<style>@font-face{src:none} p{color:blue}</style>\n<p>k</p>")
+        XCTAssertEqual(sanitize("<p style=\"color:red; background:url('http://evil.example/c'); font-weight:bold\">w</p>"),
+                       "<p style=\"color:red; font-weight:bold\">w</p>")
+    }
+
+    func testSanitizerIsLinearOnHostileShapes() {
+        let shapes = [
+            String(repeating: "<b>", count: 300_000) + String(repeating: "</i>", count: 300_000),
+            String(repeating: "<span>", count: 200_000) + String(repeating: "</span>", count: 200_000),
+            "<p style=\"" + String(repeating: "/*", count: 300_000) + "\">x</p>",
+            "<style>" + String(repeating: "url(", count: 300_000) + "</style>",
+            "<style>" + String(repeating: "/*a", count: 300_000) + "</style>",
+        ]
+        for html in shapes {
+            let start = Date()
+            _ = sanitize(html)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        }
+    }
+
+    func testRepeatedCidReferencesStayWithinTheBudget() {
+        let part = EmailMessage.Attachment(filename: "a.png", mimeType: "image/png", data: Data(count: 300_000), contentId: "p", isInline: true)
+        let out = sanitize(String(repeating: "<img src=cid:p>", count: 20_000), ["p": part], budget: 1_000_000)
+        XCTAssertEqual(out.components(separatedBy: "data:image/png").count - 1, 2, "two 400 KB encodings fit a 1 MB budget")
+        XCTAssertLessThan(out.utf8.count, 1_100_000)
+        XCTAssertEqual(out.components(separatedBy: "inline image not shown").count - 1, 1)
+    }
+
+    func testSizeZeroStreamsWalkNoSectors() throws {
+        var data = TestCompoundFileBuilder.build(root: [TestCompoundFileBuilder.properties(topLevel: true)]
+            + (0..<30).map { r in
+                TestCompoundFileBuilder.Node(name: String(format: "__recip_version1.0_#%08X", r), isStorage: true, data: Data(),
+                                             children: [TestCompoundFileBuilder.unicode(0x3001, "Recipient \(r)")])
+            })
+        // Every stream takes the regular-sector path and starts at the directory chain, with size 0.
+        data.replaceSubrange(56..<60, with: TestCompoundFileBuilder.le32(0))
+        var entry = 1024
+        var patched = 0
+        while entry + 128 <= data.count, data[entry + 66] != 0 || entry == 1024 {
+            if data[entry + 66] == 2 {
+                data.replaceSubrange((entry + 116)..<(entry + 120), with: TestCompoundFileBuilder.le32(1))
+                data.replaceSubrange((entry + 120)..<(entry + 124), with: TestCompoundFileBuilder.le32(0))
+                patched += 1
+            }
+            entry += 128
+        }
+        XCTAssertGreaterThan(patched, 30)
+        let file = try XCTUnwrap(CompoundFile(data: data))
+        for e in file.entries where e.type == 2 { XCTAssertEqual(file.read(e)?.count, 0) }
+        XCTAssertEqual(file.bytesWalked, 0, "a size-0 stream must not walk its chain")
+    }
+}

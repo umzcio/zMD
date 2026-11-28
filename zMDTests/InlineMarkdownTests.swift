@@ -1517,3 +1517,49 @@ nonisolated final class SecurityFindingTests: XCTestCase {
         XCTAssertTrue(out.contains("data:image/png;base64,AA"), out)
     }
 }
+
+// MARK: - Security findings, second scan (Claude Security, zApps-v3 project, 2026-11-21)
+
+nonisolated final class SecurityFindingRescanTests: XCTestCase {
+    @MainActor
+    func testDOCXWritesEmailHeadersAndBodyAsPlainText() {
+        let m = EmailMessage.parse(Data("""
+        Subject: [Invoice](file:///Volumes/share/x.exe)\r
+        From: "[Support](\\\\\\\\host\\\\share)" <a@b.example>\r
+        Content-Type: text/html\r
+        \r
+        <p>[click](file:///etc/passwd) [web](https://ok.example)</p>\r
+
+        """.utf8))
+        let xml = ExportManager.shared.generateDocumentXML(markdown: m.markdownRepresentation())
+        XCTAssertFalse(xml.contains("<w:hyperlink"), "no hyperlinks from email headers or body")
+        XCTAssertTrue(xml.contains("[Invoice](file:///Volumes/share/x.exe)"), "header kept as literal text")
+    }
+
+    @MainActor
+    func testMathInsideLinkDestinationsIsNotExtracted() {
+        let extraction = ExportManager.shared.extractMathFromMarkdown("[click]($javascript:alert(1)$) and ![i]($$data:text/html,x$$) and $x^2$")
+        XCTAssertEqual(extraction.math.map(\.latex), ["x^2"])
+        XCTAssertTrue(extraction.modified.contains("($javascript:alert(1)$)"))
+        let html = MarkdownParser.shared.toHTML(extraction.modified, includeStyles: false)
+        XCTAssertTrue(html.contains("href=\"#\""), html)
+    }
+
+    func testExportURLAttributesAreResanitizedAfterSubstitution() {
+        let html = #"<a href="javascript:alert(1)">a</a><a href="ZMDMATHPH_ABC_0ZMDEND">b</a><img src="data:image/png;base64,AA"><a href="https://ok.example/?a=1&amp;b=2">c</a><img src="file:///tmp/x.png">"#
+        XCTAssertEqual(ExportManager.resanitizeURLAttributes(html),
+                       ##"<a href="#">a</a><a href="#">b</a><img src="data:image/png;base64,AA"><a href="https://ok.example/?a=1&amp;b=2">c</a><img src="file:///tmp/x.png">"##)
+    }
+
+    func testUpdaterRejectsASymlinkedBundle() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("zmd-sym-\(UUID().uuidString)")
+        let real = folder.appendingPathComponent("inner/zMD.app")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let link = folder.appendingPathComponent("zMD.app")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        XCTAssertTrue(UpdateManager.isRealDirectory(real))
+        XCTAssertFalse(UpdateManager.isRealDirectory(link))
+        XCTAssertFalse(UpdateManager.isRealDirectory(folder.appendingPathComponent("missing.app")))
+    }
+}

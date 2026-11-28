@@ -16,6 +16,9 @@ nonisolated enum QuickLookHTML {
     /// Cap on the markdown an email renders to before it is parsed. A compact .msg or .eml can
     /// expand (recipient lists, decoded bodies); the preview shows the first part, not all of it.
     static let maxRenderedMarkdownBytes = 4 * 1024 * 1024
+    /// Inline (`cid:`) image data an email may render in a preview, enforced while the HTML is
+    /// built — capping the finished markdown came after the expansion had already happened.
+    static let maxInlineImageBytes = 3 * 1024 * 1024
 
     /// `markdown` cut to `maxRenderedMarkdownBytes`, and whether it was cut.
     static func cappedMarkdown(_ markdown: String) -> (markdown: String, truncated: Bool) {

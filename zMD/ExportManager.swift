@@ -140,7 +140,10 @@ class ExportManager {
         }
 
         let fencedRanges = ranges
-        for pattern in [#"``([^`]+(?:`[^`]+)*)``"#, #"`[^`\n]+`"#] {
+        // Link and image destinations too: math extracted from `[x]($…$)` put a placeholder in
+        // the href, and the placeholder's fallback text went back in after `sanitizeURLScheme`
+        // had already run (security finding, 2026-11).
+        for pattern in [#"``([^`]+(?:`[^`]+)*)``"#, #"`[^`\n]+`"#, #"\]\([^)\n]*\)"#] {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
             for match in regex.matches(in: markdown, range: fullRange) where !rangeIntersects(match.range, fencedRanges) {
                 ranges.append(match.range)
@@ -210,7 +213,29 @@ class ExportManager {
             }()
             result = result.replacingOccurrences(of: placeholder, with: replacement, options: .literal)
         }
-        return result
+        return Self.resanitizeURLAttributes(result)
+    }
+
+    /// Every `href` / `src` value in generated export HTML, put through `sanitizeURLScheme`
+    /// again in its final form. Substitution passes that run after `toHTML` (math placeholders)
+    /// must not be able to leave an unchecked URL behind. Only attributes zMD itself generated
+    /// exist here — raw HTML blocks are exported escaped — so the quoted-value pattern is exact.
+    nonisolated static func resanitizeURLAttributes(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\b(href|src)="([^"]*)""#, options: .caseInsensitive) else { return html }
+        let ns = html as NSString
+        let mutable = NSMutableString(string: html)
+        for match in regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let raw = ns.substring(with: match.range(at: 2))
+            let value = raw.replacingOccurrences(of: "&quot;", with: "\"", options: .literal)
+                .replacingOccurrences(of: "&#39;", with: "'", options: .literal)
+                .replacingOccurrences(of: "&lt;", with: "<", options: .literal)
+                .replacingOccurrences(of: "&gt;", with: ">", options: .literal)
+                .replacingOccurrences(of: "&amp;", with: "&", options: .literal)
+            if value.contains("ZMDMATHPH_") || MarkdownParser.sanitizeURLScheme(value) != value.trimmingCharacters(in: .whitespaces) {
+                mutable.replaceCharacters(in: match.range(at: 2), with: "#")
+            }
+        }
+        return mutable as String
     }
 
     /// Render an NSImage at exactly `size` (in points), letting AppKit downsample.
@@ -961,7 +986,7 @@ class ExportManager {
 
     // MARK: - DOCX Document XML Generation
 
-    private nonisolated func generateDocumentXML(markdown: String, baseURL: URL? = nil) -> String {
+    nonisolated func generateDocumentXML(markdown: String, baseURL: URL? = nil) -> String {
         // Consumes the unified MarkdownParser element tree so DOCX export is bit-for-bit
         // consistent with preview/HTML/RTF/print. The previous line-based generator diverged:
         // H5/H6 lost, no frontmatter/mermaid/math/HTML block handling, ambiguous fence detection,
@@ -990,8 +1015,11 @@ class ExportManager {
 
             case .frontmatter(let lines):
                 // Render YAML frontmatter as a small shaded table-like block of key:value paragraphs.
+                // Plain text, like the preview and the HTML export: frontmatter is data, and for an
+                // email it is the sender's headers — link syntax there must not become a live
+                // hyperlink in the .docx (security finding, 2026-11).
                 for line in lines where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                    xml += createNormalParagraph(text: line)
+                    xml += createPlainParagraph(text: line)
                 }
 
             case .list(let items):
@@ -1046,8 +1074,10 @@ class ExportManager {
                 xml += createAlertParagraphs(kind: kind, text: text)
 
             case .htmlBlock(let html):
-                // Fallback: emit the raw HTML source as a paragraph so nothing disappears silently.
-                xml += createNormalParagraph(text: html)
+                // Fallback: emit the raw HTML source as plain text so nothing disappears silently.
+                // Never through the inline tokenizer: for an email this is the untrusted body, and
+                // markdown-looking text in it became hyperlinks to any target.
+                xml += createPlainParagraph(text: html)
             }
         }
 
@@ -1149,6 +1179,13 @@ class ExportManager {
     private nonisolated func createNormalParagraph(text: String) -> String {
         return """
         <w:p><w:pPr><w:spacing w:after="160"/></w:pPr>\(createRunsForFormattedText(text))</w:p>
+        """
+    }
+
+    /// A paragraph of literal text: no inline markdown, so no links, images or formatting.
+    private nonisolated func createPlainParagraph(text: String) -> String {
+        return """
+        <w:p><w:pPr><w:spacing w:after="160"/></w:pPr>\(createSimpleRun(text: text))</w:p>
         """
     }
 
